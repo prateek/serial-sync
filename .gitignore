@@ -7,5 +7,5 @@ dist/
 *.db-wal
 .env
 coverage.out
-publish/
-state/
+/publish/
+/state/
