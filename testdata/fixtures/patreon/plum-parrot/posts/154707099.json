@@ -1,0 +1,53 @@
+{
+  "data": {
+    "id": "154707099",
+    "type": "post",
+    "attributes": {
+      "title": "Schedule update for April",
+      "post_type": "text_only",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/schedule-update-for-april-154707099",
+      "content": "",
+      "content_json_string": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"This week will slip by a day.\"}]}]}",
+      "published_at": "2026-04-03T08:00:00Z",
+      "edited_at": "2026-04-03T08:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "7835674", "type": "campaign" } },
+      "user": { "data": { "id": "1001", "type": "user" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [{ "id": "tag-meta", "type": "post_tag" }] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "7835674",
+      "type": "campaign",
+      "attributes": {
+        "name": "Plum Parrot",
+        "summary": "Serial fantasy updates",
+        "url": "https://www.patreon.com/PlumParrot"
+      },
+      "relationships": {
+        "creator": { "data": { "id": "1001", "type": "user" } }
+      }
+    },
+    {
+      "id": "1001",
+      "type": "user",
+      "attributes": {
+        "full_name": "Plum Parrot",
+        "vanity": "PlumParrot",
+        "url": "https://www.patreon.com/PlumParrot"
+      }
+    },
+    {
+      "id": "tag-meta",
+      "type": "post_tag",
+      "attributes": {
+        "value": "meta"
+      }
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+[runtime]
+log_level = "info"
+log_format = "text"
+store_driver = "sqlite"
+store_dsn = "./state/state.db"
+artifact_root = "./state/artifacts"
+support_root = "./state/support"
+
+[[auth_profiles]]
+id = "patreon-default"
+provider = "patreon"
+mode = "fixture"
+session_path = "./state/sessions/patreon-default.json"
+
+[[publishers]]
+id = "local-files"
+kind = "filesystem"
+path = "./publish"
+enabled = true
+
+[[sources]]
+id = "plum-parrot"
+provider = "patreon"
+url = "https://www.patreon.com/c/PlumParrot/posts"
+auth_profile = "patreon-default"
+fixture_dir = "./testdata/fixtures/patreon/plum-parrot"
+enabled = true
+
+[[sources]]
+id = "actus"
+provider = "patreon"
+url = "https://www.patreon.com/c/Actus/posts"
+auth_profile = "patreon-default"
+fixture_dir = "./testdata/fixtures/patreon/actus"
+enabled = true
+
+[[rules]]
+source = "plum-parrot"
+priority = 10
+match_type = "tag"
+match_value = "AA3"
+track_key = "andy-again-3"
+track_name = "Andy, Again 3"
+release_role = "chapter"
+content_strategy = "attachment_preferred"
+attachment_glob = ["*.epub", "*.pdf"]
+attachment_priority = ["epub", "pdf"]
+
+[[rules]]
+source = "plum-parrot"
+priority = 20
+match_type = "tag"
+match_value = "AO2"
+track_key = "aura-overload-2"
+track_name = "Aura Overload 2"
+release_role = "chapter"
+content_strategy = "attachment_preferred"
+attachment_glob = ["*.pdf"]
+attachment_priority = ["pdf"]
+
+[[rules]]
+source = "actus"
+priority = 10
+match_type = "title_regex"
+match_value = "^Nightmare Realm Summoner\\s+-\\s+Chapter\\s+"
+track_key = "nightmare-realm-summoner"
+track_name = "Nightmare Realm Summoner"
+release_role = "chapter"
+content_strategy = "text_post"

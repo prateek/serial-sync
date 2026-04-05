@@ -1,0 +1,70 @@
+{
+  "data": {
+    "id": "154707034",
+    "type": "post",
+    "attributes": {
+      "title": "AO2 18 - Threshold",
+      "post_type": "text_only",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/ao2-18-threshold-154707034",
+      "content": "",
+      "content_json_string": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Aura Overload keeps escalating.\"}]}]}",
+      "published_at": "2026-04-02T12:15:00Z",
+      "edited_at": "2026-04-02T12:20:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "7835674", "type": "campaign" } },
+      "user": { "data": { "id": "1001", "type": "user" } },
+      "collections": { "data": [{ "id": "1984644", "type": "collection" }] },
+      "user_defined_tags": { "data": [{ "id": "tag-ao2", "type": "post_tag" }] },
+      "attachments_media": { "data": [{ "id": "media-2", "type": "media" }] }
+    }
+  },
+  "included": [
+    {
+      "id": "7835674",
+      "type": "campaign",
+      "attributes": {
+        "name": "Plum Parrot",
+        "summary": "Serial fantasy updates",
+        "url": "https://www.patreon.com/PlumParrot"
+      },
+      "relationships": {
+        "creator": { "data": { "id": "1001", "type": "user" } }
+      }
+    },
+    {
+      "id": "1001",
+      "type": "user",
+      "attributes": {
+        "full_name": "Plum Parrot",
+        "vanity": "PlumParrot",
+        "url": "https://www.patreon.com/PlumParrot"
+      }
+    },
+    {
+      "id": "1984644",
+      "type": "collection",
+      "attributes": {
+        "title": "Aura Overload Book 2",
+        "description": "Book 2 chapters"
+      }
+    },
+    {
+      "id": "tag-ao2",
+      "type": "post_tag",
+      "attributes": {
+        "value": "AO2"
+      }
+    },
+    {
+      "id": "media-2",
+      "type": "media",
+      "attributes": {
+        "file_name": "AO2-18.pdf",
+        "mimetype": "application/pdf",
+        "download_url": "https://cdn.example.com/ao2-18.pdf"
+      }
+    }
+  ]
+}

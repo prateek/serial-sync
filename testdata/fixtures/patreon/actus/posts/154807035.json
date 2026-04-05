@@ -1,0 +1,46 @@
+{
+  "data": {
+    "id": "154807035",
+    "type": "post",
+    "attributes": {
+      "title": "Nightmare Realm Summoner - Chapter 17",
+      "post_type": "text_only",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/nightmare-realm-summoner-17-154807035",
+      "content": "",
+      "content_json_string": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"He stepped through the broken archway.\"}]},{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Everything past it hummed with pressure.\"}]}]}",
+      "published_at": "2026-04-03T22:30:00Z",
+      "edited_at": "2026-04-03T22:31:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "9900001", "type": "campaign" } },
+      "user": { "data": { "id": "2002", "type": "user" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "9900001",
+      "type": "campaign",
+      "attributes": {
+        "name": "Actus",
+        "summary": "Daily chapters",
+        "url": "https://www.patreon.com/Actus"
+      },
+      "relationships": {
+        "creator": { "data": { "id": "2002", "type": "user" } }
+      }
+    },
+    {
+      "id": "2002",
+      "type": "user",
+      "attributes": {
+        "full_name": "Actus",
+        "vanity": "Actus",
+        "url": "https://www.patreon.com/Actus"
+      }
+    }
+  ]
+}

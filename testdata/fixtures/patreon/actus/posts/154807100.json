@@ -1,0 +1,46 @@
+{
+  "data": {
+    "id": "154807100",
+    "type": "post",
+    "attributes": {
+      "title": "Nightmare Realm Summoner - Chapter 42",
+      "post_type": "text_only",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/nightmare-realm-154807100",
+      "content": "",
+      "content_json_string": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"The nightmare gate cracked open.\"}]},{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Everyone heard it.\"}]}]}",
+      "published_at": "2026-04-03T09:30:00Z",
+      "edited_at": "2026-04-03T09:45:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "8835674", "type": "campaign" } },
+      "user": { "data": { "id": "2001", "type": "user" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "8835674",
+      "type": "campaign",
+      "attributes": {
+        "name": "Actus",
+        "summary": "Rapid release fantasy serials",
+        "url": "https://www.patreon.com/Actus"
+      },
+      "relationships": {
+        "creator": { "data": { "id": "2001", "type": "user" } }
+      }
+    },
+    {
+      "id": "2001",
+      "type": "user",
+      "attributes": {
+        "full_name": "Actus",
+        "vanity": "Actus",
+        "url": "https://www.patreon.com/Actus"
+      }
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "data": {
+    "id": "154707033",
+    "type": "post",
+    "attributes": {
+      "title": "Andy 3.22 - Pursuit",
+      "post_type": "text_only",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/andy-3-22-154707033",
+      "content": "",
+      "content_json_string": "{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"The chase was on.\"}]},{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"No one was slowing down.\"}]}]}",
+      "published_at": "2026-04-01T13:45:12Z",
+      "edited_at": "2026-04-01T14:12:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "7835674", "type": "campaign" } },
+      "user": { "data": { "id": "1001", "type": "user" } },
+      "collections": { "data": [{ "id": "1984643", "type": "collection" }] },
+      "user_defined_tags": { "data": [{ "id": "tag-aa3", "type": "post_tag" }] },
+      "attachments_media": { "data": [{ "id": "media-1", "type": "media" }] }
+    }
+  },
+  "included": [
+    {
+      "id": "7835674",
+      "type": "campaign",
+      "attributes": {
+        "name": "Plum Parrot",
+        "summary": "Serial fantasy updates",
+        "url": "https://www.patreon.com/PlumParrot"
+      },
+      "relationships": {
+        "creator": { "data": { "id": "1001", "type": "user" } }
+      }
+    },
+    {
+      "id": "1001",
+      "type": "user",
+      "attributes": {
+        "full_name": "Plum Parrot",
+        "vanity": "PlumParrot",
+        "url": "https://www.patreon.com/PlumParrot"
+      }
+    },
+    {
+      "id": "1984643",
+      "type": "collection",
+      "attributes": {
+        "title": "Andy in the Apocalypse Book 3",
+        "description": "Book 3 chapters"
+      }
+    },
+    {
+      "id": "tag-aa3",
+      "type": "post_tag",
+      "attributes": {
+        "value": "AA3"
+      }
+    },
+    {
+      "id": "media-1",
+      "type": "media",
+      "attributes": {
+        "file_name": "22. Pursuit.pdf",
+        "mimetype": "application/pdf",
+        "download_url": "https://cdn.example.com/22-pursuit.pdf"
+      }
+    }
+  ]
+}

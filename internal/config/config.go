@@ -1,0 +1,367 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
+)
+
+const (
+	DefaultConfigEnv = "SERIAL_SYNC_CONFIG"
+)
+
+type Config struct {
+	Runtime      RuntimeConfig     `toml:"runtime"`
+	Scheduler    SchedulerConfig   `toml:"scheduler"`
+	AuthProfiles []AuthProfile     `toml:"auth_profiles"`
+	Publishers   []PublisherConfig `toml:"publishers"`
+	Sources      []SourceConfig    `toml:"sources"`
+	Rules        []RuleConfig      `toml:"rules"`
+}
+
+type RuntimeConfig struct {
+	LogLevel     string `toml:"log_level"`
+	LogFormat    string `toml:"log_format"`
+	StoreDriver  string `toml:"store_driver"`
+	StoreDSN     string `toml:"store_dsn"`
+	ArtifactRoot string `toml:"artifact_root"`
+	SupportRoot  string `toml:"support_root"`
+}
+
+type SchedulerConfig struct {
+	Mode         string `toml:"mode"`
+	PollInterval string `toml:"poll_interval"`
+}
+
+type AuthProfile struct {
+	ID          string `toml:"id"`
+	Provider    string `toml:"provider"`
+	Mode        string `toml:"mode"`
+	UsernameEnv string `toml:"username_env"`
+	PasswordEnv string `toml:"password_env"`
+	SessionPath string `toml:"session_path"`
+}
+
+type PublisherConfig struct {
+	ID      string   `toml:"id"`
+	Kind    string   `toml:"kind"`
+	Path    string   `toml:"path"`
+	Command []string `toml:"command"`
+	Enabled bool     `toml:"enabled"`
+}
+
+type SourceConfig struct {
+	ID          string `toml:"id"`
+	Provider    string `toml:"provider"`
+	URL         string `toml:"url"`
+	AuthProfile string `toml:"auth_profile"`
+	Enabled     bool   `toml:"enabled"`
+	FixtureDir  string `toml:"fixture_dir"`
+}
+
+type RuleConfig struct {
+	Source             string   `toml:"source"`
+	Priority           int      `toml:"priority"`
+	MatchType          string   `toml:"match_type"`
+	MatchValue         string   `toml:"match_value"`
+	TrackKey           string   `toml:"track_key"`
+	TrackName          string   `toml:"track_name"`
+	ReleaseRole        string   `toml:"release_role"`
+	ContentStrategy    string   `toml:"content_strategy"`
+	AttachmentGlob     []string `toml:"attachment_glob"`
+	AttachmentPriority []string `toml:"attachment_priority"`
+	AnthologyMode      bool     `toml:"anthology_mode"`
+}
+
+type Roots struct {
+	ConfigDir  string
+	StateDir   string
+	CacheDir   string
+	RuntimeDir string
+}
+
+func DefaultRoots() (Roots, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Roots{}, err
+	}
+	configHome := getenvDefault("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	stateHome := getenvDefault("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	cacheHome := getenvDefault("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	runtimeHome := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeHome == "" {
+		runtimeHome = filepath.Join(os.TempDir(), "serial-sync-runtime")
+	}
+	return Roots{
+		ConfigDir:  filepath.Join(configHome, "serial-sync"),
+		StateDir:   filepath.Join(stateHome, "serial-sync"),
+		CacheDir:   filepath.Join(cacheHome, "serial-sync"),
+		RuntimeDir: filepath.Join(runtimeHome, "serial-sync"),
+	}, nil
+}
+
+func DefaultConfigPath() (string, error) {
+	if explicit := os.Getenv(DefaultConfigEnv); explicit != "" {
+		return explicit, nil
+	}
+	roots, err := DefaultRoots()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(roots.ConfigDir, "config.toml"), nil
+}
+
+func Load(path string) (*Config, Roots, error) {
+	roots, err := DefaultRoots()
+	if err != nil {
+		return nil, Roots{}, err
+	}
+	if path == "" {
+		path, err = DefaultConfigPath()
+		if err != nil {
+			return nil, Roots{}, err
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, Roots{}, err
+	}
+	var cfg Config
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return nil, Roots{}, err
+	}
+	cfg.ApplyDefaults(roots)
+	if err := cfg.expandPaths(roots); err != nil {
+		return nil, Roots{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, Roots{}, err
+	}
+	return &cfg, roots, nil
+}
+
+func (c *Config) ApplyDefaults(roots Roots) {
+	if c.Runtime.LogLevel == "" {
+		c.Runtime.LogLevel = "info"
+	}
+	if c.Runtime.LogFormat == "" {
+		c.Runtime.LogFormat = "text"
+	}
+	if c.Runtime.StoreDriver == "" {
+		c.Runtime.StoreDriver = "sqlite"
+	}
+	if c.Runtime.StoreDSN == "" {
+		c.Runtime.StoreDSN = filepath.Join(roots.StateDir, "state.db")
+	}
+	if c.Runtime.ArtifactRoot == "" {
+		c.Runtime.ArtifactRoot = filepath.Join(roots.StateDir, "artifacts")
+	}
+	if c.Runtime.SupportRoot == "" {
+		c.Runtime.SupportRoot = filepath.Join(roots.StateDir, "support")
+	}
+}
+
+func (c *Config) expandPaths(roots Roots) error {
+	expand := func(input string) string {
+		replacer := strings.NewReplacer(
+			"${XDG_CONFIG_HOME}", strings.TrimSuffix(roots.ConfigDir, "/serial-sync"),
+			"${XDG_STATE_HOME}", strings.TrimSuffix(roots.StateDir, "/serial-sync"),
+			"${XDG_CACHE_HOME}", strings.TrimSuffix(roots.CacheDir, "/serial-sync"),
+			"${XDG_RUNTIME_DIR}", strings.TrimSuffix(roots.RuntimeDir, "/serial-sync"),
+			"${HOME}", getenvDefault("HOME", ""),
+		)
+		output := replacer.Replace(input)
+		return os.ExpandEnv(output)
+	}
+	c.Runtime.StoreDSN = expand(c.Runtime.StoreDSN)
+	c.Runtime.ArtifactRoot = expand(c.Runtime.ArtifactRoot)
+	c.Runtime.SupportRoot = expand(c.Runtime.SupportRoot)
+	for idx := range c.AuthProfiles {
+		c.AuthProfiles[idx].SessionPath = expand(c.AuthProfiles[idx].SessionPath)
+	}
+	for idx := range c.Publishers {
+		c.Publishers[idx].Path = expand(c.Publishers[idx].Path)
+	}
+	for idx := range c.Sources {
+		c.Sources[idx].FixtureDir = expand(c.Sources[idx].FixtureDir)
+	}
+	return nil
+}
+
+func (c *Config) Validate() error {
+	if len(c.Sources) == 0 {
+		return errors.New("config must define at least one source")
+	}
+	sourceIDs := map[string]struct{}{}
+	authIDs := map[string]struct{}{}
+	publisherIDs := map[string]struct{}{}
+	for _, auth := range c.AuthProfiles {
+		if auth.ID == "" {
+			return errors.New("auth profile id is required")
+		}
+		authIDs[auth.ID] = struct{}{}
+	}
+	for _, source := range c.Sources {
+		if source.ID == "" {
+			return errors.New("source id is required")
+		}
+		if _, exists := sourceIDs[source.ID]; exists {
+			return fmt.Errorf("duplicate source id %q", source.ID)
+		}
+		sourceIDs[source.ID] = struct{}{}
+		if source.Provider == "" {
+			return fmt.Errorf("source %q provider is required", source.ID)
+		}
+		if source.URL == "" {
+			return fmt.Errorf("source %q url is required", source.ID)
+		}
+		if source.AuthProfile != "" {
+			if _, ok := authIDs[source.AuthProfile]; !ok {
+				return fmt.Errorf("source %q references unknown auth profile %q", source.ID, source.AuthProfile)
+			}
+		}
+	}
+	for _, publisher := range c.Publishers {
+		if publisher.ID == "" {
+			return errors.New("publisher id is required")
+		}
+		if _, exists := publisherIDs[publisher.ID]; exists {
+			return fmt.Errorf("duplicate publisher id %q", publisher.ID)
+		}
+		publisherIDs[publisher.ID] = struct{}{}
+	}
+	for _, rule := range c.Rules {
+		if rule.Source == "" {
+			return errors.New("rule source is required")
+		}
+		if _, ok := sourceIDs[rule.Source]; !ok {
+			return fmt.Errorf("rule references unknown source %q", rule.Source)
+		}
+		if rule.TrackKey == "" {
+			return fmt.Errorf("rule for source %q must set track_key", rule.Source)
+		}
+	}
+	return nil
+}
+
+func (c *Config) AuthProfileByID(id string) (AuthProfile, bool) {
+	for _, profile := range c.AuthProfiles {
+		if profile.ID == id {
+			return profile, true
+		}
+	}
+	return AuthProfile{}, false
+}
+
+func (c *Config) SourceByID(id string) (SourceConfig, bool) {
+	for _, source := range c.Sources {
+		if source.ID == id {
+			return source, true
+		}
+	}
+	return SourceConfig{}, false
+}
+
+func (c *Config) RulesForSource(sourceID string) []RuleConfig {
+	var rules []RuleConfig
+	for _, rule := range c.Rules {
+		if rule.Source == sourceID {
+			rules = append(rules, rule)
+		}
+	}
+	return rules
+}
+
+func (c *Config) PublisherByID(id string) (PublisherConfig, bool) {
+	for _, publisher := range c.Publishers {
+		if publisher.ID == id {
+			return publisher, true
+		}
+	}
+	return PublisherConfig{}, false
+}
+
+func EnsureDirs(roots Roots, cfg *Config) error {
+	dirs := []string{
+		roots.ConfigDir,
+		roots.StateDir,
+		roots.CacheDir,
+		roots.RuntimeDir,
+		filepath.Dir(cfg.Runtime.StoreDSN),
+		cfg.Runtime.ArtifactRoot,
+		cfg.Runtime.SupportRoot,
+	}
+	for _, auth := range cfg.AuthProfiles {
+		if auth.SessionPath != "" {
+			dirs = append(dirs, filepath.Dir(auth.SessionPath))
+		}
+	}
+	for _, publisher := range cfg.Publishers {
+		if publisher.Kind == "filesystem" && publisher.Path != "" {
+			dirs = append(dirs, publisher.Path)
+		}
+	}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ExampleConfig() string {
+	return `[runtime]
+log_level = "info"
+log_format = "text"
+store_driver = "sqlite"
+store_dsn = "${XDG_STATE_HOME}/serial-sync/state.db"
+artifact_root = "${XDG_STATE_HOME}/serial-sync/artifacts"
+support_root = "${XDG_STATE_HOME}/serial-sync/support"
+
+[[auth_profiles]]
+id = "patreon-default"
+provider = "patreon"
+mode = "fixture"
+session_path = "${XDG_STATE_HOME}/serial-sync/sessions/patreon-default.json"
+
+[[publishers]]
+id = "local-files"
+kind = "filesystem"
+path = "${XDG_STATE_HOME}/serial-sync/published"
+enabled = true
+
+[[sources]]
+id = "plum-parrot"
+provider = "patreon"
+url = "https://www.patreon.com/c/PlumParrot/posts"
+auth_profile = "patreon-default"
+fixture_dir = "./testdata/fixtures/patreon/plum-parrot"
+enabled = true
+
+[[rules]]
+source = "plum-parrot"
+priority = 10
+match_type = "tag"
+match_value = "AA3"
+track_key = "andy-again-3"
+track_name = "Andy, Again 3"
+release_role = "chapter"
+content_strategy = "attachment_preferred"
+attachment_glob = ["*.epub", "*.pdf"]
+attachment_priority = ["epub", "pdf"]
+`
+}
+
+func getenvDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}

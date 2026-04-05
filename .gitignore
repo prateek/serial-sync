@@ -1,0 +1,11 @@
+.DS_Store
+bin/
+dist/
+.tmp/
+*.db
+*.db-shm
+*.db-wal
+.env
+coverage.out
+publish/
+state/
