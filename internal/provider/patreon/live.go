@@ -90,10 +90,20 @@ type currentUserEnvelope struct {
 		ID         string `json:"id"`
 		Type       string `json:"type"`
 		Attributes struct {
-			Name   string `json:"name"`
-			URL    string `json:"url"`
-			Vanity string `json:"vanity"`
+			Name              string `json:"name"`
+			URL               string `json:"url"`
+			URLForCurrentUser string `json:"url_for_current_user"`
+			Vanity            string `json:"vanity"`
+			IsFreeMember      bool   `json:"is_free_member"`
+			IsFreeTrial       bool   `json:"is_free_trial"`
 		} `json:"attributes"`
+		Relationships struct {
+			Campaign struct {
+				Data struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			} `json:"campaign"`
+		} `json:"relationships"`
 	} `json:"included"`
 }
 
@@ -281,6 +291,10 @@ func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, sourc
 }
 
 func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor) ([]string, domain.AuthState, error) {
+	return c.listPostIDsWithLimit(ctx, session, source, cursor, 0)
+}
+
+func (c *Client) listPostIDsWithLimit(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor, limit int) ([]string, domain.AuthState, error) {
 	nextURL := c.postsIndexAPIURL(session.campaign.ID, session.currentUserID)
 	seen := map[string]struct{}{}
 	ids := make([]string, 0, 32)
@@ -312,6 +326,9 @@ func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source c
 			}
 			seen[item.ID] = struct{}{}
 			ids = append(ids, item.ID)
+			if limit > 0 && len(ids) >= limit {
+				return ids, domain.AuthStateAuthenticated, nil
+			}
 			if lookback > 0 && len(ids) >= lookback {
 				if _, ok := known[item.ID]; ok {
 					return ids, domain.AuthStateAuthenticated, nil

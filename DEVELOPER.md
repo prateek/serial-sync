@@ -17,6 +17,7 @@ go test ./...
 go run ./cmd/serial-sync --config ./examples/config.demo.toml plan sync
 go run ./cmd/serial-sync --config ./examples/config.demo.toml run once
 go run ./cmd/serial-sync --config ./examples/config.demo.toml auth bootstrap
+go run ./cmd/serial-sync --config ./examples/config.demo.toml source discover --auth-profile patreon-default
 ```
 
 ## Generated Assets
@@ -36,6 +37,7 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 ## Current Scope
 
 - Patreon supports both live auth and the fixture demo flow.
+- Patreon discovery can suggest sources and starter rules from active memberships.
 - `filesystem` and `exec` publishing are implemented.
 - `run once`, `auth bootstrap`, and the single-process `daemon` are implemented.
 - session-bundle import, richer challenge handling, and richer daemon coordination remain future work.
@@ -45,6 +47,8 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 - [Config reference](docs/config.md)
 - [Architecture](docs/architecture.md)
 - [Control plane notes](docs/control-plane.md)
+- [Source discovery guide](docs/source-discovery.md)
+- [Observability guide](docs/observability.md)
 - [PRD status](docs/prd-status.md)
 - [Provider notes](docs/patreon.md)
 - [Provider contribution guide](docs/provider-contributing.md)

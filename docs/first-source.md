@@ -45,7 +45,28 @@ If you already have a valid session bundle:
 serial-sync --config ./config.toml auth import-session /path/to/patreon-session.json --auth-profile patreon-default
 ```
 
-## 3. Sample the source safely
+## 3. Ask Patreon what you already follow
+
+If you want suggestions instead of hand-authoring every source:
+
+```sh
+serial-sync --config ./config.toml source discover --auth-profile patreon-default
+```
+
+To emit just the additive TOML:
+
+```sh
+serial-sync --config ./config.toml source discover --auth-profile patreon-default --format toml
+```
+
+The discovery flow:
+
+- inspects your active Patreon memberships
+- suggests creator-feed `[[sources]]`
+- samples recent posts for each creator
+- suggests starter `[[rules]]` from recurring tags, collections, or title prefixes
+
+## 4. Sample the source safely
 
 ```sh
 serial-sync --config ./config.toml plan sync --source example-creator
@@ -57,21 +78,27 @@ Use the output to confirm:
 - the fallback track is catching unmatched posts
 - attachments are available when expected
 
-## 4. Run one full cycle
+## 5. Run one full cycle
 
 ```sh
 serial-sync --config ./config.toml run once --source example-creator --target local-files
 ```
 
-## 5. Inspect what happened
+## 6. Inspect what happened
 
 ```sh
 serial-sync --config ./config.toml source inspect example-creator
 serial-sync --config ./config.toml runs inspect <run-id>
 serial-sync --config ./config.toml publish-record list --source example-creator
+serial-sync --config ./config.toml support bundle <run-id>
 ```
 
-## 6. Tighten the rules
+Every run also writes:
+
+- a text log under `runtime.log_root/<run-id>.log`
+- a JSONL log under `runtime.log_root/<run-id>.jsonl`
+
+## 7. Tighten the rules
 
 Replace the fallback-only rule with source-specific matching:
 

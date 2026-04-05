@@ -195,6 +195,36 @@ func TestWizardCommandShape(t *testing.T) {
 	}
 }
 
+func TestSourceDiscoverCommandShape(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{}
+	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	if err != nil {
+		t.Fatalf("newParser() error = %v", err)
+	}
+
+	ctx, err := parser.Parse([]string{"source", "discover", "--auth-profile", "patreon-default", "--sample", "3", "--include-configured", "--format", "toml"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := ctx.Command(), "source discover"; got != want {
+		t.Fatalf("ctx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Source.Discover.AuthProfileID, "patreon-default"; got != want {
+		t.Fatalf("cli.Source.Discover.AuthProfileID = %q, want %q", got, want)
+	}
+	if got, want := cli.Source.Discover.Sample, 3; got != want {
+		t.Fatalf("cli.Source.Discover.Sample = %d, want %d", got, want)
+	}
+	if !cli.Source.Discover.IncludeConfigured {
+		t.Fatal("expected include-configured flag to be set")
+	}
+	if got, want := cli.Source.Discover.Format, "toml"; got != want {
+		t.Fatalf("cli.Source.Discover.Format = %q, want %q", got, want)
+	}
+}
+
 func TestRunsInspectCommandShape(t *testing.T) {
 	t.Parallel()
 

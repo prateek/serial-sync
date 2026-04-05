@@ -32,6 +32,7 @@ type Config struct {
 type RuntimeConfig struct {
 	LogLevel     string `toml:"log_level"`
 	LogFormat    string `toml:"log_format"`
+	LogRoot      string `toml:"log_root"`
 	StoreDriver  string `toml:"store_driver"`
 	StoreDSN     string `toml:"store_dsn"`
 	ArtifactRoot string `toml:"artifact_root"`
@@ -177,6 +178,9 @@ func (c *Config) ApplyDefaults(roots Roots) {
 	if c.Runtime.StoreDSN == "" {
 		c.Runtime.StoreDSN = filepath.Join(roots.StateDir, "state.db")
 	}
+	if c.Runtime.LogRoot == "" {
+		c.Runtime.LogRoot = filepath.Join(roots.StateDir, "logs")
+	}
 	if c.Runtime.ArtifactRoot == "" {
 		c.Runtime.ArtifactRoot = filepath.Join(roots.StateDir, "artifacts")
 	}
@@ -210,6 +214,7 @@ func (c *Config) expandPaths(roots Roots) error {
 		return os.ExpandEnv(output)
 	}
 	c.Runtime.StoreDSN = expand(c.Runtime.StoreDSN)
+	c.Runtime.LogRoot = expand(c.Runtime.LogRoot)
 	c.Runtime.ArtifactRoot = expand(c.Runtime.ArtifactRoot)
 	c.Runtime.SupportRoot = expand(c.Runtime.SupportRoot)
 	for idx := range c.AuthProfiles {
@@ -378,6 +383,7 @@ func EnsureDirs(roots Roots, cfg *Config) error {
 		roots.CacheDir,
 		roots.RuntimeDir,
 		filepath.Dir(cfg.Runtime.StoreDSN),
+		cfg.Runtime.LogRoot,
 		cfg.Runtime.ArtifactRoot,
 		cfg.Runtime.SupportRoot,
 	}
@@ -413,12 +419,14 @@ func ExampleConfig() string {
 		}
 	}
 	storeDSN := "${XDG_STATE_HOME}/serial-sync/state.db"
+	logRoot := "${XDG_STATE_HOME}/serial-sync/logs"
 	artifactRoot := "${XDG_STATE_HOME}/serial-sync/artifacts"
 	supportRoot := "${XDG_STATE_HOME}/serial-sync/support"
 	sessionPath := "${XDG_STATE_HOME}/serial-sync/sessions/patreon-default.json"
 	publishPath := "${XDG_STATE_HOME}/serial-sync/published"
 	if roots.Containerized {
 		storeDSN = filepath.Join(roots.StateDir, "state.db")
+		logRoot = filepath.Join(roots.StateDir, "logs")
 		artifactRoot = filepath.Join(roots.StateDir, "artifacts")
 		supportRoot = filepath.Join(roots.StateDir, "support")
 		sessionPath = filepath.Join(roots.StateDir, "sessions", "patreon-default.json")
@@ -427,6 +435,7 @@ func ExampleConfig() string {
 	return fmt.Sprintf(`[runtime]
 log_level = "info"
 log_format = "text"
+log_root = %q
 store_driver = "sqlite"
 store_dsn = %q
 artifact_root = %q
@@ -471,7 +480,7 @@ release_role = "chapter"
 content_strategy = "attachment_preferred"
 attachment_glob = ["*.epub", "*.pdf"]
 attachment_priority = ["epub", "pdf"]
-`, storeDSN, artifactRoot, supportRoot, sessionPath, publishPath)
+`, logRoot, storeDSN, artifactRoot, supportRoot, sessionPath, publishPath)
 }
 
 func getenvDefault(key, fallback string) string {

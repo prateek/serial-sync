@@ -52,6 +52,11 @@ type Server struct {
 	http *http.Server
 }
 
+type Handlers struct {
+	DiscoverSources http.HandlerFunc
+	DiscoverConfig  http.HandlerFunc
+}
+
 func NewState(holderID string, pollInterval time.Duration, sourceIDs []string) *State {
 	state := &State{
 		holderID:     holderID,
@@ -65,7 +70,7 @@ func NewState(holderID string, pollInterval time.Duration, sourceIDs []string) *
 	return state
 }
 
-func Start(ctx context.Context, addr string, state *State) (*Server, error) {
+func Start(ctx context.Context, addr string, state *State, handlers *Handlers) (*Server, error) {
 	if strings.TrimSpace(addr) == "" {
 		return nil, nil
 	}
@@ -75,7 +80,7 @@ func Start(ctx context.Context, addr string, state *State) (*Server, error) {
 	}
 	server := &http.Server{
 		Addr:    addr,
-		Handler: newHandler(state),
+		Handler: newHandler(state, handlers),
 	}
 	go func() {
 		<-ctx.Done()
@@ -235,7 +240,7 @@ func (s *State) healthyLocked() bool {
 	return true
 }
 
-func newHandler(state *State) http.Handler {
+func newHandler(state *State, handlers *Handlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		snapshot := state.Snapshot()
@@ -251,6 +256,12 @@ func newHandler(state *State) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = w.Write([]byte(state.Metrics()))
 	})
+	if handlers != nil && handlers.DiscoverSources != nil {
+		mux.HandleFunc("/discover/sources", handlers.DiscoverSources)
+	}
+	if handlers != nil && handlers.DiscoverConfig != nil {
+		mux.HandleFunc("/discover/config", handlers.DiscoverConfig)
+	}
 	return mux
 }
 

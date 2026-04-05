@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
@@ -80,6 +81,21 @@ type AuthImportResult struct {
 	Items     []AuthImportItem `json:"items"`
 }
 
+type DiscoveryConfigSnippet struct {
+	Sources []config.SourceConfig `json:"sources" toml:"sources"`
+	Rules   []config.RuleConfig   `json:"rules" toml:"rules"`
+}
+
+type SourceDiscoverResult struct {
+	RunID         string                      `json:"run_id"`
+	Provider      string                      `json:"provider"`
+	AuthProfileID string                      `json:"auth_profile_id"`
+	AuthState     domain.AuthState            `json:"auth_state"`
+	Suggestions   []provider.SourceSuggestion `json:"suggestions"`
+	Snippet       DiscoveryConfigSnippet      `json:"snippet"`
+	SnippetTOML   string                      `json:"snippet_toml"`
+}
+
 type RunOnceResult struct {
 	Sync    domain.SyncResult    `json:"sync"`
 	Publish domain.PublishResult `json:"publish"`
@@ -97,7 +113,7 @@ func New(cfg *config.Config, roots config.Roots, configPath string, repo store.R
 }
 
 func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, command string) (domain.SyncResult, error) {
-	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun)
+	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun, s.observeOptions())
 	if err != nil {
 		return domain.SyncResult{}, err
 	}
@@ -125,16 +141,41 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 				return result, err
 			}
 			listResult, listErr := client.ListReleases(ctx, auth, sourceCfg, storedSource)
-			_ = recorder.Event(ctx, "info", "provider", "auth state "+string(listResult.AuthState), "source", sourceCfg.ID)
+			_ = recorder.EventData(ctx, "info", "provider", "auth state "+string(listResult.AuthState), "source", sourceCfg.ID, map[string]any{
+				"source_id":   sourceCfg.ID,
+				"auth_state":  listResult.AuthState,
+				"provider":    sourceCfg.Provider,
+				"sync_cursor": strings.TrimSpace(listResult.SyncCursor) != "",
+			})
 			if listErr != nil {
 				err = listErr
 				_ = recorder.Event(ctx, "error", "provider", listErr.Error(), "source", sourceCfg.ID)
 				return result, err
 			}
-			_ = recorder.Event(ctx, "info", "provider", fmt.Sprintf("fetched %d releases", len(listResult.Documents)), "source", sourceCfg.ID)
+			_ = recorder.EventData(ctx, "info", "provider", fmt.Sprintf("fetched %d releases", len(listResult.Documents)), "source", sourceCfg.ID, map[string]any{
+				"source_id":        sourceCfg.ID,
+				"discovered_count": len(listResult.Documents),
+			})
 			for _, doc := range listResult.Documents {
 				result.Discovered++
 				decision := classify.Decide(sourceCfg.ID, doc.Normalized, s.Config.RulesForSource(sourceCfg.ID))
+				classificationMessage := "classified release"
+				if !decision.Matched {
+					classificationMessage = "release unmatched fallback"
+				}
+				_ = recorder.EventData(ctx, "info", "classify", classificationMessage, "release", doc.Normalized.ProviderReleaseID, map[string]any{
+					"source_id":           sourceCfg.ID,
+					"provider_release_id": doc.Normalized.ProviderReleaseID,
+					"title":               doc.Normalized.Title,
+					"matched":             decision.Matched,
+					"rule_id":             decision.RuleID,
+					"track_key":           decision.TrackKey,
+					"track_name":          decision.TrackName,
+					"release_role":        decision.ReleaseRole,
+					"content_strategy":    decision.ContentStrategy,
+					"tags":                doc.Normalized.Tags,
+					"collections":         doc.Normalized.Collections,
+				})
 				preparedDoc := doc
 				if classify.CanMaterialize(doc.Normalized, decision) {
 					var authState domain.AuthState
@@ -188,7 +229,7 @@ func (s *Service) BootstrapAuth(ctx context.Context, sourceFilter, authFilter st
 	if strings.TrimSpace(authFilter) != "" {
 		scope = strings.TrimSpace(authFilter)
 	}
-	recorder, err := observe.Start(ctx, s.Repo, command, scope, false)
+	recorder, err := observe.Start(ctx, s.Repo, command, scope, false, s.observeOptions())
 	if err != nil {
 		return AuthBootstrapResult{}, err
 	}
@@ -282,7 +323,7 @@ func (s *Service) BootstrapAuth(ctx context.Context, sourceFilter, authFilter st
 }
 
 func (s *Service) ImportAuthSession(ctx context.Context, sourceFilter, authFilter, sessionFile, command string) (AuthImportResult, error) {
-	recorder, err := observe.Start(ctx, s.Repo, command, strings.TrimSpace(authFilter), false)
+	recorder, err := observe.Start(ctx, s.Repo, command, strings.TrimSpace(authFilter), false, s.observeOptions())
 	if err != nil {
 		return AuthImportResult{}, err
 	}
@@ -402,8 +443,63 @@ func (s *Service) ImportAuthSession(ctx context.Context, sourceFilter, authFilte
 	return result, nil
 }
 
+func (s *Service) DiscoverSources(ctx context.Context, authFilter string, sampleLimit int, includeConfigured bool, command string) (SourceDiscoverResult, error) {
+	scope := strings.TrimSpace(authFilter)
+	recorder, err := observe.Start(ctx, s.Repo, command, scope, false, s.observeOptions())
+	if err != nil {
+		return SourceDiscoverResult{}, err
+	}
+	result := SourceDiscoverResult{RunID: recorder.RunID()}
+	defer func() {
+		if err != nil {
+			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
+		}
+	}()
+
+	auth, err := s.selectAuthProfile(authFilter)
+	if err != nil {
+		return result, err
+	}
+	client, ok := s.Providers.Get(auth.Provider)
+	if !ok {
+		err = fmt.Errorf("no provider registered for %q", auth.Provider)
+		return result, err
+	}
+	discovered, err := client.DiscoverSources(ctx, auth, s.Config.Sources, sampleLimit)
+	result.Provider = discovered.Provider
+	result.AuthProfileID = auth.ID
+	result.AuthState = discovered.AuthState
+	result.Suggestions = discovered.Suggestions
+	_ = recorder.Event(ctx, "info", "discover", "auth state "+string(discovered.AuthState), "auth_profile", auth.ID)
+	if err != nil {
+		return result, err
+	}
+	snippet := DiscoveryConfigSnippet{}
+	for _, suggestion := range discovered.Suggestions {
+		if suggestion.AlreadyConfigured && !includeConfigured {
+			continue
+		}
+		snippet.Sources = append(snippet.Sources, suggestion.Source)
+		snippet.Rules = append(snippet.Rules, suggestion.SuggestedRules...)
+	}
+	result.Snippet = snippet
+	if len(snippet.Sources) > 0 || len(snippet.Rules) > 0 {
+		payload, marshalErr := toml.Marshal(snippet)
+		if marshalErr != nil {
+			return result, marshalErr
+		}
+		result.SnippetTOML = string(payload)
+	}
+	_ = recorder.Event(ctx, "info", "discover", fmt.Sprintf("suggested %d Patreon source(s)", len(discovered.Suggestions)), "auth_profile", auth.ID)
+	summary := fmt.Sprintf("suggested=%d new=%d", len(discovered.Suggestions), len(snippet.Sources))
+	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
+		return result, finishErr
+	}
+	return result, nil
+}
+
 func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string, dryRun bool, command string) (domain.PublishResult, error) {
-	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun)
+	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun, s.observeOptions())
 	if err != nil {
 		return domain.PublishResult{}, err
 	}
@@ -442,6 +538,14 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 					TargetRef:  targetRef,
 					Action:     "skipped",
 				})
+				_ = recorder.EventData(ctx, "info", "publish", "publish skipped: identical artifact already published", "artifact", candidate.Artifact.ID, map[string]any{
+					"artifact_id":  candidate.Artifact.ID,
+					"target_id":    target.ID,
+					"target_kind":  targetKind,
+					"target_ref":   targetRef,
+					"publish_hash": publishHash,
+					"action":       "skipped",
+				})
 				continue
 			}
 			if dryRun {
@@ -454,7 +558,7 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 					TargetRef:  targetRef,
 					Action:     "planned",
 				})
-				_ = recorder.Event(ctx, "info", "publish", "planned "+targetKind+" publish", "artifact", candidate.Artifact.ID)
+				_ = recorder.EventData(ctx, "info", "publish", "planned "+targetKind+" publish", "artifact", candidate.Artifact.ID, result.Items[len(result.Items)-1])
 				continue
 			}
 			record, pubErr := s.publishTarget(ctx, recorder.RunID(), target, candidate)
@@ -479,7 +583,7 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 					Status:      domain.PublishStatusFailed,
 					Message:     pubErr.Error(),
 				})
-				_ = recorder.Event(ctx, "error", "publish", pubErr.Error(), "artifact", candidate.Artifact.ID)
+				_ = recorder.EventData(ctx, "error", "publish", pubErr.Error(), "artifact", candidate.Artifact.ID, result.Items[len(result.Items)-1])
 				continue
 			}
 			if err := s.Repo.UpsertPublishRecord(ctx, record); err != nil {
@@ -495,7 +599,7 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 				Action:     "published",
 				Message:    record.Message,
 			})
-			_ = recorder.Event(ctx, "info", "publish", record.TargetKind+" publish completed", "artifact", candidate.Artifact.ID)
+			_ = recorder.EventData(ctx, "info", "publish", record.TargetKind+" publish completed", "artifact", candidate.Artifact.ID, record)
 		}
 	}
 	summaryVerb := "published"
@@ -624,11 +728,11 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		Action:            action,
 	}
 	if !changed {
-		_ = recorder.Event(ctx, "info", "sync", "release unchanged", "release", release.ID)
+		_ = recorder.EventData(ctx, "info", "sync", "release unchanged", "release", release.ID, itemPlan)
 		return itemPlan, false, false, nil
 	}
 	if dryRun {
-		_ = recorder.Event(ctx, "info", "sync", "planned release sync", "release", release.ID)
+		_ = recorder.EventData(ctx, "info", "sync", "planned release sync", "release", release.ID, itemPlan)
 		return itemPlan, true, artifactPlan.SHA256 != "", nil
 	}
 	payloadDir := filepath.Join(s.Config.Runtime.ArtifactRoot, source.ID, track.TrackKey, release.ProviderReleaseID)
@@ -668,7 +772,11 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 	}); err != nil {
 		return domain.SyncItemPlan{}, false, false, err
 	}
-	_ = recorder.Event(ctx, "info", "sync", "release synced", "release", release.ID)
+	_ = recorder.EventData(ctx, "info", "sync", "release synced", "release", release.ID, map[string]any{
+		"plan":         itemPlan,
+		"materialized": materialized,
+		"artifact_id":  art.ID,
+	})
 	return itemPlan, true, materialized, nil
 }
 
@@ -822,6 +930,17 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 	if err := os.WriteFile(filepath.Join(dir, "config.redacted.json"), configJSON, 0o644); err != nil {
 		return "", err
 	}
+	logFiles := make([]string, 0, 2)
+	for _, logPath := range []string{
+		filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
+		filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
+	} {
+		if relPath, err := copySupportFile(logPath, filepath.Join(dir, "logs")); err != nil {
+			return "", err
+		} else if relPath != "" {
+			logFiles = append(logFiles, relPath)
+		}
+	}
 	releaseIDs, artifactIDs := collectRunEntityIDs(bundle)
 	for _, releaseID := range releaseIDs {
 		releaseBundle, err := s.Repo.GetReleaseBundle(ctx, releaseID)
@@ -874,6 +993,7 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 		"run_id":              runID,
 		"generated_at":        time.Now().UTC(),
 		"config_path":         redactPathForSupport(s.ConfigPath),
+		"log_files":           logFiles,
 		"release_ids":         releaseIDs,
 		"artifact_ids":        artifactIDs,
 		"event_payload_files": eventPayloads,
@@ -895,6 +1015,26 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 		return "", err
 	}
 	return dir, nil
+}
+
+func (s *Service) selectAuthProfile(authFilter string) (config.AuthProfile, error) {
+	if strings.TrimSpace(authFilter) != "" {
+		auth, ok := s.Config.AuthProfileByID(strings.TrimSpace(authFilter))
+		if !ok {
+			return config.AuthProfile{}, fmt.Errorf("unknown auth profile %q", authFilter)
+		}
+		return auth, nil
+	}
+	if len(s.Config.AuthProfiles) == 1 {
+		return s.Config.AuthProfiles[0], nil
+	}
+	return config.AuthProfile{}, fmt.Errorf("multiple auth profiles are configured; pass --auth-profile")
+}
+
+func (s *Service) observeOptions() observe.Options {
+	return observe.Options{
+		LogRoot: s.Config.Runtime.LogRoot,
+	}
 }
 
 func selectSources(all []config.SourceConfig, sourceFilter string) []config.SourceConfig {
@@ -1054,6 +1194,7 @@ func writeSessionBundle(dst string, payload []byte) error {
 func redactConfigForSupport(cfg *config.Config) *config.Config {
 	redacted := *cfg
 	redacted.Runtime.StoreDSN = redactPathForSupport(cfg.Runtime.StoreDSN)
+	redacted.Runtime.LogRoot = redactPathForSupport(cfg.Runtime.LogRoot)
 	redacted.Runtime.ArtifactRoot = redactPathForSupport(cfg.Runtime.ArtifactRoot)
 	redacted.Runtime.SupportRoot = redactPathForSupport(cfg.Runtime.SupportRoot)
 	redacted.AuthProfiles = append([]config.AuthProfile(nil), cfg.AuthProfiles...)
@@ -1178,6 +1319,52 @@ func FormatRunOnceResult(result RunOnceResult) string {
 	}, "\n")
 }
 
+func FormatSourceDiscoverResult(result SourceDiscoverResult) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf(
+		"run_id=%s provider=%s auth_profile=%s auth_state=%s suggestions=%d\n",
+		result.RunID,
+		result.Provider,
+		result.AuthProfileID,
+		result.AuthState,
+		len(result.Suggestions),
+	))
+	for _, suggestion := range result.Suggestions {
+		status := "new"
+		if suggestion.AlreadyConfigured {
+			status = "configured as " + suggestion.ExistingSourceID
+		}
+		builder.WriteString(fmt.Sprintf(
+			"%s\t%s\t%s\t%s\n",
+			suggestion.Source.ID,
+			suggestion.CreatorName,
+			firstNonEmpty(suggestion.MembershipKind, "unknown"),
+			status,
+		))
+		if len(suggestion.SampleTitles) > 0 {
+			builder.WriteString("  titles: " + strings.Join(suggestion.SampleTitles, " | ") + "\n")
+		}
+		if len(suggestion.SampleTags) > 0 {
+			builder.WriteString("  tags: " + strings.Join(suggestion.SampleTags, ", ") + "\n")
+		}
+		if len(suggestion.SampleCollections) > 0 {
+			builder.WriteString("  collections: " + strings.Join(suggestion.SampleCollections, ", ") + "\n")
+		}
+		if len(suggestion.SuggestedRules) > 0 {
+			ruleLabels := make([]string, 0, len(suggestion.SuggestedRules))
+			for _, rule := range suggestion.SuggestedRules {
+				ruleLabels = append(ruleLabels, rule.MatchType+":"+rule.TrackKey)
+			}
+			builder.WriteString("  rules: " + strings.Join(ruleLabels, ", ") + "\n")
+		}
+	}
+	if strings.TrimSpace(result.SnippetTOML) != "" {
+		builder.WriteString("\nSuggested TOML snippet:\n")
+		builder.WriteString(result.SnippetTOML)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 func publishTargetIdentity(target config.PublisherConfig, candidate domain.PublishCandidate) (targetKind, targetRef, publishHashInput string, err error) {
 	switch normalizedPublisherKind(target.Kind) {
 	case "filesystem":
@@ -1208,6 +1395,15 @@ func indentBlock(value, prefix string) string {
 }
 
 func firstNonEmptyAction(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			return value

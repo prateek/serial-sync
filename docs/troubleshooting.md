@@ -49,6 +49,7 @@ Use the bundled fixtures under `testdata/fixtures` or `examples/config.demo.toml
 Check:
 
 - `serial-sync source inspect <source>`
+- `serial-sync source discover --auth-profile <profile>`
 - `serial-sync runs inspect <run-id>`
 - `serial-sync publish-record list`
 - `serial-sync publish-record inspect <publish-record-id>`
@@ -59,3 +60,12 @@ If the canonical artifact hash has already been published to the same target, `p
 ## A release matched the wrong track
 
 Inspect the rules in your config. Rules are applied by ascending `priority`.
+
+## I need to know what happened during a run
+
+Each run now writes:
+
+- `<log_root>/<run-id>.log`
+- `<log_root>/<run-id>.jsonl`
+
+By default, `log_root` is under your state directory. `support bundle <run-id>` copies those logs alongside the run summary and payload references.

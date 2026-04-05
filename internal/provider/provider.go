@@ -25,11 +25,31 @@ type AuthBootstrapResult struct {
 	Action string
 }
 
+type SourceSuggestion struct {
+	Source            config.SourceConfig `json:"source"`
+	CreatorName       string              `json:"creator_name"`
+	CreatorHandle     string              `json:"creator_handle"`
+	MembershipKind    string              `json:"membership_kind"`
+	AlreadyConfigured bool                `json:"already_configured"`
+	ExistingSourceID  string              `json:"existing_source_id,omitempty"`
+	SampleTitles      []string            `json:"sample_titles,omitempty"`
+	SampleTags        []string            `json:"sample_tags,omitempty"`
+	SampleCollections []string            `json:"sample_collections,omitempty"`
+	SuggestedRules    []config.RuleConfig `json:"suggested_rules,omitempty"`
+}
+
+type DiscoverResult struct {
+	Provider    string             `json:"provider"`
+	AuthState   domain.AuthState   `json:"auth_state"`
+	Suggestions []SourceSuggestion `json:"suggestions"`
+}
+
 type Client interface {
 	Name() string
 	ValidateSource(source config.SourceConfig) error
 	ValidateSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (domain.AuthState, error)
 	BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (AuthBootstrapResult, error)
+	DiscoverSources(ctx context.Context, auth config.AuthProfile, existingSources []config.SourceConfig, sampleLimit int) (DiscoverResult, error)
 	ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (ListResult, error)
 	PrepareRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc ReleaseDocument, decision domain.TrackDecision) (ReleaseDocument, domain.AuthState, error)
 }

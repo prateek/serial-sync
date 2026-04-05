@@ -36,6 +36,28 @@ docker run --rm \
 
 The image includes Chromium and Xvfb. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
 
+## Discover Sources From Your Patreon Memberships
+
+After auth succeeds, you can ask the container to suggest new `[[sources]]` and starter `[[rules]]` from the creators your account already follows:
+
+```sh
+docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync source discover --auth-profile patreon-default
+```
+
+To emit just the suggested TOML snippet:
+
+```sh
+docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync source discover --auth-profile patreon-default --format toml
+```
+
 If you already have a valid Patreon session bundle, you can import it instead:
 
 ```sh
@@ -89,6 +111,13 @@ If `health_addr` is set in the config, the daemon also exposes:
 - `/healthz`
 - `/status`
 - `/metrics`
+- `/discover/sources`
+- `/discover/config`
+
+The discovery endpoints use the same saved Patreon session as the CLI:
+
+- `GET /discover/sources?auth_profile=patreon-default`
+- `GET /discover/config?auth_profile=patreon-default`
 
 A Compose example lives in `examples/docker-compose.yml`.
 
@@ -111,3 +140,5 @@ docker run --rm \
   -v "$PWD/config.toml:/config/config.toml:ro" \
   serial-sync runs inspect <run-id>
 ```
+
+Run logs land under `/state/logs` by default. Support bundles copy those logs automatically.

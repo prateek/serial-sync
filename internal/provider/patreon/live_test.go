@@ -15,6 +15,7 @@ import (
 
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/provider"
 )
 
 func TestListReleasesLiveSessionReuse(t *testing.T) {
@@ -361,6 +362,80 @@ func TestClassifyHTTPAuthFailureFlagsHTMLChallengePage(t *testing.T) {
 	}
 }
 
+func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
+	t.Parallel()
+
+	server := newPatreonDiscoveryTestServer(t)
+	client := New()
+	client.apiBaseURL = server.URL
+	client.bootstrap = func(context.Context, config.AuthProfile, config.SourceConfig, string) (domain.AuthState, error) {
+		t.Fatalf("bootstrap should not run when a persisted session is available")
+		return domain.AuthStateReauthRequired, nil
+	}
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.DiscoverSources(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, []config.SourceConfig{
+		{
+			ID:          "plum-parrot",
+			Provider:    "patreon",
+			URL:         "https://www.patreon.com/c/plum_parrot/posts",
+			AuthProfile: "patreon-default",
+			Enabled:     true,
+		},
+	}, 2)
+	if err != nil {
+		t.Fatalf("DiscoverSources() error = %v", err)
+	}
+	if result.AuthState != domain.AuthStateAuthenticated {
+		t.Fatalf("authState = %q, want %q", result.AuthState, domain.AuthStateAuthenticated)
+	}
+	if got, want := len(result.Suggestions), 2; got != want {
+		t.Fatalf("len(suggestions) = %d, want %d", got, want)
+	}
+	var configured, unconfigured *provider.SourceSuggestion
+	for idx := range result.Suggestions {
+		suggestion := &result.Suggestions[idx]
+		switch suggestion.Source.ID {
+		case "plumparrot":
+			configured = suggestion
+		case "sidequest":
+			unconfigured = suggestion
+		}
+	}
+	if configured == nil {
+		t.Fatalf("expected configured suggestion for plumparrot, got %#v", result.Suggestions)
+	}
+	if !configured.AlreadyConfigured || configured.ExistingSourceID != "plum-parrot" {
+		t.Fatalf("configured suggestion = %#v, want already configured plum-parrot", configured)
+	}
+	if got, want := configured.MembershipKind, "paid"; got != want {
+		t.Fatalf("configured.MembershipKind = %q, want %q", got, want)
+	}
+	if len(configured.SampleTitles) == 0 || len(configured.SuggestedRules) == 0 {
+		t.Fatalf("configured suggestion missing samples or rules: %#v", configured)
+	}
+	if unconfigured == nil {
+		t.Fatalf("expected unconfigured suggestion for sidequest, got %#v", result.Suggestions)
+	}
+	if unconfigured.AlreadyConfigured {
+		t.Fatalf("did not expect sidequest to be marked configured: %#v", unconfigured)
+	}
+	if got, want := unconfigured.MembershipKind, "trial"; got != want {
+		t.Fatalf("unconfigured.MembershipKind = %q, want %q", got, want)
+	}
+	if got, want := unconfigured.Source.URL, "https://www.patreon.com/c/sidequest/posts"; got != want {
+		t.Fatalf("unconfigured source URL = %q, want %q", got, want)
+	}
+}
+
 func newPatreonAPITestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
@@ -579,6 +654,157 @@ func newPatreonCollectionTestServer(t *testing.T) *httptest.Server {
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server
+}
+
+func newPatreonDiscoveryTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.Header.Get("Cookie"), "session_id=patreon-test-session") {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("/api/current_user", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+  "data": {"id": "user-1"},
+  "included": [
+    {
+      "id": "campaign-1",
+      "type": "campaign",
+      "attributes": {
+        "name": "Plum Parrot",
+        "url": "https://www.patreon.com/plum_parrot",
+        "url_for_current_user": "https://www.patreon.com/c/plum_parrot",
+        "vanity": "plum_parrot"
+      }
+    },
+    {
+      "id": "campaign-2",
+      "type": "campaign",
+      "attributes": {
+        "name": "Side Quest",
+        "url": "https://www.patreon.com/sidequest",
+        "url_for_current_user": "https://www.patreon.com/c/sidequest",
+        "vanity": "sidequest"
+      }
+    },
+    {
+      "id": "member-1",
+      "type": "member",
+      "attributes": {
+        "is_free_member": false,
+        "is_free_trial": false
+      },
+      "relationships": {
+        "campaign": { "data": { "id": "campaign-1" } }
+      }
+    },
+    {
+      "id": "member-2",
+      "type": "member",
+      "attributes": {
+        "is_free_member": false,
+        "is_free_trial": true
+      },
+      "relationships": {
+        "campaign": { "data": { "id": "campaign-2" } }
+      }
+    }
+  ]
+}`)
+	}))
+	mux.HandleFunc("/api/posts", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("filter[campaign_id]") {
+		case "campaign-1":
+			fmt.Fprint(w, `{"data":[{"id":"101"},{"id":"102"}],"links":{"next":""}}`)
+		case "campaign-2":
+			fmt.Fprint(w, `{"data":[{"id":"201"},{"id":"202"}],"links":{"next":""}}`)
+		default:
+			fmt.Fprint(w, `{"data":[],"links":{"next":""}}`)
+		}
+	}))
+	mux.HandleFunc("/api/posts/101", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, discoveryPostJSON("101", "Plum Parrot - Chapter 1", "campaign-1", "creator-user-1", []string{"AA3"}, nil))
+	}))
+	mux.HandleFunc("/api/posts/102", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, discoveryPostJSON("102", "Plum Parrot - Chapter 2", "campaign-1", "creator-user-1", []string{"AA3"}, nil))
+	}))
+	mux.HandleFunc("/api/posts/201", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, discoveryPostJSON("201", "Side Quest: Episode 1", "campaign-2", "creator-user-2", nil, nil))
+	}))
+	mux.HandleFunc("/api/posts/202", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, discoveryPostJSON("202", "Side Quest: Episode 2", "campaign-2", "creator-user-2", nil, nil))
+	}))
+
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func discoveryPostJSON(id, title, campaignID, creatorID string, tags, collections []string) string {
+	tagRefs := make([]string, 0, len(tags))
+	included := []string{
+		fmt.Sprintf(`{
+      "id": %q,
+      "type": "campaign",
+      "attributes": { "name": "Example Creator" },
+      "relationships": { "creator": { "data": { "id": %q } } }
+    }`, campaignID, creatorID),
+		fmt.Sprintf(`{
+      "id": %q,
+      "type": "user",
+      "attributes": { "full_name": "Example Creator", "vanity": "examplecreator" },
+      "relationships": {}
+    }`, creatorID),
+	}
+	for idx, tag := range tags {
+		tagID := fmt.Sprintf("tag-%d", idx+1)
+		tagRefs = append(tagRefs, fmt.Sprintf(`{"id":%q}`, tagID))
+		included = append(included, fmt.Sprintf(`{"id":%q,"type":"user_defined_tag","attributes":{"value":%q},"relationships":{}}`, tagID, tag))
+	}
+	collectionRefs := make([]string, 0, len(collections))
+	for idx, collection := range collections {
+		collectionID := fmt.Sprintf("collection-%d", idx+1)
+		collectionRefs = append(collectionRefs, fmt.Sprintf(`{"id":%q}`, collectionID))
+		included = append(included, fmt.Sprintf(`{"id":%q,"type":"collection","attributes":{"title":%q},"relationships":{}}`, collectionID, collection))
+	}
+	return fmt.Sprintf(`{
+  "data": {
+    "id": %q,
+    "type": "post",
+    "attributes": {
+      "title": %q,
+      "post_type": "text",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/%s",
+      "content": "<p>Hello %s</p>",
+      "content_json_string": "",
+      "published_at": "2026-04-01T00:00:00Z",
+      "edited_at": "2026-04-01T00:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": %q } },
+      "user": { "data": { "id": %q } },
+      "collections": { "data": [%s] },
+      "user_defined_tags": { "data": [%s] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [%s]
+}`, id, title, id, id, campaignID, creatorID, strings.Join(collectionRefs, ","), strings.Join(tagRefs, ","), strings.Join(included, ","))
 }
 
 func collectionPostJSON(id string) string {

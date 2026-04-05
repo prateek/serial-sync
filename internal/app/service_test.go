@@ -130,6 +130,28 @@ content_strategy = "text_post"
 	if firstRunOnce.Publish.Published != 4 || firstRunOnce.Publish.Failed != 0 {
 		t.Fatalf("unexpected run-once publish summary: %#v", firstRunOnce.Publish)
 	}
+	for _, logPath := range []string{
+		filepath.Join(cfg.Runtime.LogRoot, firstRunOnce.Sync.RunID+".log"),
+		filepath.Join(cfg.Runtime.LogRoot, firstRunOnce.Sync.RunID+".jsonl"),
+		filepath.Join(cfg.Runtime.LogRoot, firstRunOnce.Publish.RunID+".log"),
+		filepath.Join(cfg.Runtime.LogRoot, firstRunOnce.Publish.RunID+".jsonl"),
+	} {
+		if _, err := os.Stat(logPath); err != nil {
+			t.Fatalf("expected run log %s: %v", logPath, err)
+		}
+	}
+	bundleDir, err := service.SupportBundle(context.Background(), firstRunOnce.Sync.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bundleLog := range []string{
+		filepath.Join(bundleDir, "logs", firstRunOnce.Sync.RunID+".log"),
+		filepath.Join(bundleDir, "logs", firstRunOnce.Sync.RunID+".jsonl"),
+	} {
+		if _, err := os.Stat(bundleLog); err != nil {
+			t.Fatalf("expected support bundle log %s: %v", bundleLog, err)
+		}
+	}
 	storedSource, err := repo.GetSource(context.Background(), "plum-parrot")
 	if err != nil {
 		t.Fatal(err)

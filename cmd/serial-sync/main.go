@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -59,8 +60,9 @@ type AuthCmd struct {
 }
 
 type SourceCmd struct {
-	List    SourceListCmd    `cmd:"" help:"List configured sources."`
-	Inspect SourceInspectCmd `cmd:"" help:"Inspect a configured source."`
+	List     SourceListCmd     `cmd:"" help:"List configured sources."`
+	Inspect  SourceInspectCmd  `cmd:"" help:"Inspect a configured source."`
+	Discover SourceDiscoverCmd `cmd:"" help:"Discover Patreon sources and suggest config from the current account."`
 }
 
 type TrackCmd struct {
@@ -114,6 +116,13 @@ type SourceListCmd struct{}
 
 type SourceInspectCmd struct {
 	Source string `arg:"" name:"source" help:"Source ID to inspect."`
+}
+
+type SourceDiscoverCmd struct {
+	AuthProfileID     string `name:"auth-profile" help:"Auth profile to use for Patreon discovery."`
+	Sample            int    `name:"sample" default:"5" help:"Sample this many recent releases per discovered source."`
+	IncludeConfigured bool   `name:"include-configured" help:"Include already configured sources in the generated snippet."`
+	Format            string `name:"format" default:"text" enum:"text,json,toml" help:"Output format."`
 }
 
 type TrackInspectCmd struct {
@@ -290,6 +299,25 @@ func (cmd *SourceInspectCmd) Run(cli *CLI) error {
 	})
 }
 
+func (cmd *SourceDiscoverCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.DiscoverSources(ctx, cmd.AuthProfileID, cmd.Sample, cmd.IncludeConfigured, "source discover")
+		if err != nil {
+			return err
+		}
+		switch strings.ToLower(strings.TrimSpace(cmd.Format)) {
+		case "json":
+			return printJSON(result)
+		case "toml":
+			fmt.Print(result.SnippetTOML)
+			return nil
+		default:
+			fmt.Println(app.FormatSourceDiscoverResult(result))
+			return nil
+		}
+	})
+}
+
 func (cmd *TrackInspectCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		payload, err := service.InspectTrack(ctx, cmd.Track)
@@ -455,7 +483,61 @@ func (cmd *DaemonCmd) Run(cli *CLI) error {
 		}
 		holderID := daemonHolderID()
 		state := runtimedaemon.NewState(holderID, duration, sourceIDs)
-		server, err := runtimedaemon.Start(ctx, service.Config.Scheduler.HealthAddr, state)
+		handlers := &runtimedaemon.Handlers{
+			DiscoverSources: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				sample := 5
+				if raw := strings.TrimSpace(r.URL.Query().Get("sample")); raw != "" {
+					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+						sample = parsed
+					}
+				}
+				includeConfigured := parseBoolQuery(r.URL.Query().Get("include_configured"))
+				result, discoverErr := service.DiscoverSources(
+					r.Context(),
+					r.URL.Query().Get("auth_profile"),
+					sample,
+					includeConfigured,
+					"daemon discover sources",
+				)
+				if discoverErr != nil {
+					http.Error(w, discoverErr.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(result)
+			},
+			DiscoverConfig: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				sample := 5
+				if raw := strings.TrimSpace(r.URL.Query().Get("sample")); raw != "" {
+					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+						sample = parsed
+					}
+				}
+				includeConfigured := parseBoolQuery(r.URL.Query().Get("include_configured"))
+				result, discoverErr := service.DiscoverSources(
+					r.Context(),
+					r.URL.Query().Get("auth_profile"),
+					sample,
+					includeConfigured,
+					"daemon discover config",
+				)
+				if discoverErr != nil {
+					http.Error(w, discoverErr.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				_, _ = w.Write([]byte(result.SnippetTOML))
+			},
+		}
+		server, err := runtimedaemon.Start(ctx, service.Config.Scheduler.HealthAddr, state, handlers)
 		if err != nil {
 			return fmt.Errorf("start daemon health server: %w", err)
 		}
@@ -530,6 +612,15 @@ func enabledSources(all []config.SourceConfig, sourceFilter string) []config.Sou
 		items = append(items, source)
 	}
 	return items
+}
+
+func parseBoolQuery(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, error) {

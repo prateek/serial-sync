@@ -5,6 +5,7 @@ The built-in Patreon provider now supports both the fixture demo path and a live
 Implemented:
 
 - creator-feed and collection URL validation
+- source discovery from active Patreon memberships through `source discover`
 - persisted Patreon session reuse from `session_path`
 - session-bundle import validation through `auth import-session`
 - isolated Chromium bootstrap in a headed browser session for the non-challenge login case
@@ -22,6 +23,7 @@ Operational notes:
 - on Linux with no display, the runtime starts Xvfb automatically so containerized bootstrap still uses headed Chrome
 - later runs reuse the saved session over plain HTTP until Patreon expires it
 - the sync content hash ignores attachment `download_url` and `local_path`, so signed URLs do not force pointless updates
+- discovery samples recent posts per followed creator and suggests starter rules from recurring tags, collections, or title prefixes
 
 Deferred:
 

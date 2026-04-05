@@ -14,6 +14,16 @@ docker run --rm \
   serial-sync run once
 ```
 
+If you want `serial-sync` to suggest sources from your current Patreon account before you hand-edit rules:
+
+```sh
+docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync source discover --auth-profile patreon-default --format toml
+```
+
 ## What It Does
 
 - syncs releases from provider-backed sources
@@ -26,10 +36,12 @@ docker run --rm \
 
 - Patreon is the first provider
 - live Patreon `username_password` bootstrap, TOTP-assisted login, session import, and persisted session reuse are implemented
+- Patreon membership discovery and source-config suggestion are implemented through `source discover` and daemon discovery endpoints
 - creator-feed and collection Patreon sources are implemented
 - `wizard`, `run once`, `auth bootstrap`, `auth import-session`, `publish-record inspect`, and a single-process `daemon` are implemented
 - the Docker image includes Chromium and Xvfb for first-run Patreon bootstrap inside the container
-- the daemon exposes `/healthz`, `/status`, and `/metrics`
+- the daemon exposes `/healthz`, `/status`, `/metrics`, `/discover/sources`, and `/discover/config`
+- every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
 - static binary release packaging is configured through `.goreleaser.yml`
@@ -40,6 +52,8 @@ docker run --rm \
 - [First source walkthrough](docs/first-source.md)
 - [Config reference](docs/config.md)
 - [Docker quickstart](docs/docker-quickstart.md)
+- [Source discovery guide](docs/source-discovery.md)
+- [Observability guide](docs/observability.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [PRD status](docs/prd-status.md)
 - [Patreon notes](docs/patreon.md)
