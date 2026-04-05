@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/alecthomas/kong"
 
 	"github.com/prateek/serial-sync/internal/app"
 	"github.com/prateek/serial-sync/internal/config"
@@ -16,6 +16,109 @@ import (
 	"github.com/prateek/serial-sync/internal/provider/patreon"
 	"github.com/prateek/serial-sync/internal/store/sqlite"
 )
+
+type CLI struct {
+	ConfigPath string `name:"config" short:"c" help:"Path to config file."`
+
+	Init     InitCmd     `cmd:"" help:"Write an example config file."`
+	Config   ConfigCmd   `cmd:"" help:"Validate configuration."`
+	Source   SourceCmd   `cmd:"" help:"Inspect configured sources."`
+	Track    TrackCmd    `cmd:"" help:"Inspect a track."`
+	Release  ReleaseCmd  `cmd:"" help:"Inspect a release."`
+	Artifact ArtifactCmd `cmd:"" help:"Inspect an artifact."`
+	Run      RunCmd      `cmd:"" help:"Inspect a prior run."`
+	Support  SupportCmd  `cmd:"" help:"Support bundle helpers."`
+	Plan     PlanCmd     `cmd:"" help:"Show planned sync work."`
+	Sync     SyncCmd     `cmd:"" help:"Run a sync."`
+	Publish  PublishCmd  `cmd:"" help:"Publish canonical artifacts."`
+	Wizard   WizardCmd   `cmd:"" help:"Interactive setup wizard."`
+	Daemon   DaemonCmd   `cmd:"" help:"Background scheduler."`
+}
+
+type InitCmd struct {
+	Path  string `help:"Write config to this path."`
+	Force bool   `help:"Overwrite an existing config."`
+}
+
+type ConfigCmd struct {
+	Validate ConfigValidateCmd `cmd:"" help:"Validate config and print the loaded counts."`
+}
+
+type SourceCmd struct {
+	List    SourceListCmd    `cmd:"" help:"List configured sources."`
+	Inspect SourceInspectCmd `cmd:"" help:"Inspect a configured source."`
+}
+
+type TrackCmd struct {
+	Inspect TrackInspectCmd `cmd:"" help:"Inspect a track."`
+}
+
+type ReleaseCmd struct {
+	Inspect ReleaseInspectCmd `cmd:"" help:"Inspect a release."`
+}
+
+type ArtifactCmd struct {
+	Inspect ArtifactInspectCmd `cmd:"" help:"Inspect an artifact."`
+}
+
+type RunCmd struct {
+	Inspect RunInspectCmd `cmd:"" help:"Inspect a prior run."`
+}
+
+type SupportCmd struct {
+	Bundle SupportBundleCmd `cmd:"" help:"Export a support bundle for a run."`
+}
+
+type PlanCmd struct {
+	Sync PlanSyncCmd `cmd:"" help:"Show sync work without mutating state."`
+}
+
+type ConfigValidateCmd struct{}
+
+type SourceListCmd struct{}
+
+type SourceInspectCmd struct {
+	Source string `arg:"" name:"source" help:"Source ID to inspect."`
+}
+
+type TrackInspectCmd struct {
+	Track string `arg:"" name:"track" help:"Track ID to inspect."`
+}
+
+type ReleaseInspectCmd struct {
+	Release string `arg:"" name:"release" help:"Release ID to inspect."`
+}
+
+type ArtifactInspectCmd struct {
+	Artifact string `arg:"" name:"artifact" help:"Artifact ID to inspect."`
+}
+
+type RunInspectCmd struct {
+	RunID string `arg:"" name:"run-id" help:"Run ID to inspect."`
+}
+
+type SupportBundleCmd struct {
+	RunID string `arg:"" name:"run-id" help:"Run ID to export."`
+}
+
+type PlanSyncCmd struct {
+	SourceID string `name:"source" help:"Limit planning to one source."`
+}
+
+type SyncCmd struct {
+	SourceID string `name:"source" help:"Limit sync to one source."`
+	DryRun   bool   `name:"dry-run" help:"Show planned actions without mutating state."`
+}
+
+type PublishCmd struct {
+	SourceID string `name:"source" help:"Limit publish to one source."`
+	TargetID string `name:"target" help:"Limit publish to one target."`
+	DryRun   bool   `name:"dry-run" help:"Show planned publish actions without mutating state."`
+}
+
+type WizardCmd struct{}
+
+type DaemonCmd struct{}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -25,150 +128,65 @@ func main() {
 }
 
 func run(args []string) error {
-	configPath, rest, err := parseGlobalArgs(args)
+	cli := CLI{}
+	parser, err := newParser(&cli, os.Stdout, os.Stderr, nil)
 	if err != nil {
 		return err
 	}
-	if len(rest) == 0 {
-		printUsage()
+	args = normalizeHelpArgs(args)
+	if len(args) == 0 {
+		_, _ = parser.Parse([]string{"--help"})
 		return nil
 	}
-	ctx := context.Background()
-	switch rest[0] {
-	case "init":
-		return runInit(rest[1:])
-	case "config":
-		if len(rest) < 2 || rest[1] != "validate" {
-			return errors.New("usage: serial-sync config validate")
-		}
-		service, cleanup, err := bootstrap(configPath)
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-		fmt.Printf("config ok: %d source(s), %d rule(s), %d publisher(s)\n", len(service.Config.Sources), len(service.Config.Rules), len(service.Config.Publishers))
+	if wantsHelp(args) {
+		_, _ = parser.Parse(args)
 		return nil
-	case "source":
-		return runSource(ctx, configPath, rest[1:])
-	case "track":
-		return runTrack(ctx, configPath, rest[1:])
-	case "release":
-		return runRelease(ctx, configPath, rest[1:])
-	case "artifact":
-		return runArtifact(ctx, configPath, rest[1:])
-	case "run":
-		return runRun(ctx, configPath, rest[1:])
-	case "support":
-		return runSupport(ctx, configPath, rest[1:])
-	case "plan":
-		if len(rest) < 2 || rest[1] != "sync" {
-			return errors.New("usage: serial-sync plan sync [--source id]")
-		}
-		fs := flag.NewFlagSet("plan sync", flag.ContinueOnError)
-		sourceID := fs.String("source", "", "limit planning to one source")
-		if err := fs.Parse(rest[2:]); err != nil {
-			return err
-		}
-		service, cleanup, err := bootstrap(configPath)
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-		result, err := service.Sync(ctx, *sourceID, true, "plan sync")
-		if err != nil {
-			return err
-		}
-		fmt.Println(app.FormatSyncResult(result))
-		return nil
-	case "sync":
-		fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-		sourceID := fs.String("source", "", "limit sync to one source")
-		dryRun := fs.Bool("dry-run", false, "show planned actions without mutating state")
-		if err := fs.Parse(rest[1:]); err != nil {
-			return err
-		}
-		service, cleanup, err := bootstrap(configPath)
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-		result, err := service.Sync(ctx, *sourceID, *dryRun, "sync")
-		if err != nil {
-			return err
-		}
-		fmt.Println(app.FormatSyncResult(result))
-		return nil
-	case "publish":
-		fs := flag.NewFlagSet("publish", flag.ContinueOnError)
-		sourceID := fs.String("source", "", "limit publish to one source")
-		targetID := fs.String("target", "", "limit publish to one target")
-		dryRun := fs.Bool("dry-run", false, "show planned publish actions without mutating state")
-		if err := fs.Parse(rest[1:]); err != nil {
-			return err
-		}
-		service, cleanup, err := bootstrap(configPath)
-		if err != nil {
-			return err
-		}
-		defer cleanup()
-		result, err := service.Publish(ctx, *sourceID, *targetID, *dryRun, "publish")
-		if err != nil {
-			return err
-		}
-		fmt.Println(app.FormatPublishResult(result))
-		return nil
-	case "wizard":
-		return app.NotImplemented("wizard")
-	case "daemon":
-		return app.NotImplemented("daemon")
-	case "help", "--help", "-h":
-		printUsage()
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q", rest[0])
 	}
-}
-
-func runInit(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	path := fs.String("path", "", "write config to a specific path")
-	force := fs.Bool("force", false, "overwrite an existing config")
-	if err := fs.Parse(args); err != nil {
+	ctx, err := parser.Parse(args)
+	if err != nil {
 		return err
 	}
-	if *path == "" {
+	return ctx.Run(&cli)
+}
+
+func (cmd *InitCmd) Run() error {
+	path := cmd.Path
+	if path == "" {
 		defaultPath, err := config.DefaultConfigPath()
 		if err != nil {
 			return err
 		}
-		*path = defaultPath
+		path = defaultPath
 	}
-	if !*force {
-		if _, err := os.Stat(*path); err == nil {
-			return fmt.Errorf("config already exists at %s; rerun with --force to overwrite", *path)
+	if !cmd.Force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("config already exists at %s; rerun with --force to overwrite", path)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(*path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(*path, []byte(config.ExampleConfig()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(config.ExampleConfig()), 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("wrote example config to %s\n", *path)
+	fmt.Printf("wrote example config to %s\n", path)
 	return nil
 }
 
-func runSource(ctx context.Context, configPath string, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: serial-sync source list|inspect <source>")
-	}
-	service, cleanup, err := bootstrap(configPath)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	switch args[0] {
-	case "list":
+func (cmd *ConfigValidateCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
+		fmt.Printf(
+			"config ok: %d source(s), %d rule(s), %d publisher(s)\n",
+			len(service.Config.Sources),
+			len(service.Config.Rules),
+			len(service.Config.Publishers),
+		)
+		return nil
+	})
+}
+
+func (cmd *SourceListCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
 		for _, source := range service.Config.Sources {
 			status := "disabled"
 			if source.Enabled {
@@ -177,99 +195,131 @@ func runSource(ctx context.Context, configPath string, args []string) error {
 			fmt.Printf("%s\t%s\t%s\t%s\n", source.ID, source.Provider, status, source.URL)
 		}
 		return nil
-	case "inspect":
-		if len(args) < 2 {
-			return errors.New("usage: serial-sync source inspect <source>")
-		}
-		payload, err := service.InspectSource(ctx, args[1])
+	})
+}
+
+func (cmd *SourceInspectCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.InspectSource(ctx, cmd.Source)
 		if err != nil {
 			return err
 		}
 		return printJSON(payload)
-	default:
-		return errors.New("usage: serial-sync source list|inspect <source>")
-	}
+	})
 }
 
-func runTrack(ctx context.Context, configPath string, args []string) error {
-	if len(args) < 2 || args[0] != "inspect" {
-		return errors.New("usage: serial-sync track inspect <track>")
+func (cmd *TrackInspectCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.InspectTrack(ctx, cmd.Track)
+		if err != nil {
+			return err
+		}
+		return printJSON(payload)
+	})
+}
+
+func (cmd *ReleaseInspectCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.InspectRelease(ctx, cmd.Release)
+		if err != nil {
+			return err
+		}
+		return printJSON(payload)
+	})
+}
+
+func (cmd *ArtifactInspectCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.InspectArtifact(ctx, cmd.Artifact)
+		if err != nil {
+			return err
+		}
+		return printJSON(payload)
+	})
+}
+
+func (cmd *RunInspectCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.InspectRun(ctx, cmd.RunID)
+		if err != nil {
+			return err
+		}
+		return printJSON(payload)
+	})
+}
+
+func (cmd *SupportBundleCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		dir, err := service.SupportBundle(ctx, cmd.RunID)
+		if err != nil {
+			return err
+		}
+		fmt.Println(dir)
+		return nil
+	})
+}
+
+func (cmd *PlanSyncCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.Sync(ctx, cmd.SourceID, true, "plan sync")
+		if err != nil {
+			return err
+		}
+		fmt.Println(app.FormatSyncResult(result))
+		return nil
+	})
+}
+
+func (cmd *SyncCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.Sync(ctx, cmd.SourceID, cmd.DryRun, "sync")
+		if err != nil {
+			return err
+		}
+		fmt.Println(app.FormatSyncResult(result))
+		return nil
+	})
+}
+
+func (cmd *PublishCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.Publish(ctx, cmd.SourceID, cmd.TargetID, cmd.DryRun, "publish")
+		if err != nil {
+			return err
+		}
+		fmt.Println(app.FormatPublishResult(result))
+		return nil
+	})
+}
+
+func (cmd *WizardCmd) Run() error {
+	return app.NotImplemented("wizard")
+}
+
+func (cmd *DaemonCmd) Run() error {
+	return app.NotImplemented("daemon")
+}
+
+func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, error) {
+	options := []kong.Option{
+		kong.Name("serial-sync"),
+		kong.Description("Sync serialized releases into local artifacts and publish targets."),
+		kong.UsageOnError(),
+		kong.Writers(stdout, stderr),
 	}
+	if exit != nil {
+		options = append(options, kong.Exit(exit))
+	}
+	return kong.New(cli, options...)
+}
+
+func withService(configPath string, fn func(context.Context, *app.Service) error) error {
 	service, cleanup, err := bootstrap(configPath)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	payload, err := service.InspectTrack(ctx, args[1])
-	if err != nil {
-		return err
-	}
-	return printJSON(payload)
-}
-
-func runRelease(ctx context.Context, configPath string, args []string) error {
-	if len(args) < 2 || args[0] != "inspect" {
-		return errors.New("usage: serial-sync release inspect <release>")
-	}
-	service, cleanup, err := bootstrap(configPath)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	payload, err := service.InspectRelease(ctx, args[1])
-	if err != nil {
-		return err
-	}
-	return printJSON(payload)
-}
-
-func runArtifact(ctx context.Context, configPath string, args []string) error {
-	if len(args) < 2 || args[0] != "inspect" {
-		return errors.New("usage: serial-sync artifact inspect <artifact>")
-	}
-	service, cleanup, err := bootstrap(configPath)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	payload, err := service.InspectArtifact(ctx, args[1])
-	if err != nil {
-		return err
-	}
-	return printJSON(payload)
-}
-
-func runRun(ctx context.Context, configPath string, args []string) error {
-	if len(args) < 2 || args[0] != "inspect" {
-		return errors.New("usage: serial-sync run inspect <run-id>")
-	}
-	service, cleanup, err := bootstrap(configPath)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	payload, err := service.InspectRun(ctx, args[1])
-	if err != nil {
-		return err
-	}
-	return printJSON(payload)
-}
-
-func runSupport(ctx context.Context, configPath string, args []string) error {
-	if len(args) < 2 || args[0] != "bundle" {
-		return errors.New("usage: serial-sync support bundle <run-id>")
-	}
-	service, cleanup, err := bootstrap(configPath)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	dir, err := service.SupportBundle(ctx, args[1])
-	if err != nil {
-		return err
-	}
-	fmt.Println(dir)
-	return nil
+	return fn(context.Background(), service)
 }
 
 func bootstrap(configPath string) (*app.Service, func(), error) {
@@ -299,27 +349,6 @@ func bootstrap(configPath string) (*app.Service, func(), error) {
 	}, nil
 }
 
-func parseGlobalArgs(args []string) (string, []string, error) {
-	var configPath string
-	var rest []string
-	for idx := 0; idx < len(args); idx++ {
-		arg := args[idx]
-		switch {
-		case arg == "--config":
-			if idx+1 >= len(args) {
-				return "", nil, errors.New("--config requires a value")
-			}
-			configPath = args[idx+1]
-			idx++
-		case strings.HasPrefix(arg, "--config="):
-			configPath = strings.TrimPrefix(arg, "--config=")
-		default:
-			rest = append(rest, arg)
-		}
-	}
-	return configPath, rest, nil
-}
-
 func printJSON(value any) error {
 	payload, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -329,23 +358,23 @@ func printJSON(value any) error {
 	return nil
 }
 
-func printUsage() {
-	fmt.Print(`serial-sync
+func normalizeHelpArgs(args []string) []string {
+	if len(args) == 0 || args[0] != "help" {
+		return args
+	}
+	if len(args) == 1 {
+		return []string{"--help"}
+	}
+	normalized := make([]string, 0, len(args))
+	normalized = append(normalized, args[1:]...)
+	return append(normalized, "--help")
+}
 
-Usage:
-  serial-sync init [--path <config-path>] [--force]
-  serial-sync config validate
-  serial-sync source list
-  serial-sync source inspect <source>
-  serial-sync track inspect <track>
-  serial-sync release inspect <release>
-  serial-sync artifact inspect <artifact>
-  serial-sync run inspect <run-id>
-  serial-sync support bundle <run-id>
-  serial-sync plan sync [--source <source>]
-  serial-sync sync [--source <source>] [--dry-run]
-  serial-sync publish [--source <source>] [--target <target>] [--dry-run]
-  serial-sync wizard
-  serial-sync daemon
-`)
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }

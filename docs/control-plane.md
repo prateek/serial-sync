@@ -5,7 +5,7 @@ These notes capture the current direction for persistence, CLI structure, and co
 ## Current Direction
 
 - Use `sqlc` for the SQLite layer now.
-- Keep the hand-rolled CLI for the moment; if we replace it, prefer `kong`.
+- Use `kong` for the CLI layer.
 - Treat CUE as an optional validation and config-shaping layer, not the runtime source of truth.
 
 ## Why `sqlc`
@@ -14,10 +14,10 @@ These notes capture the current direction for persistence, CLI structure, and co
 - `sqlc` removes handwritten query scanning while keeping `database/sql` and the current store boundary.
 - The migration cost is small and the maintenance win is immediate.
 
-## Why `kong` If We Replace The CLI
+## Why `kong`
 
 - The existing command tree is nested enough that struct-shaped commands map cleanly.
-- `kong` reduces parser boilerplate without pushing the repo into Cobra-style scaffolding.
+- `kong` removes the switch-plus-`flag.FlagSet` boilerplate without pushing the repo into Cobra-style scaffolding.
 - `urfave/cli` remains a reasonable alternative, but it fits better when we want command handlers centered around framework callbacks and richer built-in CLI packaging features.
 
 ## Why Not CUE-First Yet
