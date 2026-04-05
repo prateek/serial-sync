@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"errors"
 	"time"
 
@@ -10,16 +11,15 @@ import (
 
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/store"
+	sqldb "github.com/prateek/serial-sync/internal/store/sqlite/db"
 )
 
-type Store struct {
-	db *sql.DB
-}
+//go:embed sql/schema.sql
+var schemaSQL string
 
-type querier interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
+type Store struct {
+	db      *sql.DB
+	queries *sqldb.Queries
 }
 
 func Open(dsn string) (*Store, error) {
@@ -32,7 +32,10 @@ func Open(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{
+		db:      db,
+		queries: sqldb.New(db),
+	}, nil
 }
 
 func (s *Store) Close() error {
@@ -40,217 +43,158 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) EnsureSchema(ctx context.Context) error {
-	schema := `
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-CREATE TABLE IF NOT EXISTS sources (
-  id TEXT PRIMARY KEY,
-  provider TEXT NOT NULL,
-  source_url TEXT NOT NULL,
-  source_type TEXT NOT NULL,
-  creator_id TEXT NOT NULL,
-  creator_name TEXT NOT NULL,
-  auth_profile_id TEXT NOT NULL,
-  enabled INTEGER NOT NULL,
-  sync_cursor TEXT NOT NULL,
-  last_synced_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS story_tracks (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL,
-  track_key TEXT NOT NULL,
-  track_name TEXT NOT NULL,
-  canonical_author TEXT NOT NULL,
-  series_meta TEXT NOT NULL,
-  output_policy TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(source_id, track_key)
-);
-CREATE TABLE IF NOT EXISTS releases (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL,
-  provider_release_id TEXT NOT NULL,
-  url TEXT NOT NULL,
-  title TEXT NOT NULL,
-  published_at TEXT NOT NULL,
-  edited_at TEXT NOT NULL,
-  post_type TEXT NOT NULL,
-  visibility_state TEXT NOT NULL,
-  normalized_payload_ref TEXT NOT NULL,
-  raw_payload_ref TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  discovered_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  UNIQUE(source_id, provider_release_id)
-);
-CREATE TABLE IF NOT EXISTS release_assignments (
-  release_id TEXT PRIMARY KEY,
-  track_id TEXT NOT NULL,
-  rule_id TEXT NOT NULL,
-  release_role TEXT NOT NULL,
-  confidence REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS artifacts (
-  id TEXT PRIMARY KEY,
-  release_id TEXT NOT NULL,
-  track_id TEXT NOT NULL,
-  artifact_kind TEXT NOT NULL,
-  is_canonical INTEGER NOT NULL,
-  filename TEXT NOT NULL,
-  mime_type TEXT NOT NULL,
-  sha256 TEXT NOT NULL,
-  storage_ref TEXT NOT NULL,
-  built_at TEXT NOT NULL,
-  state TEXT NOT NULL,
-  metadata_ref TEXT NOT NULL,
-  normalized_ref TEXT NOT NULL,
-  raw_ref TEXT NOT NULL,
-  UNIQUE(release_id, sha256, artifact_kind)
-);
-CREATE TABLE IF NOT EXISTS publish_records (
-  id TEXT PRIMARY KEY,
-  artifact_id TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  target_kind TEXT NOT NULL,
-  target_ref TEXT NOT NULL,
-  publish_hash TEXT NOT NULL,
-  published_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  message TEXT NOT NULL,
-  UNIQUE(artifact_id, target_id, publish_hash)
-);
-CREATE TABLE IF NOT EXISTS run_records (
-  id TEXT PRIMARY KEY,
-  command TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  status TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  source_scope TEXT NOT NULL,
-  dry_run INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS event_records (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL,
-  timestamp TEXT NOT NULL,
-  level TEXT NOT NULL,
-  component TEXT NOT NULL,
-  message TEXT NOT NULL,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  payload_ref TEXT NOT NULL
-);`
-	_, err := s.db.ExecContext(ctx, schema)
+	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode = WAL;`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout = 5000;`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, schemaSQL)
 	return err
 }
 
 func (s *Store) UpsertSource(ctx context.Context, source domain.Source) error {
-	return upsertSource(ctx, s.db, source)
+	return s.queries.UpsertSource(ctx, sqldb.UpsertSourceParams{
+		ID:            source.ID,
+		Provider:      source.Provider,
+		SourceUrl:     source.SourceURL,
+		SourceType:    source.SourceType,
+		CreatorID:     source.CreatorID,
+		CreatorName:   source.CreatorName,
+		AuthProfileID: source.AuthProfileID,
+		Enabled:       boolInt(source.Enabled),
+		SyncCursor:    source.SyncCursor,
+		LastSyncedAt:  formatTime(source.LastSyncedAt),
+	})
 }
 
 func (s *Store) ListSources(ctx context.Context) ([]domain.Source, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at FROM sources ORDER BY id`)
+	rows, err := s.queries.ListSources(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var items []domain.Source
-	for rows.Next() {
-		item, err := scanSource(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
+	items := make([]domain.Source, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, sourceFromRow(row))
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 func (s *Store) GetSource(ctx context.Context, id string) (*domain.Source, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at FROM sources WHERE id = ?`, id)
-	item, err := scanSourceRow(row)
+	row, err := s.queries.GetSource(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	item := sourceFromRow(row)
 	return &item, nil
 }
 
 func (s *Store) UpsertTrack(ctx context.Context, track domain.StoryTrack) (*domain.StoryTrack, error) {
-	return upsertTrack(ctx, s.db, track)
+	now := time.Now().UTC()
+	if track.CreatedAt.IsZero() {
+		track.CreatedAt = now
+	}
+	if track.UpdatedAt.IsZero() {
+		track.UpdatedAt = now
+	}
+	if err := s.queries.UpsertTrack(ctx, sqldb.UpsertTrackParams{
+		ID:              track.ID,
+		SourceID:        track.SourceID,
+		TrackKey:        track.TrackKey,
+		TrackName:       track.TrackName,
+		CanonicalAuthor: track.CanonicalAuthor,
+		SeriesMeta:      track.SeriesMeta,
+		OutputPolicy:    track.OutputPolicy,
+		CreatedAt:       formatTime(track.CreatedAt),
+		UpdatedAt:       formatTime(track.UpdatedAt),
+	}); err != nil {
+		return nil, err
+	}
+	row, err := s.queries.GetTrackBySourceAndKey(ctx, sqldb.GetTrackBySourceAndKeyParams{
+		SourceID: track.SourceID,
+		TrackKey: track.TrackKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	item := trackFromRow(row)
+	return &item, nil
 }
 
 func (s *Store) GetTrackBySourceAndKey(ctx context.Context, sourceID, trackKey string) (*domain.StoryTrack, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, source_id, track_key, track_name, canonical_author, series_meta, output_policy, created_at, updated_at FROM story_tracks WHERE source_id = ? AND track_key = ?`, sourceID, trackKey)
-	item, err := scanTrackRow(row)
+	row, err := s.queries.GetTrackBySourceAndKey(ctx, sqldb.GetTrackBySourceAndKeyParams{
+		SourceID: sourceID,
+		TrackKey: trackKey,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	item := trackFromRow(row)
 	return &item, nil
 }
 
 func (s *Store) GetTrack(ctx context.Context, id string) (*domain.StoryTrack, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, source_id, track_key, track_name, canonical_author, series_meta, output_policy, created_at, updated_at FROM story_tracks WHERE id = ?`, id)
-	item, err := scanTrackRow(row)
+	row, err := s.queries.GetTrack(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	item := trackFromRow(row)
 	return &item, nil
 }
 
 func (s *Store) ListTracks(ctx context.Context, sourceID string) ([]domain.StoryTrack, error) {
-	query := `SELECT id, source_id, track_key, track_name, canonical_author, series_meta, output_policy, created_at, updated_at FROM story_tracks`
-	args := []any{}
-	if sourceID != "" {
-		query += ` WHERE source_id = ?`
-		args = append(args, sourceID)
+	var (
+		rows []sqldb.StoryTrack
+		err  error
+	)
+	if sourceID == "" {
+		rows, err = s.queries.ListTracks(ctx)
+	} else {
+		rows, err = s.queries.ListTracksBySource(ctx, sourceID)
 	}
-	query += ` ORDER BY source_id, track_key`
-	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var items []domain.StoryTrack
-	for rows.Next() {
-		item, err := scanTrack(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
+	items := make([]domain.StoryTrack, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, trackFromRow(row))
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 func (s *Store) GetReleaseByProviderID(ctx context.Context, sourceID, providerReleaseID string) (*domain.Release, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, source_id, provider_release_id, url, title, published_at, edited_at, post_type, visibility_state, normalized_payload_ref, raw_payload_ref, content_hash, discovered_at, status FROM releases WHERE source_id = ? AND provider_release_id = ?`, sourceID, providerReleaseID)
-	item, err := scanReleaseRow(row)
+	row, err := s.queries.GetReleaseByProviderID(ctx, sqldb.GetReleaseByProviderIDParams{
+		SourceID:          sourceID,
+		ProviderReleaseID: providerReleaseID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	item := releaseFromRow(row)
 	return &item, nil
 }
 
 func (s *Store) GetReleaseBundle(ctx context.Context, id string) (*domain.ReleaseBundle, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, source_id, provider_release_id, url, title, published_at, edited_at, post_type, visibility_state, normalized_payload_ref, raw_payload_ref, content_hash, discovered_at, status FROM releases WHERE id = ?`, id)
-	release, err := scanReleaseRow(row)
+	releaseRow, err := s.queries.GetRelease(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	release := releaseFromRow(releaseRow)
 	source, err := s.GetSource(ctx, release.SourceID)
 	if err != nil {
 		return nil, err
@@ -276,6 +220,7 @@ func (s *Store) GetReleaseBundle(ctx context.Context, id string) (*domain.Releas
 	result := &domain.ReleaseBundle{
 		Release:   release,
 		Artifacts: artifacts,
+		Track:     track,
 	}
 	if source != nil {
 		result.Source = *source
@@ -283,66 +228,55 @@ func (s *Store) GetReleaseBundle(ctx context.Context, id string) (*domain.Releas
 	if assignment != nil {
 		result.Assignment = *assignment
 	}
-	result.Track = track
 	return result, nil
 }
 
 func (s *Store) ListReleases(ctx context.Context, sourceID string) ([]domain.Release, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, source_id, provider_release_id, url, title, published_at, edited_at, post_type, visibility_state, normalized_payload_ref, raw_payload_ref, content_hash, discovered_at, status FROM releases WHERE source_id = ? ORDER BY published_at DESC`, sourceID)
+	rows, err := s.queries.ListReleasesBySource(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var items []domain.Release
-	for rows.Next() {
-		item, err := scanRelease(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
+	items := make([]domain.Release, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, releaseFromRow(row))
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 func (s *Store) GetCanonicalArtifactByReleaseID(ctx context.Context, releaseID string) (*domain.Artifact, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type, sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref FROM artifacts WHERE release_id = ? AND is_canonical = 1 ORDER BY built_at DESC LIMIT 1`, releaseID)
-	item, err := scanArtifactRow(row)
+	row, err := s.queries.GetCanonicalArtifactByReleaseID(ctx, releaseID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	item := artifactFromRow(row)
 	return &item, nil
 }
 
 func (s *Store) GetArtifact(ctx context.Context, id string) (*domain.Artifact, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type, sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref FROM artifacts WHERE id = ?`, id)
-	item, err := scanArtifactRow(row)
+	row, err := s.queries.GetArtifact(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	item := artifactFromRow(row)
 	return &item, nil
 }
 
 func (s *Store) ListArtifactsByReleaseID(ctx context.Context, releaseID string) ([]domain.Artifact, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type, sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref FROM artifacts WHERE release_id = ? ORDER BY built_at DESC`, releaseID)
+	rows, err := s.queries.ListArtifactsByReleaseID(ctx, releaseID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var items []domain.Artifact
-	for rows.Next() {
-		item, err := scanArtifact(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
+	items := make([]domain.Artifact, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, artifactFromRow(row))
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 func (s *Store) SaveSyncSnapshot(ctx context.Context, snapshot store.SyncSnapshot) error {
@@ -350,377 +284,468 @@ func (s *Store) SaveSyncSnapshot(ctx context.Context, snapshot store.SyncSnapsho
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-	if err := upsertSource(ctx, tx, snapshot.Source); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	qtx := s.queries.WithTx(tx)
+
+	if err := qtx.UpsertSource(ctx, sqldb.UpsertSourceParams{
+		ID:            snapshot.Source.ID,
+		Provider:      snapshot.Source.Provider,
+		SourceUrl:     snapshot.Source.SourceURL,
+		SourceType:    snapshot.Source.SourceType,
+		CreatorID:     snapshot.Source.CreatorID,
+		CreatorName:   snapshot.Source.CreatorName,
+		AuthProfileID: snapshot.Source.AuthProfileID,
+		Enabled:       boolInt(snapshot.Source.Enabled),
+		SyncCursor:    snapshot.Source.SyncCursor,
+		LastSyncedAt:  formatTime(snapshot.Source.LastSyncedAt),
+	}); err != nil {
 		return err
 	}
-	track, err := upsertTrack(ctx, tx, snapshot.Track)
+	now := time.Now().UTC()
+	if snapshot.Track.CreatedAt.IsZero() {
+		snapshot.Track.CreatedAt = now
+	}
+	if snapshot.Track.UpdatedAt.IsZero() {
+		snapshot.Track.UpdatedAt = now
+	}
+	if err := qtx.UpsertTrack(ctx, sqldb.UpsertTrackParams{
+		ID:              snapshot.Track.ID,
+		SourceID:        snapshot.Track.SourceID,
+		TrackKey:        snapshot.Track.TrackKey,
+		TrackName:       snapshot.Track.TrackName,
+		CanonicalAuthor: snapshot.Track.CanonicalAuthor,
+		SeriesMeta:      snapshot.Track.SeriesMeta,
+		OutputPolicy:    snapshot.Track.OutputPolicy,
+		CreatedAt:       formatTime(snapshot.Track.CreatedAt),
+		UpdatedAt:       formatTime(snapshot.Track.UpdatedAt),
+	}); err != nil {
+		return err
+	}
+	trackRow, err := qtx.GetTrackBySourceAndKey(ctx, sqldb.GetTrackBySourceAndKeyParams{
+		SourceID: snapshot.Track.SourceID,
+		TrackKey: snapshot.Track.TrackKey,
+	})
 	if err != nil {
 		return err
 	}
+	track := trackFromRow(trackRow)
 	snapshot.Assignment.TrackID = track.ID
 	snapshot.Artifact.TrackID = track.ID
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO releases (id, source_id, provider_release_id, url, title, published_at, edited_at, post_type, visibility_state, normalized_payload_ref, raw_payload_ref, content_hash, discovered_at, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(source_id, provider_release_id) DO UPDATE SET
-  url = excluded.url,
-  title = excluded.title,
-  published_at = excluded.published_at,
-  edited_at = excluded.edited_at,
-  post_type = excluded.post_type,
-  visibility_state = excluded.visibility_state,
-  normalized_payload_ref = excluded.normalized_payload_ref,
-  raw_payload_ref = excluded.raw_payload_ref,
-  content_hash = excluded.content_hash,
-  discovered_at = excluded.discovered_at,
-  status = excluded.status`,
-		snapshot.Release.ID, snapshot.Release.SourceID, snapshot.Release.ProviderReleaseID, snapshot.Release.URL, snapshot.Release.Title,
-		formatTime(snapshot.Release.PublishedAt), formatTime(snapshot.Release.EditedAt), snapshot.Release.PostType, snapshot.Release.VisibilityState,
-		snapshot.Release.NormalizedPayloadRef, snapshot.Release.RawPayloadRef, snapshot.Release.ContentHash,
-		formatTime(snapshot.Release.DiscoveredAt), snapshot.Release.Status,
-	); err != nil {
+	if err := qtx.UpsertRelease(ctx, sqldb.UpsertReleaseParams{
+		ID:                   snapshot.Release.ID,
+		SourceID:             snapshot.Release.SourceID,
+		ProviderReleaseID:    snapshot.Release.ProviderReleaseID,
+		Url:                  snapshot.Release.URL,
+		Title:                snapshot.Release.Title,
+		PublishedAt:          formatTime(snapshot.Release.PublishedAt),
+		EditedAt:             formatTime(snapshot.Release.EditedAt),
+		PostType:             snapshot.Release.PostType,
+		VisibilityState:      snapshot.Release.VisibilityState,
+		NormalizedPayloadRef: snapshot.Release.NormalizedPayloadRef,
+		RawPayloadRef:        snapshot.Release.RawPayloadRef,
+		ContentHash:          snapshot.Release.ContentHash,
+		DiscoveredAt:         formatTime(snapshot.Release.DiscoveredAt),
+		Status:               snapshot.Release.Status,
+	}); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO release_assignments (release_id, track_id, rule_id, release_role, confidence)
-VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(release_id) DO UPDATE SET
-  track_id = excluded.track_id,
-  rule_id = excluded.rule_id,
-  release_role = excluded.release_role,
-  confidence = excluded.confidence`,
-		snapshot.Assignment.ReleaseID, snapshot.Assignment.TrackID, snapshot.Assignment.RuleID, string(snapshot.Assignment.ReleaseRole), snapshot.Assignment.Confidence,
-	); err != nil {
+	if err := qtx.UpsertReleaseAssignment(ctx, sqldb.UpsertReleaseAssignmentParams{
+		ReleaseID:   snapshot.Assignment.ReleaseID,
+		TrackID:     snapshot.Assignment.TrackID,
+		RuleID:      snapshot.Assignment.RuleID,
+		ReleaseRole: string(snapshot.Assignment.ReleaseRole),
+		Confidence:  snapshot.Assignment.Confidence,
+	}); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET is_canonical = 0 WHERE release_id = ?`, snapshot.Artifact.ReleaseID); err != nil {
+	if err := qtx.ClearCanonicalArtifactsForRelease(ctx, snapshot.Release.ID); err != nil {
 		return err
 	}
 	if snapshot.Artifact.ID != "" {
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO artifacts (id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type, sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(release_id, sha256, artifact_kind) DO UPDATE SET
-  track_id = excluded.track_id,
-  is_canonical = excluded.is_canonical,
-  filename = excluded.filename,
-  mime_type = excluded.mime_type,
-  storage_ref = excluded.storage_ref,
-  built_at = excluded.built_at,
-  state = excluded.state,
-  metadata_ref = excluded.metadata_ref,
-  normalized_ref = excluded.normalized_ref,
-  raw_ref = excluded.raw_ref`,
-			snapshot.Artifact.ID, snapshot.Artifact.ReleaseID, snapshot.Artifact.TrackID, snapshot.Artifact.ArtifactKind,
-			boolInt(snapshot.Artifact.IsCanonical), snapshot.Artifact.Filename, snapshot.Artifact.MIMEType, snapshot.Artifact.SHA256,
-			snapshot.Artifact.StorageRef, formatTime(snapshot.Artifact.BuiltAt), string(snapshot.Artifact.State),
-			snapshot.Artifact.MetadataRef, snapshot.Artifact.NormalizedRef, snapshot.Artifact.RawRef,
-		); err != nil {
+		if err := qtx.UpsertArtifact(ctx, sqldb.UpsertArtifactParams{
+			ID:            snapshot.Artifact.ID,
+			ReleaseID:     snapshot.Artifact.ReleaseID,
+			TrackID:       snapshot.Artifact.TrackID,
+			ArtifactKind:  snapshot.Artifact.ArtifactKind,
+			IsCanonical:   boolInt(snapshot.Artifact.IsCanonical),
+			Filename:      snapshot.Artifact.Filename,
+			MimeType:      snapshot.Artifact.MIMEType,
+			Sha256:        snapshot.Artifact.SHA256,
+			StorageRef:    snapshot.Artifact.StorageRef,
+			BuiltAt:       formatTime(snapshot.Artifact.BuiltAt),
+			State:         string(snapshot.Artifact.State),
+			MetadataRef:   snapshot.Artifact.MetadataRef,
+			NormalizedRef: snapshot.Artifact.NormalizedRef,
+			RawRef:        snapshot.Artifact.RawRef,
+		}); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sources SET last_synced_at = ? WHERE id = ?`, formatTime(time.Now().UTC()), snapshot.Source.ID); err != nil {
+	if err := qtx.UpdateSourceLastSyncedAt(ctx, sqldb.UpdateSourceLastSyncedAtParams{
+		LastSyncedAt: formatTime(now),
+		ID:           snapshot.Source.ID,
+	}); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) StartRun(ctx context.Context, run domain.RunRecord) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO run_records (id, command, started_at, finished_at, status, summary, source_scope, dry_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.Command, formatTime(run.StartedAt), nilStringPtr(run.FinishedAt), string(run.Status), run.Summary, run.SourceScope, boolInt(run.DryRun))
-	return err
+	return s.queries.InsertRunRecord(ctx, sqldb.InsertRunRecordParams{
+		ID:          run.ID,
+		Command:     run.Command,
+		StartedAt:   formatTime(run.StartedAt),
+		FinishedAt:  nullStringTime(run.FinishedAt),
+		Status:      string(run.Status),
+		Summary:     run.Summary,
+		SourceScope: run.SourceScope,
+		DryRun:      boolInt(run.DryRun),
+	})
 }
 
 func (s *Store) FinishRun(ctx context.Context, runID string, status domain.RunStatus, summary string) error {
 	finished := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx, `UPDATE run_records SET finished_at = ?, status = ?, summary = ? WHERE id = ?`, formatTime(finished), string(status), summary, runID)
-	return err
+	return s.queries.UpdateRunRecord(ctx, sqldb.UpdateRunRecordParams{
+		FinishedAt: nullStringTime(&finished),
+		Status:     string(status),
+		Summary:    summary,
+		ID:         runID,
+	})
 }
 
 func (s *Store) AddEvent(ctx context.Context, event domain.EventRecord) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO event_records (id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.RunID, formatTime(event.Timestamp), event.Level, event.Component, event.Message, event.EntityKind, event.EntityID, event.PayloadRef)
-	return err
+	return s.queries.InsertEventRecord(ctx, sqldb.InsertEventRecordParams{
+		ID:         event.ID,
+		RunID:      event.RunID,
+		Timestamp:  formatTime(event.Timestamp),
+		Level:      event.Level,
+		Component:  event.Component,
+		Message:    event.Message,
+		EntityKind: event.EntityKind,
+		EntityID:   event.EntityID,
+		PayloadRef: event.PayloadRef,
+	})
 }
 
 func (s *Store) GetRunBundle(ctx context.Context, runID string) (*domain.RunBundle, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, command, started_at, finished_at, status, summary, source_scope, dry_run FROM run_records WHERE id = ?`, runID)
-	run, err := scanRunRow(row)
+	runRow, err := s.queries.GetRunRecord(ctx, runID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref FROM event_records WHERE run_id = ? ORDER BY timestamp`, runID)
+	eventRows, err := s.queries.ListEventsByRunID(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var events []domain.EventRecord
-	for rows.Next() {
-		event, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, event)
+	events := make([]domain.EventRecord, 0, len(eventRows))
+	for _, row := range eventRows {
+		events = append(events, eventFromRow(row))
 	}
-	return &domain.RunBundle{Run: run, Events: events}, rows.Err()
+	return &domain.RunBundle{
+		Run:    runFromRow(runRow),
+		Events: events,
+	}, nil
 }
 
 func (s *Store) ListPublishCandidates(ctx context.Context, sourceID string) ([]domain.PublishCandidate, error) {
-	query := `
-SELECT
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  a.release_id, a.track_id, a.rule_id, a.release_role, a.confidence,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref
-FROM artifacts art
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN release_assignments a ON a.release_id = r.id
-LEFT JOIN story_tracks t ON t.id = a.track_id
-WHERE art.is_canonical = 1`
-	args := []any{}
-	if sourceID != "" {
-		query += ` AND s.id = ?`
-		args = append(args, sourceID)
+	if sourceID == "" {
+		rows, err := s.queries.ListPublishCandidates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]domain.PublishCandidate, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, publishCandidateFromRow(row))
+		}
+		return items, nil
 	}
-	query += ` ORDER BY s.id, t.track_key, r.published_at`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.queries.ListPublishCandidatesBySource(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var items []domain.PublishCandidate
-	for rows.Next() {
-		var source domain.Source
-		var track domain.StoryTrack
-		var release domain.Release
-		var assignment domain.ReleaseAssignment
-		var artifact domain.Artifact
-		var enabled int
-		var isCanonical int
-		var confidence float64
-		var sourceLastSynced, trackCreated, trackUpdated, releasePublished, releaseEdited, releaseDiscovered, artifactBuilt string
-		if err := rows.Scan(
-			&source.ID, &source.Provider, &source.SourceURL, &source.SourceType, &source.CreatorID, &source.CreatorName, &source.AuthProfileID, &enabled, &source.SyncCursor, &sourceLastSynced,
-			&track.ID, &track.SourceID, &track.TrackKey, &track.TrackName, &track.CanonicalAuthor, &track.SeriesMeta, &track.OutputPolicy, &trackCreated, &trackUpdated,
-			&release.ID, &release.SourceID, &release.ProviderReleaseID, &release.URL, &release.Title, &releasePublished, &releaseEdited, &release.PostType, &release.VisibilityState, &release.NormalizedPayloadRef, &release.RawPayloadRef, &release.ContentHash, &releaseDiscovered, &release.Status,
-			&assignment.ReleaseID, &assignment.TrackID, &assignment.RuleID, &assignment.ReleaseRole, &confidence,
-			&artifact.ID, &artifact.ReleaseID, &artifact.TrackID, &artifact.ArtifactKind, &isCanonical, &artifact.Filename, &artifact.MIMEType, &artifact.SHA256, &artifact.StorageRef, &artifactBuilt, &artifact.State, &artifact.MetadataRef, &artifact.NormalizedRef, &artifact.RawRef,
-		); err != nil {
-			return nil, err
-		}
-		source.Enabled = enabled == 1
-		source.LastSyncedAt = parseTime(sourceLastSynced)
-		track.CreatedAt = parseTime(trackCreated)
-		track.UpdatedAt = parseTime(trackUpdated)
-		release.PublishedAt = parseTime(releasePublished)
-		release.EditedAt = parseTime(releaseEdited)
-		release.DiscoveredAt = parseTime(releaseDiscovered)
-		assignment.Confidence = confidence
-		artifact.IsCanonical = isCanonical == 1
-		artifact.BuiltAt = parseTime(artifactBuilt)
-		items = append(items, domain.PublishCandidate{
-			Source:     source,
-			Track:      track,
-			Release:    release,
-			Assignment: assignment,
-			Artifact:   artifact,
-		})
+	items := make([]domain.PublishCandidate, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, publishCandidateFromRowBySource(row))
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 func (s *Store) HasSuccessfulPublish(ctx context.Context, artifactID, targetID, publishHash string) (bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM publish_records WHERE artifact_id = ? AND target_id = ? AND publish_hash = ? AND status = ?`, artifactID, targetID, publishHash, string(domain.PublishStatusPublished))
-	var count int
-	if err := row.Scan(&count); err != nil {
+	count, err := s.queries.CountSuccessfulPublishRecords(ctx, sqldb.CountSuccessfulPublishRecordsParams{
+		ArtifactID:  artifactID,
+		TargetID:    targetID,
+		PublishHash: publishHash,
+		Status:      string(domain.PublishStatusPublished),
+	})
+	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
 }
 
 func (s *Store) UpsertPublishRecord(ctx context.Context, record domain.PublishRecord) error {
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO publish_records (id, artifact_id, target_id, target_kind, target_ref, publish_hash, published_at, status, message)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(artifact_id, target_id, publish_hash) DO UPDATE SET
-  target_kind = excluded.target_kind,
-  target_ref = excluded.target_ref,
-  published_at = excluded.published_at,
-  status = excluded.status,
-  message = excluded.message`,
-		record.ID, record.ArtifactID, record.TargetID, record.TargetKind, record.TargetRef, record.PublishHash,
-		formatTime(record.PublishedAt), string(record.Status), record.Message,
-	)
-	return err
+	return s.queries.UpsertPublishRecord(ctx, sqldb.UpsertPublishRecordParams{
+		ID:          record.ID,
+		ArtifactID:  record.ArtifactID,
+		TargetID:    record.TargetID,
+		TargetKind:  record.TargetKind,
+		TargetRef:   record.TargetRef,
+		PublishHash: record.PublishHash,
+		PublishedAt: formatTime(record.PublishedAt),
+		Status:      string(record.Status),
+		Message:     record.Message,
+	})
 }
 
 func (s *Store) getAssignment(ctx context.Context, releaseID string) (*domain.ReleaseAssignment, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT release_id, track_id, rule_id, release_role, confidence FROM release_assignments WHERE release_id = ?`, releaseID)
-	var item domain.ReleaseAssignment
-	var role string
-	if err := row.Scan(&item.ReleaseID, &item.TrackID, &item.RuleID, &role, &item.Confidence); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
+	row, err := s.queries.GetReleaseAssignment(ctx, releaseID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
-	item.ReleaseRole = domain.ReleaseRole(role)
+	item := assignmentFromRow(row)
 	return &item, nil
 }
 
-func upsertSource(ctx context.Context, q querier, source domain.Source) error {
-	_, err := q.ExecContext(ctx, `
-INSERT INTO sources (id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-  provider = excluded.provider,
-  source_url = excluded.source_url,
-  source_type = excluded.source_type,
-  creator_id = excluded.creator_id,
-  creator_name = excluded.creator_name,
-  auth_profile_id = excluded.auth_profile_id,
-  enabled = excluded.enabled,
-  sync_cursor = excluded.sync_cursor,
-  last_synced_at = excluded.last_synced_at`,
-		source.ID, source.Provider, source.SourceURL, source.SourceType, source.CreatorID, source.CreatorName, source.AuthProfileID, boolInt(source.Enabled), source.SyncCursor, formatTime(source.LastSyncedAt),
-	)
-	return err
-}
-
-func upsertTrack(ctx context.Context, q querier, track domain.StoryTrack) (*domain.StoryTrack, error) {
-	now := time.Now().UTC()
-	createdAt := track.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = now
+func sourceFromRow(row sqldb.Source) domain.Source {
+	return domain.Source{
+		ID:            row.ID,
+		Provider:      row.Provider,
+		SourceURL:     row.SourceUrl,
+		SourceType:    row.SourceType,
+		CreatorID:     row.CreatorID,
+		CreatorName:   row.CreatorName,
+		AuthProfileID: row.AuthProfileID,
+		Enabled:       row.Enabled == 1,
+		SyncCursor:    row.SyncCursor,
+		LastSyncedAt:  parseTime(row.LastSyncedAt),
 	}
-	updatedAt := track.UpdatedAt
-	if updatedAt.IsZero() {
-		updatedAt = now
+}
+
+func trackFromRow(row sqldb.StoryTrack) domain.StoryTrack {
+	return domain.StoryTrack{
+		ID:              row.ID,
+		SourceID:        row.SourceID,
+		TrackKey:        row.TrackKey,
+		TrackName:       row.TrackName,
+		CanonicalAuthor: row.CanonicalAuthor,
+		SeriesMeta:      row.SeriesMeta,
+		OutputPolicy:    row.OutputPolicy,
+		CreatedAt:       parseTime(row.CreatedAt),
+		UpdatedAt:       parseTime(row.UpdatedAt),
 	}
-	_, err := q.ExecContext(ctx, `
-INSERT INTO story_tracks (id, source_id, track_key, track_name, canonical_author, series_meta, output_policy, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(source_id, track_key) DO UPDATE SET
-  track_name = excluded.track_name,
-  canonical_author = excluded.canonical_author,
-  series_meta = excluded.series_meta,
-  output_policy = excluded.output_policy,
-  updated_at = excluded.updated_at`,
-		track.ID, track.SourceID, track.TrackKey, track.TrackName, track.CanonicalAuthor, track.SeriesMeta, track.OutputPolicy, formatTime(createdAt), formatTime(updatedAt),
-	)
-	if err != nil {
-		return nil, err
+}
+
+func releaseFromRow(row sqldb.Release) domain.Release {
+	return domain.Release{
+		ID:                   row.ID,
+		SourceID:             row.SourceID,
+		ProviderReleaseID:    row.ProviderReleaseID,
+		URL:                  row.Url,
+		Title:                row.Title,
+		PublishedAt:          parseTime(row.PublishedAt),
+		EditedAt:             parseTime(row.EditedAt),
+		PostType:             row.PostType,
+		VisibilityState:      row.VisibilityState,
+		NormalizedPayloadRef: row.NormalizedPayloadRef,
+		RawPayloadRef:        row.RawPayloadRef,
+		ContentHash:          row.ContentHash,
+		DiscoveredAt:         parseTime(row.DiscoveredAt),
+		Status:               row.Status,
 	}
-	row := q.QueryRowContext(ctx, `SELECT id, source_id, track_key, track_name, canonical_author, series_meta, output_policy, created_at, updated_at FROM story_tracks WHERE source_id = ? AND track_key = ?`, track.SourceID, track.TrackKey)
-	item, err := scanTrackRow(row)
-	if err != nil {
-		return nil, err
+}
+
+func artifactFromRow(row sqldb.Artifact) domain.Artifact {
+	return domain.Artifact{
+		ID:            row.ID,
+		ReleaseID:     row.ReleaseID,
+		TrackID:       row.TrackID,
+		ArtifactKind:  row.ArtifactKind,
+		IsCanonical:   row.IsCanonical == 1,
+		Filename:      row.Filename,
+		MIMEType:      row.MimeType,
+		SHA256:        row.Sha256,
+		StorageRef:    row.StorageRef,
+		BuiltAt:       parseTime(row.BuiltAt),
+		State:         domain.ArtifactState(row.State),
+		MetadataRef:   row.MetadataRef,
+		NormalizedRef: row.NormalizedRef,
+		RawRef:        row.RawRef,
 	}
-	return &item, nil
 }
 
-func scanSource(rows interface{ Scan(...any) error }) (domain.Source, error) {
-	var item domain.Source
-	var enabled int
-	var lastSynced string
-	err := rows.Scan(&item.ID, &item.Provider, &item.SourceURL, &item.SourceType, &item.CreatorID, &item.CreatorName, &item.AuthProfileID, &enabled, &item.SyncCursor, &lastSynced)
-	if err != nil {
-		return domain.Source{}, err
+func assignmentFromRow(row sqldb.ReleaseAssignment) domain.ReleaseAssignment {
+	return domain.ReleaseAssignment{
+		ReleaseID:   row.ReleaseID,
+		TrackID:     row.TrackID,
+		RuleID:      row.RuleID,
+		ReleaseRole: domain.ReleaseRole(row.ReleaseRole),
+		Confidence:  row.Confidence,
 	}
-	item.Enabled = enabled == 1
-	item.LastSyncedAt = parseTime(lastSynced)
-	return item, nil
 }
 
-func scanSourceRow(row *sql.Row) (domain.Source, error) {
-	return scanSource(row)
-}
-
-func scanTrack(rows interface{ Scan(...any) error }) (domain.StoryTrack, error) {
-	var item domain.StoryTrack
-	var createdAt, updatedAt string
-	err := rows.Scan(&item.ID, &item.SourceID, &item.TrackKey, &item.TrackName, &item.CanonicalAuthor, &item.SeriesMeta, &item.OutputPolicy, &createdAt, &updatedAt)
-	if err != nil {
-		return domain.StoryTrack{}, err
+func runFromRow(row sqldb.RunRecord) domain.RunRecord {
+	item := domain.RunRecord{
+		ID:          row.ID,
+		Command:     row.Command,
+		StartedAt:   parseTime(row.StartedAt),
+		Status:      domain.RunStatus(row.Status),
+		Summary:     row.Summary,
+		SourceScope: row.SourceScope,
+		DryRun:      row.DryRun == 1,
 	}
-	item.CreatedAt = parseTime(createdAt)
-	item.UpdatedAt = parseTime(updatedAt)
-	return item, nil
-}
-
-func scanTrackRow(row *sql.Row) (domain.StoryTrack, error) {
-	return scanTrack(row)
-}
-
-func scanRelease(rows interface{ Scan(...any) error }) (domain.Release, error) {
-	var item domain.Release
-	var publishedAt, editedAt, discoveredAt string
-	err := rows.Scan(&item.ID, &item.SourceID, &item.ProviderReleaseID, &item.URL, &item.Title, &publishedAt, &editedAt, &item.PostType, &item.VisibilityState, &item.NormalizedPayloadRef, &item.RawPayloadRef, &item.ContentHash, &discoveredAt, &item.Status)
-	if err != nil {
-		return domain.Release{}, err
-	}
-	item.PublishedAt = parseTime(publishedAt)
-	item.EditedAt = parseTime(editedAt)
-	item.DiscoveredAt = parseTime(discoveredAt)
-	return item, nil
-}
-
-func scanReleaseRow(row *sql.Row) (domain.Release, error) {
-	return scanRelease(row)
-}
-
-func scanArtifact(rows interface{ Scan(...any) error }) (domain.Artifact, error) {
-	var item domain.Artifact
-	var isCanonical int
-	var builtAt string
-	err := rows.Scan(&item.ID, &item.ReleaseID, &item.TrackID, &item.ArtifactKind, &isCanonical, &item.Filename, &item.MIMEType, &item.SHA256, &item.StorageRef, &builtAt, &item.State, &item.MetadataRef, &item.NormalizedRef, &item.RawRef)
-	if err != nil {
-		return domain.Artifact{}, err
-	}
-	item.IsCanonical = isCanonical == 1
-	item.BuiltAt = parseTime(builtAt)
-	return item, nil
-}
-
-func scanArtifactRow(row *sql.Row) (domain.Artifact, error) {
-	return scanArtifact(row)
-}
-
-func scanRunRow(row *sql.Row) (domain.RunRecord, error) {
-	var item domain.RunRecord
-	var startedAt string
-	var finishedAt sql.NullString
-	var dryRun int
-	var status string
-	if err := row.Scan(&item.ID, &item.Command, &startedAt, &finishedAt, &status, &item.Summary, &item.SourceScope, &dryRun); err != nil {
-		return domain.RunRecord{}, err
-	}
-	item.StartedAt = parseTime(startedAt)
-	if finishedAt.Valid {
-		finished := parseTime(finishedAt.String)
+	if row.FinishedAt.Valid {
+		finished := parseTime(row.FinishedAt.String)
 		item.FinishedAt = &finished
 	}
-	item.Status = domain.RunStatus(status)
-	item.DryRun = dryRun == 1
-	return item, nil
+	return item
 }
 
-func scanEvent(rows interface{ Scan(...any) error }) (domain.EventRecord, error) {
-	var item domain.EventRecord
-	var timestamp string
-	if err := rows.Scan(&item.ID, &item.RunID, &timestamp, &item.Level, &item.Component, &item.Message, &item.EntityKind, &item.EntityID, &item.PayloadRef); err != nil {
-		return domain.EventRecord{}, err
+func eventFromRow(row sqldb.EventRecord) domain.EventRecord {
+	return domain.EventRecord{
+		ID:         row.ID,
+		RunID:      row.RunID,
+		Timestamp:  parseTime(row.Timestamp),
+		Level:      row.Level,
+		Component:  row.Component,
+		Message:    row.Message,
+		EntityKind: row.EntityKind,
+		EntityID:   row.EntityID,
+		PayloadRef: row.PayloadRef,
 	}
-	item.Timestamp = parseTime(timestamp)
-	return item, nil
+}
+
+func publishCandidateFromRow(row sqldb.ListPublishCandidatesRow) domain.PublishCandidate {
+	return domain.PublishCandidate{
+		Source: sourceFromRow(sqldb.Source{
+			ID:            row.ID,
+			Provider:      row.Provider,
+			SourceUrl:     row.SourceUrl,
+			SourceType:    row.SourceType,
+			CreatorID:     row.CreatorID,
+			CreatorName:   row.CreatorName,
+			AuthProfileID: row.AuthProfileID,
+			Enabled:       row.Enabled,
+			SyncCursor:    row.SyncCursor,
+			LastSyncedAt:  row.LastSyncedAt,
+		}),
+		Track: trackFromNullableRow(row.ID_2, row.SourceID, row.TrackKey, row.TrackName, row.CanonicalAuthor, row.SeriesMeta, row.OutputPolicy, row.CreatedAt, row.UpdatedAt),
+		Release: releaseFromRow(sqldb.Release{
+			ID:                   row.ID_3,
+			SourceID:             row.SourceID_2,
+			ProviderReleaseID:    row.ProviderReleaseID,
+			Url:                  row.Url,
+			Title:                row.Title,
+			PublishedAt:          row.PublishedAt,
+			EditedAt:             row.EditedAt,
+			PostType:             row.PostType,
+			VisibilityState:      row.VisibilityState,
+			NormalizedPayloadRef: row.NormalizedPayloadRef,
+			RawPayloadRef:        row.RawPayloadRef,
+			ContentHash:          row.ContentHash,
+			DiscoveredAt:         row.DiscoveredAt,
+			Status:               row.Status,
+		}),
+		Assignment: assignmentFromNullableRow(row.ReleaseID, row.TrackID, row.RuleID, row.ReleaseRole, row.Confidence),
+		Artifact: artifactFromRow(sqldb.Artifact{
+			ID:            row.ID_4,
+			ReleaseID:     row.ReleaseID_2,
+			TrackID:       row.TrackID_2,
+			ArtifactKind:  row.ArtifactKind,
+			IsCanonical:   row.IsCanonical,
+			Filename:      row.Filename,
+			MimeType:      row.MimeType,
+			Sha256:        row.Sha256,
+			StorageRef:    row.StorageRef,
+			BuiltAt:       row.BuiltAt,
+			State:         row.State,
+			MetadataRef:   row.MetadataRef,
+			NormalizedRef: row.NormalizedRef,
+			RawRef:        row.RawRef,
+		}),
+	}
+}
+
+func publishCandidateFromRowBySource(row sqldb.ListPublishCandidatesBySourceRow) domain.PublishCandidate {
+	return domain.PublishCandidate{
+		Source: sourceFromRow(sqldb.Source{
+			ID:            row.ID,
+			Provider:      row.Provider,
+			SourceUrl:     row.SourceUrl,
+			SourceType:    row.SourceType,
+			CreatorID:     row.CreatorID,
+			CreatorName:   row.CreatorName,
+			AuthProfileID: row.AuthProfileID,
+			Enabled:       row.Enabled,
+			SyncCursor:    row.SyncCursor,
+			LastSyncedAt:  row.LastSyncedAt,
+		}),
+		Track: trackFromNullableRow(row.ID_2, row.SourceID, row.TrackKey, row.TrackName, row.CanonicalAuthor, row.SeriesMeta, row.OutputPolicy, row.CreatedAt, row.UpdatedAt),
+		Release: releaseFromRow(sqldb.Release{
+			ID:                   row.ID_3,
+			SourceID:             row.SourceID_2,
+			ProviderReleaseID:    row.ProviderReleaseID,
+			Url:                  row.Url,
+			Title:                row.Title,
+			PublishedAt:          row.PublishedAt,
+			EditedAt:             row.EditedAt,
+			PostType:             row.PostType,
+			VisibilityState:      row.VisibilityState,
+			NormalizedPayloadRef: row.NormalizedPayloadRef,
+			RawPayloadRef:        row.RawPayloadRef,
+			ContentHash:          row.ContentHash,
+			DiscoveredAt:         row.DiscoveredAt,
+			Status:               row.Status,
+		}),
+		Assignment: assignmentFromNullableRow(row.ReleaseID, row.TrackID, row.RuleID, row.ReleaseRole, row.Confidence),
+		Artifact: artifactFromRow(sqldb.Artifact{
+			ID:            row.ID_4,
+			ReleaseID:     row.ReleaseID_2,
+			TrackID:       row.TrackID_2,
+			ArtifactKind:  row.ArtifactKind,
+			IsCanonical:   row.IsCanonical,
+			Filename:      row.Filename,
+			MimeType:      row.MimeType,
+			Sha256:        row.Sha256,
+			StorageRef:    row.StorageRef,
+			BuiltAt:       row.BuiltAt,
+			State:         row.State,
+			MetadataRef:   row.MetadataRef,
+			NormalizedRef: row.NormalizedRef,
+			RawRef:        row.RawRef,
+		}),
+	}
+}
+
+func trackFromNullableRow(id, sourceID, trackKey, trackName, canonicalAuthor, seriesMeta, outputPolicy, createdAt, updatedAt sql.NullString) domain.StoryTrack {
+	if !id.Valid {
+		return domain.StoryTrack{}
+	}
+	return domain.StoryTrack{
+		ID:              id.String,
+		SourceID:        nullString(sourceID),
+		TrackKey:        nullString(trackKey),
+		TrackName:       nullString(trackName),
+		CanonicalAuthor: nullString(canonicalAuthor),
+		SeriesMeta:      nullString(seriesMeta),
+		OutputPolicy:    nullString(outputPolicy),
+		CreatedAt:       parseTime(nullString(createdAt)),
+		UpdatedAt:       parseTime(nullString(updatedAt)),
+	}
+}
+
+func assignmentFromNullableRow(releaseID, trackID, ruleID, releaseRole sql.NullString, confidence sql.NullFloat64) domain.ReleaseAssignment {
+	return domain.ReleaseAssignment{
+		ReleaseID:   nullString(releaseID),
+		TrackID:     nullString(trackID),
+		RuleID:      nullString(ruleID),
+		ReleaseRole: domain.ReleaseRole(nullString(releaseRole)),
+		Confidence:  nullFloat(confidence),
+	}
 }
 
 func formatTime(value time.Time) string {
@@ -741,18 +766,32 @@ func parseTime(value string) time.Time {
 	return parsed
 }
 
-func boolInt(value bool) int {
+func boolInt(value bool) int64 {
 	if value {
 		return 1
 	}
 	return 0
 }
 
-func nilStringPtr(value *time.Time) any {
+func nullStringTime(value *time.Time) sql.NullString {
 	if value == nil {
-		return nil
+		return sql.NullString{}
 	}
-	return formatTime(*value)
+	return sql.NullString{String: formatTime(*value), Valid: true}
+}
+
+func nullString(value sql.NullString) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
+}
+
+func nullFloat(value sql.NullFloat64) float64 {
+	if value.Valid {
+		return value.Float64
+	}
+	return 0
 }
 
 var _ store.Repository = (*Store)(nil)

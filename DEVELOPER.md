@@ -19,6 +19,13 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml sync
 go run ./cmd/serial-sync --config ./examples/config.demo.toml publish
 ```
 
+## Generated Assets
+
+```sh
+$(go env GOPATH)/bin/sqlc generate
+$(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.toml -d '#Config'
+```
+
 ## Conventions
 
 - Keep provider-specific logic inside `internal/provider/<provider>`.
@@ -36,6 +43,7 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml publish
 
 - [Config reference](docs/config.md)
 - [Architecture](docs/architecture.md)
+- [Control plane notes](docs/control-plane.md)
 - [Provider notes](docs/patreon.md)
 - [Provider contribution guide](docs/provider-contributing.md)
 - [Hook tutorial](docs/hooks.md)
