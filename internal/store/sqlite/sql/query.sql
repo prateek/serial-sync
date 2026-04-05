@@ -188,6 +188,12 @@ SELECT id, command, started_at, finished_at, status, summary, source_scope, dry_
 FROM run_records
 WHERE id = sqlc.arg(id);
 
+-- name: ListRunRecordsRecent :many
+SELECT id, command, started_at, finished_at, status, summary, source_scope, dry_run
+FROM run_records
+ORDER BY started_at DESC, id DESC
+LIMIT sqlc.arg(limit);
+
 -- name: InsertEventRecord :exec
 INSERT INTO event_records (id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref)
 VALUES (

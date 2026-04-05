@@ -1571,6 +1571,45 @@ func (q *Queries) ListReleasesBySource(ctx context.Context, sourceID string) ([]
 	return items, nil
 }
 
+const listRunRecordsRecent = `-- name: ListRunRecordsRecent :many
+SELECT id, command, started_at, finished_at, status, summary, source_scope, dry_run
+FROM run_records
+ORDER BY started_at DESC, id DESC
+LIMIT ?1
+`
+
+func (q *Queries) ListRunRecordsRecent(ctx context.Context, limit int64) ([]RunRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listRunRecordsRecent, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RunRecord
+	for rows.Next() {
+		var i RunRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.Command,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Status,
+			&i.Summary,
+			&i.SourceScope,
+			&i.DryRun,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSources = `-- name: ListSources :many
 SELECT id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at
 FROM sources

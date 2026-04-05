@@ -113,6 +113,9 @@ If `health_addr` is set in the config, the daemon also exposes:
 - `/metrics`
 - `/discover/sources`
 - `/discover/config`
+- `/runs`
+- `/runs/events`
+- `/runs/explain`
 
 The discovery endpoints use the same saved Patreon session as the CLI:
 

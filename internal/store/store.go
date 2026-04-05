@@ -41,6 +41,7 @@ type Repository interface {
 	FinishRun(ctx context.Context, runID string, status domain.RunStatus, summary string) error
 	AddEvent(ctx context.Context, event domain.EventRecord) error
 	GetRunBundle(ctx context.Context, runID string) (*domain.RunBundle, error)
+	ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, error)
 
 	ListPublishCandidates(ctx context.Context, sourceID string) ([]domain.PublishCandidate, error)
 	HasSuccessfulPublish(ctx context.Context, artifactID, targetID, publishHash string) (bool, error)

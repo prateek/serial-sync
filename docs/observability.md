@@ -36,7 +36,10 @@ Event payload files are stored under:
 Useful operator commands:
 
 ```sh
+serial-sync runs list
 serial-sync runs inspect <run-id>
+serial-sync runs events <run-id>
+serial-sync runs explain <run-id>
 serial-sync source inspect <source>
 serial-sync publish-record list
 serial-sync support bundle <run-id>
@@ -51,6 +54,15 @@ The daemon exposes:
 - `/metrics`
 - `/discover/sources`
 - `/discover/config`
+- `/runs`
+- `/runs/events`
+- `/runs/explain`
+
+Examples:
+
+- `GET /runs?limit=20`
+- `GET /runs/events?run_id=<run-id>&component=publish`
+- `GET /runs/explain?run_id=<run-id>`
 
 ## Support Bundles
 

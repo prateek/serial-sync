@@ -450,6 +450,21 @@ func (s *Store) GetRunBundle(ctx context.Context, runID string) (*domain.RunBund
 	}, nil
 }
 
+func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.queries.ListRunRecordsRecent(ctx, int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]domain.RunRecord, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, runFromRow(row))
+	}
+	return items, nil
+}
+
 func (s *Store) ListPublishCandidates(ctx context.Context, sourceID string) ([]domain.PublishCandidate, error) {
 	if sourceID == "" {
 		rows, err := s.queries.ListPublishCandidates(ctx)

@@ -83,7 +83,10 @@ type PublishRecordCmd struct {
 }
 
 type RunsCmd struct {
+	List    RunListCmd    `cmd:"" help:"List recent runs."`
 	Inspect RunInspectCmd `cmd:"" help:"Inspect a prior run."`
+	Events  RunEventsCmd  `cmd:"" help:"List filtered events for a run."`
+	Explain RunExplainCmd `cmd:"" help:"Summarize a run for operator forensics."`
 }
 
 type RunCmd struct {
@@ -148,6 +151,23 @@ type PublishRecordInspectCmd struct {
 
 type RunInspectCmd struct {
 	RunID string `arg:"" name:"run-id" help:"Run ID to inspect."`
+}
+
+type RunListCmd struct {
+	Limit int `name:"limit" default:"20" help:"Show this many recent runs."`
+}
+
+type RunEventsCmd struct {
+	RunID      string `arg:"" name:"run-id" help:"Run ID to inspect."`
+	Level      string `name:"level" help:"Filter events by level."`
+	Component  string `name:"component" help:"Filter events by component."`
+	EntityKind string `name:"entity-kind" help:"Filter events by entity kind."`
+	EntityID   string `name:"entity-id" help:"Filter events by entity ID."`
+	Limit      int    `name:"limit" default:"0" help:"Limit the number of events shown after filtering."`
+}
+
+type RunExplainCmd struct {
+	RunID string `arg:"" name:"run-id" help:"Run ID to explain."`
 }
 
 type SupportBundleCmd struct {
@@ -379,6 +399,23 @@ func (cmd *PublishRecordInspectCmd) Run(cli *CLI) error {
 	})
 }
 
+func (cmd *RunListCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		runs, err := service.ListRuns(ctx, cmd.Limit)
+		if err != nil {
+			return err
+		}
+		for _, run := range runs {
+			finishedAt := ""
+			if run.FinishedAt != nil {
+				finishedAt = run.FinishedAt.Format(time.RFC3339)
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%t\t%s\n", run.ID, run.Status, run.Command, run.StartedAt.Format(time.RFC3339), finishedAt, run.DryRun, run.Summary)
+		}
+		return nil
+	})
+}
+
 func (cmd *RunInspectCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		payload, err := service.InspectRun(ctx, cmd.RunID)
@@ -386,6 +423,33 @@ func (cmd *RunInspectCmd) Run(cli *CLI) error {
 			return err
 		}
 		return printJSON(payload)
+	})
+}
+
+func (cmd *RunEventsCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.ListRunEvents(ctx, cmd.RunID, app.RunEventFilter{
+			Level:      cmd.Level,
+			Component:  cmd.Component,
+			EntityKind: cmd.EntityKind,
+			EntityID:   cmd.EntityID,
+			Limit:      cmd.Limit,
+		})
+		if err != nil {
+			return err
+		}
+		return printJSON(payload)
+	})
+}
+
+func (cmd *RunExplainCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.ExplainRun(ctx, cmd.RunID)
+		if err != nil {
+			return err
+		}
+		fmt.Println(app.FormatRunForensics(*payload))
+		return nil
 	})
 }
 
@@ -535,6 +599,73 @@ func (cmd *DaemonCmd) Run(cli *CLI) error {
 				}
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				_, _ = w.Write([]byte(result.SnippetTOML))
+			},
+			ListRuns: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				limit := 20
+				if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+						limit = parsed
+					}
+				}
+				runs, runErr := service.ListRuns(r.Context(), limit)
+				if runErr != nil {
+					http.Error(w, runErr.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(runs)
+			},
+			RunEvents: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+				if runID == "" {
+					http.Error(w, "run_id is required", http.StatusBadRequest)
+					return
+				}
+				limit := 0
+				if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 {
+						limit = parsed
+					}
+				}
+				payload, runErr := service.ListRunEvents(r.Context(), runID, app.RunEventFilter{
+					Level:      r.URL.Query().Get("level"),
+					Component:  r.URL.Query().Get("component"),
+					EntityKind: r.URL.Query().Get("entity_kind"),
+					EntityID:   r.URL.Query().Get("entity_id"),
+					Limit:      limit,
+				})
+				if runErr != nil {
+					http.Error(w, runErr.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(payload)
+			},
+			RunExplain: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+				if runID == "" {
+					http.Error(w, "run_id is required", http.StatusBadRequest)
+					return
+				}
+				payload, runErr := service.ExplainRun(r.Context(), runID)
+				if runErr != nil {
+					http.Error(w, runErr.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(payload)
 			},
 		}
 		server, err := runtimedaemon.Start(ctx, service.Config.Scheduler.HealthAddr, state, handlers)

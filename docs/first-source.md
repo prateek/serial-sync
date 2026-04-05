@@ -107,6 +107,10 @@ Replace the fallback-only rule with source-specific matching:
 - `title_regex`
 - `attachment_filename_regex`
 
+Use the dedicated guide for examples and debugging flow:
+
+- [Rule authoring guide](rules.md)
+
 Then rerun:
 
 ```sh

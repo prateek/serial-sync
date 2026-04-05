@@ -24,14 +24,15 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - Docker packaging with Chromium, Xvfb, and `tini` for first-run auth bootstrap inside the image
 - static binary release packaging config via `.goreleaser.yml`
 - Docker quickstart, config docs, discovery docs, observability docs, troubleshooting docs, hook docs, and developer docs
+- Docker quickstart, config docs, discovery docs, observability docs, troubleshooting docs, rule-authoring docs, hook docs, and developer docs
 
 ## Partial
 
 - support bundle export now includes redacted config, run data, release bundles, payload copies, and per-run text/JSON logs, but external log shipping is still future work
-- observability now includes run/event persistence, per-run text/JSON logs, event payload files, and daemon `/metrics`, but richer metrics backends are still future work
+- observability now includes recent-run listing, filtered event inspection, run explanations, per-run text/JSON logs, event payload files, and daemon forensics endpoints, but richer metrics backends are still future work
 - CUE config validation exists as an optional schema layer, not as the runtime control-plane source of truth
 - daemon mode now includes source leases and local health/status endpoints, but deeper multi-replica coordination is still future work
-- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, discovery docs, observability docs, and a first-source walkthrough), but deeper rule-authoring examples are still thin
+- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, discovery docs, observability docs, rule-authoring docs, and a first-source walkthrough)
 - the store seam is generic at the repository boundary, but lease-specific store contracts and alternative backends are still future work
 
 ## Remaining

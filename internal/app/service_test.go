@@ -152,6 +152,32 @@ content_strategy = "text_post"
 			t.Fatalf("expected support bundle log %s: %v", bundleLog, err)
 		}
 	}
+	recentRuns, err := service.ListRuns(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recentRuns) == 0 {
+		t.Fatal("expected recent runs to include the sync/publish lifecycle")
+	}
+	events, err := service.ListRunEvents(context.Background(), firstRunOnce.Publish.RunID, app.RunEventFilter{
+		Component: "publish",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events.Count == 0 {
+		t.Fatalf("expected publish events for run %s", firstRunOnce.Publish.RunID)
+	}
+	explain, err := service.ExplainRun(context.Background(), firstRunOnce.Publish.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explain.PublishSucceeded == 0 {
+		t.Fatalf("expected publish explain summary to record success, got %#v", explain)
+	}
+	if explain.LogText == "" || explain.LogJSON == "" {
+		t.Fatalf("expected explain summary to expose log paths, got %#v", explain)
+	}
 	storedSource, err := repo.GetSource(context.Background(), "plum-parrot")
 	if err != nil {
 		t.Fatal(err)

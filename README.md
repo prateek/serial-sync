@@ -50,6 +50,7 @@ docker run --rm \
 
 - [Developer guide](DEVELOPER.md)
 - [First source walkthrough](docs/first-source.md)
+- [Rule authoring guide](docs/rules.md)
 - [Config reference](docs/config.md)
 - [Docker quickstart](docs/docker-quickstart.md)
 - [Source discovery guide](docs/source-discovery.md)

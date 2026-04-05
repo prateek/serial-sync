@@ -245,3 +245,52 @@ func TestRunsInspectCommandShape(t *testing.T) {
 		t.Fatalf("cli.Runs.Inspect.RunID = %q, want %q", got, want)
 	}
 }
+
+func TestRunsExtendedCommandShape(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{}
+	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	if err != nil {
+		t.Fatalf("newParser() error = %v", err)
+	}
+
+	listCtx, err := parser.Parse([]string{"runs", "list", "--limit", "5"})
+	if err != nil {
+		t.Fatalf("Parse(list) error = %v", err)
+	}
+	if got, want := listCtx.Command(), "runs list"; got != want {
+		t.Fatalf("listCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Runs.List.Limit, 5; got != want {
+		t.Fatalf("cli.Runs.List.Limit = %d, want %d", got, want)
+	}
+
+	eventsCtx, err := parser.Parse([]string{"runs", "events", "run_123", "--level", "error", "--component", "publish"})
+	if err != nil {
+		t.Fatalf("Parse(events) error = %v", err)
+	}
+	if got, want := eventsCtx.Command(), "runs events <run-id>"; got != want {
+		t.Fatalf("eventsCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Runs.Events.RunID, "run_123"; got != want {
+		t.Fatalf("cli.Runs.Events.RunID = %q, want %q", got, want)
+	}
+	if got, want := cli.Runs.Events.Level, "error"; got != want {
+		t.Fatalf("cli.Runs.Events.Level = %q, want %q", got, want)
+	}
+	if got, want := cli.Runs.Events.Component, "publish"; got != want {
+		t.Fatalf("cli.Runs.Events.Component = %q, want %q", got, want)
+	}
+
+	explainCtx, err := parser.Parse([]string{"runs", "explain", "run_123"})
+	if err != nil {
+		t.Fatalf("Parse(explain) error = %v", err)
+	}
+	if got, want := explainCtx.Command(), "runs explain <run-id>"; got != want {
+		t.Fatalf("explainCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Runs.Explain.RunID, "run_123"; got != want {
+		t.Fatalf("cli.Runs.Explain.RunID = %q, want %q", got, want)
+	}
+}

@@ -55,6 +55,9 @@ type Server struct {
 type Handlers struct {
 	DiscoverSources http.HandlerFunc
 	DiscoverConfig  http.HandlerFunc
+	ListRuns        http.HandlerFunc
+	RunEvents       http.HandlerFunc
+	RunExplain      http.HandlerFunc
 }
 
 func NewState(holderID string, pollInterval time.Duration, sourceIDs []string) *State {
@@ -261,6 +264,15 @@ func newHandler(state *State, handlers *Handlers) http.Handler {
 	}
 	if handlers != nil && handlers.DiscoverConfig != nil {
 		mux.HandleFunc("/discover/config", handlers.DiscoverConfig)
+	}
+	if handlers != nil && handlers.ListRuns != nil {
+		mux.HandleFunc("/runs", handlers.ListRuns)
+	}
+	if handlers != nil && handlers.RunEvents != nil {
+		mux.HandleFunc("/runs/events", handlers.RunEvents)
+	}
+	if handlers != nil && handlers.RunExplain != nil {
+		mux.HandleFunc("/runs/explain", handlers.RunExplain)
 	}
 	return mux
 }

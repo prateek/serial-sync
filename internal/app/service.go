@@ -96,6 +96,43 @@ type SourceDiscoverResult struct {
 	SnippetTOML   string                      `json:"snippet_toml"`
 }
 
+type RunEventFilter struct {
+	Level      string `json:"level,omitempty"`
+	Component  string `json:"component,omitempty"`
+	EntityKind string `json:"entity_kind,omitempty"`
+	EntityID   string `json:"entity_id,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+}
+
+type RunEventList struct {
+	RunID   string               `json:"run_id"`
+	Filter  RunEventFilter       `json:"filter"`
+	Count   int                  `json:"count"`
+	Events  []domain.EventRecord `json:"events"`
+	LogText string               `json:"log_text,omitempty"`
+	LogJSON string               `json:"log_json,omitempty"`
+}
+
+type RunForensics struct {
+	Run                 domain.RunRecord     `json:"run"`
+	LogText             string               `json:"log_text,omitempty"`
+	LogJSON             string               `json:"log_json,omitempty"`
+	InfoEvents          int                  `json:"info_events"`
+	ErrorEvents         int                  `json:"error_events"`
+	ComponentCounts     map[string]int       `json:"component_counts"`
+	EntityCounts        map[string]int       `json:"entity_counts"`
+	ClassifiedMatched   int                  `json:"classified_matched"`
+	ClassifiedUnmatched int                  `json:"classified_unmatched"`
+	ReleaseSynced       int                  `json:"release_synced"`
+	ReleaseUnchanged    int                  `json:"release_unchanged"`
+	PublishPlanned      int                  `json:"publish_planned"`
+	PublishSkipped      int                  `json:"publish_skipped"`
+	PublishSucceeded    int                  `json:"publish_succeeded"`
+	PublishFailed       int                  `json:"publish_failed"`
+	Highlights          []string             `json:"highlights"`
+	RecentErrors        []domain.EventRecord `json:"recent_errors,omitempty"`
+}
+
 type RunOnceResult struct {
 	Sync    domain.SyncResult    `json:"sync"`
 	Publish domain.PublishResult `json:"publish"`
@@ -892,6 +929,97 @@ func (s *Service) InspectRun(ctx context.Context, id string) (*domain.RunBundle,
 	return run, nil
 }
 
+func (s *Service) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, error) {
+	return s.Repo.ListRuns(ctx, limit)
+}
+
+func (s *Service) ListRunEvents(ctx context.Context, runID string, filter RunEventFilter) (*RunEventList, error) {
+	bundle, err := s.InspectRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]domain.EventRecord, 0, len(bundle.Events))
+	for _, event := range bundle.Events {
+		if !matchesRunEventFilter(event, filter) {
+			continue
+		}
+		events = append(events, event)
+	}
+	if filter.Limit > 0 && len(events) > filter.Limit {
+		events = events[:filter.Limit]
+	}
+	return &RunEventList{
+		RunID:   runID,
+		Filter:  filter,
+		Count:   len(events),
+		Events:  events,
+		LogText: filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
+		LogJSON: filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
+	}, nil
+}
+
+func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, error) {
+	bundle, err := s.InspectRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	result := &RunForensics{
+		Run:             bundle.Run,
+		LogText:         filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
+		LogJSON:         filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
+		ComponentCounts: map[string]int{},
+		EntityCounts:    map[string]int{},
+	}
+	for _, event := range bundle.Events {
+		switch strings.ToLower(strings.TrimSpace(event.Level)) {
+		case "error":
+			result.ErrorEvents++
+			result.RecentErrors = append(result.RecentErrors, event)
+		default:
+			result.InfoEvents++
+		}
+		if component := strings.TrimSpace(event.Component); component != "" {
+			result.ComponentCounts[component]++
+		}
+		if entityKind := strings.TrimSpace(event.EntityKind); entityKind != "" {
+			result.EntityCounts[entityKind]++
+		}
+		switch event.Component {
+		case "classify":
+			if strings.Contains(strings.ToLower(event.Message), "unmatched") {
+				result.ClassifiedUnmatched++
+			} else {
+				result.ClassifiedMatched++
+			}
+		case "sync":
+			message := strings.ToLower(event.Message)
+			switch {
+			case strings.Contains(message, "release synced"):
+				result.ReleaseSynced++
+			case strings.Contains(message, "release unchanged"):
+				result.ReleaseUnchanged++
+			}
+		case "publish":
+			message := strings.ToLower(event.Message)
+			switch {
+			case strings.Contains(message, "planned"):
+				result.PublishPlanned++
+			case strings.Contains(message, "skipped"):
+				result.PublishSkipped++
+			case strings.Contains(message, "completed"):
+				result.PublishSucceeded++
+			case strings.ToLower(strings.TrimSpace(event.Level)) == "error":
+				result.PublishFailed++
+			}
+		}
+		if strings.ToLower(strings.TrimSpace(event.Level)) == "error" && len(result.RecentErrors) > 5 {
+			result.RecentErrors = result.RecentErrors[len(result.RecentErrors)-5:]
+		}
+	}
+	result.Highlights = append(result.Highlights, explainRunHighlights(bundle, result)...)
+	return result, nil
+}
+
 func (s *Service) ListPublishRecords(ctx context.Context, sourceFilter, targetFilter string) ([]domain.PublishRecordBundle, error) {
 	return s.Repo.ListPublishRecords(ctx, sourceFilter, targetFilter)
 }
@@ -1246,6 +1374,47 @@ func redactPathForSupport(input string) string {
 	return filepath.Join("<redacted>", base)
 }
 
+func matchesRunEventFilter(event domain.EventRecord, filter RunEventFilter) bool {
+	if value := strings.TrimSpace(filter.Level); value != "" && !strings.EqualFold(event.Level, value) {
+		return false
+	}
+	if value := strings.TrimSpace(filter.Component); value != "" && !strings.EqualFold(event.Component, value) {
+		return false
+	}
+	if value := strings.TrimSpace(filter.EntityKind); value != "" && !strings.EqualFold(event.EntityKind, value) {
+		return false
+	}
+	if value := strings.TrimSpace(filter.EntityID); value != "" && event.EntityID != value {
+		return false
+	}
+	return true
+}
+
+func explainRunHighlights(bundle *domain.RunBundle, summary *RunForensics) []string {
+	highlights := make([]string, 0, 6)
+	if summary.ErrorEvents == 0 {
+		highlights = append(highlights, "no error-level events recorded")
+	} else {
+		highlights = append(highlights, fmt.Sprintf("%d error event(s) recorded", summary.ErrorEvents))
+	}
+	if summary.ClassifiedUnmatched > 0 {
+		highlights = append(highlights, fmt.Sprintf("%d release(s) fell through to unmatched fallback", summary.ClassifiedUnmatched))
+	}
+	if summary.PublishSkipped > 0 {
+		highlights = append(highlights, fmt.Sprintf("%d publish action(s) were skipped as already up to date", summary.PublishSkipped))
+	}
+	if summary.PublishFailed > 0 {
+		highlights = append(highlights, fmt.Sprintf("%d publish error(s) occurred", summary.PublishFailed))
+	}
+	if bundle.Run.Status == domain.RunStatusSucceeded && summary.ReleaseSynced == 0 && summary.ReleaseUnchanged > 0 {
+		highlights = append(highlights, "run was effectively a no-op sync")
+	}
+	if bundle.Run.DryRun {
+		highlights = append(highlights, "run was dry-run only")
+	}
+	return highlights
+}
+
 func NotImplemented(feature string) error {
 	return errors.New(feature + " is not implemented in the current MVP")
 }
@@ -1363,6 +1532,40 @@ func FormatSourceDiscoverResult(result SourceDiscoverResult) string {
 		builder.WriteString(result.SnippetTOML)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func FormatRunForensics(result RunForensics) string {
+	lines := []string{
+		fmt.Sprintf("run_id: %s", result.Run.ID),
+		fmt.Sprintf("status=%s command=%s dry_run=%t", result.Run.Status, result.Run.Command, result.Run.DryRun),
+		fmt.Sprintf("started_at=%s", result.Run.StartedAt.Format(time.RFC3339)),
+		fmt.Sprintf("summary=%s", result.Run.Summary),
+		fmt.Sprintf("logs: %s | %s", result.LogText, result.LogJSON),
+		fmt.Sprintf(
+			"classify matched=%d unmatched=%d | sync changed=%d unchanged=%d | publish planned=%d skipped=%d succeeded=%d failed=%d",
+			result.ClassifiedMatched,
+			result.ClassifiedUnmatched,
+			result.ReleaseSynced,
+			result.ReleaseUnchanged,
+			result.PublishPlanned,
+			result.PublishSkipped,
+			result.PublishSucceeded,
+			result.PublishFailed,
+		),
+	}
+	if len(result.Highlights) > 0 {
+		lines = append(lines, "highlights:")
+		for _, highlight := range result.Highlights {
+			lines = append(lines, "- "+highlight)
+		}
+	}
+	if len(result.RecentErrors) > 0 {
+		lines = append(lines, "recent_errors:")
+		for _, event := range result.RecentErrors {
+			lines = append(lines, fmt.Sprintf("- %s [%s/%s] %s", event.Timestamp.Format(time.RFC3339), event.Component, event.EntityID, event.Message))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func publishTargetIdentity(target config.PublisherConfig, candidate domain.PublishCandidate) (targetKind, targetRef, publishHashInput string, err error) {

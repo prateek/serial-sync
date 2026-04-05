@@ -100,3 +100,5 @@ Notes:
 - `source discover --format toml` emits additive `[[sources]]` and `[[rules]]` snippets based on the Patreon account tied to the selected auth profile.
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).
+
+For real-world rule patterns, use [rules.md](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/docs/rules.md).
