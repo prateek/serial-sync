@@ -75,7 +75,7 @@ func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, sou
 		}
 	} else if _, authState, err := c.resolveLiveSession(ctx, auth, source); err == nil {
 		return provider.AuthBootstrapResult{State: authState, Action: "reused"}, nil
-	} else if authState == domain.AuthStateChallengeNeeded {
+	} else if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
 		return provider.AuthBootstrapResult{State: authState, Action: "failed"}, err
 	}
 	if c.bootstrap == nil {
@@ -85,8 +85,8 @@ func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, sou
 	if err != nil {
 		return provider.AuthBootstrapResult{State: authState, Action: "bootstrapped"}, err
 	}
-	if _, authState, err := c.resolveLiveSession(ctx, auth, source); err != nil {
-		return provider.AuthBootstrapResult{State: authState, Action: "bootstrapped"}, err
+	if _, err := loadSessionBundle(auth.SessionPath); err != nil {
+		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "bootstrapped"}, fmt.Errorf("load bootstrapped Patreon session: %w", err)
 	}
 	return provider.AuthBootstrapResult{State: domain.AuthStateAuthenticated, Action: "bootstrapped"}, nil
 }

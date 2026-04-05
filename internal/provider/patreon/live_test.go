@@ -144,6 +144,80 @@ func TestListReleasesReturnsChallengeRequiredWhenBootstrapFails(t *testing.T) {
 	}
 }
 
+func TestListReleasesRetriesRateLimitedCurrentUser(t *testing.T) {
+	t.Parallel()
+
+	server, currentUserRequests := newPatreonCurrentUserRateLimitTestServer(t, 2)
+	client := New()
+	client.apiBaseURL = server.URL
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ListReleases() error = %v", err)
+	}
+	if result.AuthState != domain.AuthStateAuthenticated {
+		t.Fatalf("authState = %q, want %q", result.AuthState, domain.AuthStateAuthenticated)
+	}
+	if got, want := len(result.Documents), 1; got != want {
+		t.Fatalf("len(docs) = %d, want %d", got, want)
+	}
+	if got, want := atomic.LoadInt32(currentUserRequests), int32(3); got != want {
+		t.Fatalf("current_user requests = %d, want %d", got, want)
+	}
+}
+
+func TestListReleasesReturnsAuthenticatedRateLimitError(t *testing.T) {
+	t.Parallel()
+
+	server, currentUserRequests := newPatreonCurrentUserRateLimitTestServer(t, patreonRetryAttempts)
+	client := New()
+	client.apiBaseURL = server.URL
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected rate limit error")
+	}
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("error = %v, want rate limited", err)
+	}
+	if result.AuthState != domain.AuthStateAuthenticated {
+		t.Fatalf("authState = %q, want %q", result.AuthState, domain.AuthStateAuthenticated)
+	}
+	if got, want := atomic.LoadInt32(currentUserRequests), int32(patreonRetryAttempts); got != want {
+		t.Fatalf("current_user requests = %d, want %d", got, want)
+	}
+}
+
 func TestPrepareReleaseDownloadsSelectedAttachment(t *testing.T) {
 	t.Parallel()
 
@@ -198,6 +272,46 @@ func TestPrepareReleaseDownloadsSelectedAttachment(t *testing.T) {
 	}
 	if _, err := os.Stat(localPath); err != nil {
 		t.Fatalf("cached attachment missing: %v", err)
+	}
+}
+
+func TestBootstrapAuthDoesNotRevalidateFreshSession(t *testing.T) {
+	t.Parallel()
+
+	server, currentUserRequests := newPatreonCurrentUserRateLimitTestServer(t, patreonRetryAttempts)
+	client := New()
+	client.apiBaseURL = server.URL
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	client.bootstrap = func(_ context.Context, auth config.AuthProfile, _ config.SourceConfig, profileDir string) (domain.AuthState, error) {
+		if profileDir == "" {
+			t.Fatalf("expected bootstrap profile dir")
+		}
+		writeTestSessionBundle(t, auth.SessionPath, server.URL)
+		return domain.AuthStateAuthenticated, nil
+	}
+
+	result, err := client.BootstrapAuth(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, true)
+	if err != nil {
+		t.Fatalf("BootstrapAuth() error = %v", err)
+	}
+	if result.State != domain.AuthStateAuthenticated {
+		t.Fatalf("state = %q, want %q", result.State, domain.AuthStateAuthenticated)
+	}
+	if got := atomic.LoadInt32(currentUserRequests); got != 0 {
+		t.Fatalf("current_user requests = %d, want 0", got)
 	}
 }
 
@@ -390,7 +504,7 @@ func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
 			AuthProfile: "patreon-default",
 			Enabled:     true,
 		},
-	}, 2)
+	}, provider.DiscoverOptions{SampleLimit: 2, MembershipFilter: "all"})
 	if err != nil {
 		t.Fatalf("DiscoverSources() error = %v", err)
 	}
@@ -422,6 +536,12 @@ func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
 	if len(configured.SampleTitles) == 0 || len(configured.SuggestedRules) == 0 {
 		t.Fatalf("configured suggestion missing samples or rules: %#v", configured)
 	}
+	if configured.SampledPosts != 2 {
+		t.Fatalf("configured.SampledPosts = %d, want 2", configured.SampledPosts)
+	}
+	if len(configured.Preview.Groups) == 0 || len(configured.Preview.Posts) != 2 {
+		t.Fatalf("configured preview missing groups or posts: %#v", configured.Preview)
+	}
 	if unconfigured == nil {
 		t.Fatalf("expected unconfigured suggestion for sidequest, got %#v", result.Suggestions)
 	}
@@ -433,6 +553,63 @@ func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
 	}
 	if got, want := unconfigured.Source.URL, "https://www.patreon.com/c/sidequest/posts"; got != want {
 		t.Fatalf("unconfigured source URL = %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverSourcesFiltersPaidCreators(t *testing.T) {
+	t.Parallel()
+
+	server := newPatreonDiscoveryTestServer(t)
+	client := New()
+	client.apiBaseURL = server.URL
+	client.bootstrap = func(context.Context, config.AuthProfile, config.SourceConfig, string) (domain.AuthState, error) {
+		t.Fatalf("bootstrap should not run when a persisted session is available")
+		return domain.AuthStateReauthRequired, nil
+	}
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.DiscoverSources(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, nil, provider.DiscoverOptions{
+		SampleLimit:      2,
+		MembershipFilter: "paid",
+		CreatorFilters:   []string{"plum"},
+	})
+	if err != nil {
+		t.Fatalf("DiscoverSources() error = %v", err)
+	}
+	if got, want := len(result.Suggestions), 1; got != want {
+		t.Fatalf("len(result.Suggestions) = %d, want %d", got, want)
+	}
+	if got, want := result.Suggestions[0].Source.ID, "plumparrot"; got != want {
+		t.Fatalf("result.Suggestions[0].Source.ID = %q, want %q", got, want)
+	}
+}
+
+func TestSuggestRulesForSourcePrefersTitleSeriesOverGenericTags(t *testing.T) {
+	t.Parallel()
+
+	docs := []provider.ReleaseDocument{
+		discoveryDoc("1", "The Sixth School. Book Two. Chapter 058.", []string{"Fantasy", "Mage", "Magic"}, nil),
+		discoveryDoc("2", "The Sixth School. Book Two. Chapter 057.", []string{"Fantasy", "Mage", "Magic"}, nil),
+		discoveryDoc("3", "The Sixth School. Book Two, Chapter 056.", []string{"Fantasy", "Mage", "Magic"}, nil),
+	}
+
+	rules := suggestRulesForSource("blaqquill", docs)
+	if len(rules) < 2 {
+		t.Fatalf("len(rules) = %d, want at least 2", len(rules))
+	}
+	if got, want := rules[0].MatchType, "title_regex"; got != want {
+		t.Fatalf("rules[0].MatchType = %q, want %q", got, want)
+	}
+	if strings.Contains(strings.ToLower(rules[0].MatchValue), "fantasy") {
+		t.Fatalf("unexpected generic tag rule in primary match: %#v", rules[0])
 	}
 }
 
@@ -517,6 +694,82 @@ func newPatreonAPITestServer(t *testing.T) *httptest.Server {
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server
+}
+
+func newPatreonCurrentUserRateLimitTestServer(t *testing.T, rateLimitedRequests int) (*httptest.Server, *int32) {
+	t.Helper()
+
+	var currentUserRequests int32
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.Header.Get("Cookie"), "session_id=patreon-test-session") {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("/api/current_user", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		call := atomic.AddInt32(&currentUserRequests, 1)
+		if int(call) <= rateLimitedRequests {
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":{"id":"user-1"},"included":[{"id":"campaign-1","type":"campaign","attributes":{"name":"Example Creator","url":"https://www.patreon.com/ExampleCreator","vanity":"ExampleCreator"}}]}`)
+	}))
+	mux.HandleFunc("/api/posts", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"123"}],"links":{"next":""}}`)
+	}))
+	mux.HandleFunc("/api/posts/123", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+  "data": {
+    "id": "123",
+    "type": "post",
+    "attributes": {
+      "title": "Chapter 1",
+      "post_type": "text",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/chapter-1-123",
+      "content": "<p>Hello world</p>",
+      "content_json_string": "",
+      "published_at": "2026-04-01T00:00:00Z",
+      "edited_at": "2026-04-01T00:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "campaign-1" } },
+      "user": { "data": { "id": "creator-user-1" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "campaign-1",
+      "type": "campaign",
+      "attributes": { "name": "Example Creator" },
+      "relationships": { "creator": { "data": { "id": "creator-user-1" } } }
+    },
+    {
+      "id": "creator-user-1",
+      "type": "user",
+      "attributes": { "full_name": "Example Creator", "vanity": "ExampleCreator" },
+      "relationships": {}
+    }
+  ]
+}`)
+	}))
+
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server, &currentUserRequests
 }
 
 func newPatreonPagedTestServer(t *testing.T, postIDs []string) (*httptest.Server, *int32) {
@@ -805,6 +1058,18 @@ func discoveryPostJSON(id, title, campaignID, creatorID string, tags, collection
   },
   "included": [%s]
 }`, id, title, id, id, campaignID, creatorID, strings.Join(collectionRefs, ","), strings.Join(tagRefs, ","), strings.Join(included, ","))
+}
+
+func discoveryDoc(id, title string, tags, collections []string) provider.ReleaseDocument {
+	return provider.ReleaseDocument{
+		Normalized: domain.NormalizedRelease{
+			ProviderReleaseID: id,
+			Title:             title,
+			Tags:              append([]string(nil), tags...),
+			Collections:       append([]string(nil), collections...),
+			TextHTML:          "<p>Example</p>",
+		},
+	}
 }
 
 func collectionPostJSON(id string) string {

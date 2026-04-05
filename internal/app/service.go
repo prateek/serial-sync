@@ -91,6 +91,7 @@ type SourceDiscoverResult struct {
 	Provider      string                      `json:"provider"`
 	AuthProfileID string                      `json:"auth_profile_id"`
 	AuthState     domain.AuthState            `json:"auth_state"`
+	Options       provider.DiscoverOptions    `json:"options"`
 	Suggestions   []provider.SourceSuggestion `json:"suggestions"`
 	Snippet       DiscoveryConfigSnippet      `json:"snippet"`
 	SnippetTOML   string                      `json:"snippet_toml"`
@@ -480,13 +481,13 @@ func (s *Service) ImportAuthSession(ctx context.Context, sourceFilter, authFilte
 	return result, nil
 }
 
-func (s *Service) DiscoverSources(ctx context.Context, authFilter string, sampleLimit int, includeConfigured bool, command string) (SourceDiscoverResult, error) {
+func (s *Service) DiscoverSources(ctx context.Context, authFilter string, options provider.DiscoverOptions, command string) (SourceDiscoverResult, error) {
 	scope := strings.TrimSpace(authFilter)
 	recorder, err := observe.Start(ctx, s.Repo, command, scope, false, s.observeOptions())
 	if err != nil {
 		return SourceDiscoverResult{}, err
 	}
-	result := SourceDiscoverResult{RunID: recorder.RunID()}
+	result := SourceDiscoverResult{RunID: recorder.RunID(), Options: options}
 	defer func() {
 		if err != nil {
 			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
@@ -502,7 +503,7 @@ func (s *Service) DiscoverSources(ctx context.Context, authFilter string, sample
 		err = fmt.Errorf("no provider registered for %q", auth.Provider)
 		return result, err
 	}
-	discovered, err := client.DiscoverSources(ctx, auth, s.Config.Sources, sampleLimit)
+	discovered, err := client.DiscoverSources(ctx, auth, s.Config.Sources, options)
 	result.Provider = discovered.Provider
 	result.AuthProfileID = auth.ID
 	result.AuthState = discovered.AuthState
@@ -513,7 +514,7 @@ func (s *Service) DiscoverSources(ctx context.Context, authFilter string, sample
 	}
 	snippet := DiscoveryConfigSnippet{}
 	for _, suggestion := range discovered.Suggestions {
-		if suggestion.AlreadyConfigured && !includeConfigured {
+		if suggestion.AlreadyConfigured && !options.IncludeConfigured {
 			continue
 		}
 		snippet.Sources = append(snippet.Sources, suggestion.Source)
@@ -1488,15 +1489,17 @@ func FormatRunOnceResult(result RunOnceResult) string {
 	}, "\n")
 }
 
-func FormatSourceDiscoverResult(result SourceDiscoverResult) string {
+func FormatSourceDiscoverResult(result SourceDiscoverResult, showPosts bool) string {
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf(
-		"run_id=%s provider=%s auth_profile=%s auth_state=%s suggestions=%d\n",
+		"run_id=%s provider=%s auth_profile=%s auth_state=%s suggestions=%d membership=%s scan=%s\n",
 		result.RunID,
 		result.Provider,
 		result.AuthProfileID,
 		result.AuthState,
 		len(result.Suggestions),
+		firstNonEmpty(result.Options.MembershipFilter, "all"),
+		discoveryScanLabel(result.Options),
 	))
 	for _, suggestion := range result.Suggestions {
 		status := "new"
@@ -1510,6 +1513,9 @@ func FormatSourceDiscoverResult(result SourceDiscoverResult) string {
 			firstNonEmpty(suggestion.MembershipKind, "unknown"),
 			status,
 		))
+		if suggestion.SampledPosts > 0 {
+			builder.WriteString(fmt.Sprintf("  scanned posts: %d\n", suggestion.SampledPosts))
+		}
 		if len(suggestion.SampleTitles) > 0 {
 			builder.WriteString("  titles: " + strings.Join(suggestion.SampleTitles, " | ") + "\n")
 		}
@@ -1526,12 +1532,63 @@ func FormatSourceDiscoverResult(result SourceDiscoverResult) string {
 			}
 			builder.WriteString("  rules: " + strings.Join(ruleLabels, ", ") + "\n")
 		}
+		if len(suggestion.Preview.Groups) > 0 {
+			builder.WriteString(fmt.Sprintf(
+				"  preview: groups=%d materializable=%d fallback=%d\n",
+				len(suggestion.Preview.Groups),
+				suggestion.Preview.Materializable,
+				suggestion.Preview.FallbackPosts,
+			))
+			for _, group := range suggestion.Preview.Groups {
+				label := group.MatchType
+				if strings.TrimSpace(group.MatchValue) != "" {
+					label += ":" + group.MatchValue
+				}
+				builder.WriteString(fmt.Sprintf(
+					"    - %s [%s] posts=%d materializable=%d\n",
+					group.TrackKey,
+					label+" "+string(group.ContentStrategy),
+					group.Total,
+					group.Materializable,
+				))
+				if len(group.SampleTitles) > 0 {
+					builder.WriteString("      titles: " + strings.Join(group.SampleTitles, " | ") + "\n")
+				}
+			}
+		}
+		if showPosts && len(suggestion.Preview.Posts) > 0 {
+			builder.WriteString("  posts:\n")
+			for _, post := range suggestion.Preview.Posts {
+				label := post.MatchType
+				if strings.TrimSpace(post.MatchValue) != "" {
+					label += ":" + post.MatchValue
+				}
+				builder.WriteString(fmt.Sprintf(
+					"    - %s [%s %s materializable=%t] %s\n",
+					post.TrackKey,
+					label,
+					post.ContentStrategy,
+					post.Materializable,
+					post.Title,
+				))
+			}
+		}
 	}
 	if strings.TrimSpace(result.SnippetTOML) != "" {
 		builder.WriteString("\nSuggested TOML snippet:\n")
 		builder.WriteString(result.SnippetTOML)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func discoveryScanLabel(options provider.DiscoverOptions) string {
+	if options.FullHistory {
+		return "full"
+	}
+	if options.SampleLimit <= 0 {
+		return "default"
+	}
+	return fmt.Sprintf("recent-%d", options.SampleLimit)
 }
 
 func FormatRunForensics(result RunForensics) string {

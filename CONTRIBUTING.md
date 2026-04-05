@@ -13,7 +13,7 @@ Before sending changes:
 
 ```sh
 go test ./...
-go run ./cmd/serial-sync --config ./examples/config.demo.toml plan sync
-go run ./cmd/serial-sync --config ./examples/config.demo.toml sync
-go run ./cmd/serial-sync --config ./examples/config.demo.toml publish
+go run ./cmd/serial-sync --config ./examples/config.demo.toml run --dry-run
+go run ./cmd/serial-sync --config ./examples/config.demo.toml run
+go run ./cmd/serial-sync --config ./examples/config.demo.toml debug runs
 ```

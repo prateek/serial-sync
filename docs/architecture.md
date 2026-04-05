@@ -11,7 +11,7 @@ The implementation follows the PRD’s ports-and-adapters shape:
 - `internal/observe`: run logs, structured events, and support-bundle inputs
 - `internal/app`: orchestration shared by CLI commands
 - `internal/runtime/display`: hidden-display helpers for containerized headed browser bootstrap
-- `internal/runtime/daemon`: local health, metrics, and discovery endpoints
+- `internal/runtime/daemon`: local health and metrics endpoints
 
 The first runtime slice is:
 

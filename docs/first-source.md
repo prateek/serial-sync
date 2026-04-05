@@ -1,32 +1,15 @@
 # First Source Walkthrough
 
-Use this when you want the fastest path from zero config to a working Patreon source.
+Use this when you want the fastest path from zero config to a working Patreon source and an offline rule-authoring workspace.
 
-## 1. Generate a starter config
+## 1. Start with a normal config
 
-Interactive:
-
-```sh
-serial-sync wizard
-```
-
-Non-interactive:
-
-```sh
-serial-sync wizard \
-  --non-interactive \
-  --path ./config.toml \
-  --source-url https://www.patreon.com/c/ExampleCreator/posts \
-  --source-id example-creator \
-  --publisher-path ./publish
-```
-
-The wizard writes:
+Use `serial-sync setup init` or write a config manually. The minimum useful config is:
 
 - one Patreon auth profile
 - one filesystem publisher
-- one enabled source
-- one fallback rule you can refine later
+- at least one enabled source
+- a rules file you will refine after inspecting a dump
 
 ## 2. Provide auth
 
@@ -36,40 +19,54 @@ Default bootstrap path:
 export PATREON_USERNAME='you@example.com'
 export PATREON_PASSWORD='your-password'
 export PATREON_TOTP_SECRET='OPTIONAL-BASE32-SECRET'
-serial-sync --config ./config.toml auth bootstrap --source example-creator
+serial-sync --config ./config.toml setup auth --source example-creator
 ```
 
 If you already have a valid session bundle:
 
 ```sh
-serial-sync --config ./config.toml auth import-session /path/to/patreon-session.json --auth-profile patreon-default
+serial-sync --config ./config.toml setup auth --import-session /path/to/patreon-session.json --auth-profile patreon-default
 ```
 
-## 3. Ask Patreon what you already follow
+## 3. Dump posts for offline rule authoring
 
-If you want suggestions instead of hand-authoring every source:
+Start by dumping all paid memberships into a local workspace:
 
 ```sh
-serial-sync --config ./config.toml source discover --auth-profile patreon-default
+serial-sync --config ./config.toml setup dump \
+  --auth-profile patreon-default \
+  --path ./serial-sync-rule-workspace \
+  --force
 ```
 
-To emit just the additive TOML:
+If you only want one or two creators, add `--creator` filters later.
+
+This writes:
+
+- `manifest.json`
+- `sources.toml`
+- `rules.toml`
+- `creators/<source-id>/posts.ndjson`
+
+Preview that rules file offline:
 
 ```sh
-serial-sync --config ./config.toml source discover --auth-profile patreon-default --format toml
+serial-sync --config ./config.toml setup preview \
+  --workspace ./serial-sync-rule-workspace \
+  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --show-posts
 ```
 
-The discovery flow:
+Use the dump workspace to:
 
-- inspects your active Patreon memberships
-- suggests creator-feed `[[sources]]`
-- samples recent posts for each creator
-- suggests starter `[[rules]]` from recurring tags, collections, or title prefixes
+- copy the suggested `[[sources]]` from `sources.toml` into your real config
+- edit `rules.toml`
+- iterate locally with `setup preview` until the grouped output looks right
 
-## 4. Sample the source safely
+## 4. Merge the dumped sources and sample safely
 
 ```sh
-serial-sync --config ./config.toml plan sync --source example-creator
+serial-sync --config ./config.toml run --dry-run --source example-creator
 ```
 
 Use the output to confirm:
@@ -81,16 +78,17 @@ Use the output to confirm:
 ## 5. Run one full cycle
 
 ```sh
-serial-sync --config ./config.toml run once --source example-creator --target local-files
+serial-sync --config ./config.toml run --source example-creator --target local-files
 ```
 
 ## 6. Inspect what happened
 
 ```sh
-serial-sync --config ./config.toml source inspect example-creator
-serial-sync --config ./config.toml runs inspect <run-id>
-serial-sync --config ./config.toml publish-record list --source example-creator
-serial-sync --config ./config.toml support bundle <run-id>
+serial-sync --config ./config.toml debug runs
+serial-sync --config ./config.toml debug run <run-id>
+serial-sync --config ./config.toml debug events <run-id> --component classify
+serial-sync --config ./config.toml debug publishes --source example-creator
+serial-sync --config ./config.toml debug bundle <run-id>
 ```
 
 Every run also writes:
@@ -100,7 +98,7 @@ Every run also writes:
 
 ## 7. Tighten the rules
 
-Replace the fallback-only rule with source-specific matching:
+Replace the draft rules in the dump workspace with source-specific matching:
 
 - `tag`
 - `collection`
@@ -114,5 +112,8 @@ Use the dedicated guide for examples and debugging flow:
 Then rerun:
 
 ```sh
-serial-sync --config ./config.toml plan sync --source example-creator
+serial-sync --config ./config.toml setup preview \
+  --workspace ./serial-sync-rule-workspace \
+  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --show-posts
 ```

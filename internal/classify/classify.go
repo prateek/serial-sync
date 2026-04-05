@@ -11,33 +11,48 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
+type ExplainedDecision struct {
+	Decision domain.TrackDecision
+	Rule     *config.RuleConfig
+}
+
 func Decide(sourceID string, release domain.NormalizedRelease, rules []config.RuleConfig) domain.TrackDecision {
+	return Explain(sourceID, release, rules).Decision
+}
+
+func Explain(sourceID string, release domain.NormalizedRelease, rules []config.RuleConfig) ExplainedDecision {
 	sorted := append([]config.RuleConfig(nil), rules...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].Priority < sorted[j].Priority
 	})
 	for idx, rule := range sorted {
 		if matches(rule, release) {
-			return domain.TrackDecision{
-				TrackKey:           rule.TrackKey,
-				TrackName:          fallback(rule.TrackName, rule.TrackKey),
-				RuleID:             ruleID(sourceID, idx, rule),
-				ReleaseRole:        domain.ReleaseRole(rule.ReleaseRole),
-				ContentStrategy:    domain.ContentStrategy(rule.ContentStrategy),
-				AttachmentGlob:     append([]string(nil), rule.AttachmentGlob...),
-				AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
-				AnthologyMode:      rule.AnthologyMode,
-				Matched:            true,
+			copied := rule
+			return ExplainedDecision{
+				Decision: domain.TrackDecision{
+					TrackKey:           rule.TrackKey,
+					TrackName:          fallback(rule.TrackName, rule.TrackKey),
+					RuleID:             ruleID(sourceID, idx, rule),
+					ReleaseRole:        domain.ReleaseRole(rule.ReleaseRole),
+					ContentStrategy:    domain.ContentStrategy(rule.ContentStrategy),
+					AttachmentGlob:     append([]string(nil), rule.AttachmentGlob...),
+					AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
+					AnthologyMode:      rule.AnthologyMode,
+					Matched:            true,
+				},
+				Rule: &copied,
 			}
 		}
 	}
-	return domain.TrackDecision{
-		TrackKey:        "unmatched",
-		TrackName:       "Unmatched",
-		RuleID:          "fallback/" + sourceID + "/unmatched",
-		ReleaseRole:     domain.ReleaseRoleUnknown,
-		ContentStrategy: domain.ContentStrategyManual,
-		Matched:         false,
+	return ExplainedDecision{
+		Decision: domain.TrackDecision{
+			TrackKey:        "unmatched",
+			TrackName:       "Unmatched",
+			RuleID:          "fallback/" + sourceID + "/unmatched",
+			ReleaseRole:     domain.ReleaseRoleUnknown,
+			ContentStrategy: domain.ContentStrategyManual,
+			Matched:         false,
+		},
 	}
 }
 

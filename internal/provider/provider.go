@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
@@ -25,6 +26,50 @@ type AuthBootstrapResult struct {
 	Action string
 }
 
+type DiscoverOptions struct {
+	SampleLimit       int      `json:"sample_limit,omitempty"`
+	FullHistory       bool     `json:"full_history,omitempty"`
+	MembershipFilter  string   `json:"membership_filter,omitempty"`
+	CreatorFilters    []string `json:"creator_filters,omitempty"`
+	IncludeConfigured bool     `json:"include_configured,omitempty"`
+	ShowPosts         bool     `json:"show_posts,omitempty"`
+	MetadataOnly      bool     `json:"metadata_only,omitempty"`
+}
+
+type DiscoveryPreviewGroup struct {
+	TrackKey        string                 `json:"track_key"`
+	TrackName       string                 `json:"track_name"`
+	MatchType       string                 `json:"match_type"`
+	MatchValue      string                 `json:"match_value,omitempty"`
+	ContentStrategy domain.ContentStrategy `json:"content_strategy"`
+	Total           int                    `json:"total"`
+	Materializable  int                    `json:"materializable"`
+	SampleTitles    []string               `json:"sample_titles,omitempty"`
+}
+
+type DiscoveryPreviewPost struct {
+	ProviderReleaseID string                 `json:"provider_release_id"`
+	Title             string                 `json:"title"`
+	PublishedAt       time.Time              `json:"published_at"`
+	Tags              []string               `json:"tags,omitempty"`
+	Collections       []string               `json:"collections,omitempty"`
+	Attachments       []string               `json:"attachments,omitempty"`
+	TrackKey          string                 `json:"track_key"`
+	TrackName         string                 `json:"track_name"`
+	MatchType         string                 `json:"match_type"`
+	MatchValue        string                 `json:"match_value,omitempty"`
+	ContentStrategy   domain.ContentStrategy `json:"content_strategy"`
+	Materializable    bool                   `json:"materializable"`
+}
+
+type DiscoveryPreview struct {
+	SampledPosts   int                     `json:"sampled_posts"`
+	Materializable int                     `json:"materializable"`
+	FallbackPosts  int                     `json:"fallback_posts"`
+	Groups         []DiscoveryPreviewGroup `json:"groups,omitempty"`
+	Posts          []DiscoveryPreviewPost  `json:"posts,omitempty"`
+}
+
 type SourceSuggestion struct {
 	Source            config.SourceConfig `json:"source"`
 	CreatorName       string              `json:"creator_name"`
@@ -32,10 +77,12 @@ type SourceSuggestion struct {
 	MembershipKind    string              `json:"membership_kind"`
 	AlreadyConfigured bool                `json:"already_configured"`
 	ExistingSourceID  string              `json:"existing_source_id,omitempty"`
+	SampledPosts      int                 `json:"sampled_posts,omitempty"`
 	SampleTitles      []string            `json:"sample_titles,omitempty"`
 	SampleTags        []string            `json:"sample_tags,omitempty"`
 	SampleCollections []string            `json:"sample_collections,omitempty"`
 	SuggestedRules    []config.RuleConfig `json:"suggested_rules,omitempty"`
+	Preview           DiscoveryPreview    `json:"preview,omitempty"`
 }
 
 type DiscoverResult struct {
@@ -49,7 +96,7 @@ type Client interface {
 	ValidateSource(source config.SourceConfig) error
 	ValidateSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (domain.AuthState, error)
 	BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (AuthBootstrapResult, error)
-	DiscoverSources(ctx context.Context, auth config.AuthProfile, existingSources []config.SourceConfig, sampleLimit int) (DiscoverResult, error)
+	DiscoverSources(ctx context.Context, auth config.AuthProfile, existingSources []config.SourceConfig, options DiscoverOptions) (DiscoverResult, error)
 	ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (ListResult, error)
 	PrepareRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc ReleaseDocument, decision domain.TrackDecision) (ReleaseDocument, domain.AuthState, error)
 }

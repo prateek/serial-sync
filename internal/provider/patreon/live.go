@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -138,6 +140,10 @@ const (
 	liveSyncCursorVersion    = 1
 	liveSyncCursorLookback   = 25
 	liveSyncCursorRecentKeep = 64
+	liveFetchWorkerLimit     = 4
+	patreonRetryAttempts     = 4
+	patreonRetryBaseDelay    = 500 * time.Millisecond
+	patreonRetryMaxDelay     = 4 * time.Second
 )
 
 type liveSyncCursor struct {
@@ -165,23 +171,10 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
 	}
-	docs := make([]provider.ReleaseDocument, 0, len(postIDs))
-	for _, postID := range postIDs {
-		raw, authState, err := c.fetchPostDetail(ctx, session, source, postID)
-		if err != nil {
-			return provider.ListResult{AuthState: authState}, err
-		}
-		norm, err := parsePost(raw, "")
-		if err != nil {
-			return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, fmt.Errorf("parse Patreon post %s: %w", postID, err)
-		}
-		norm.SourceType = string(detectSourceKind(source.URL))
-		docs = append(docs, provider.ReleaseDocument{
-			Normalized: norm,
-			RawJSON:    append(json.RawMessage(nil), raw...),
-		})
+	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs)
+	if err != nil {
+		return provider.ListResult{AuthState: authState}, err
 	}
-	provider.SortReleaseDocuments(docs)
 	return provider.ListResult{
 		Documents:  docs,
 		AuthState:  domain.AuthStateAuthenticated,
@@ -194,7 +187,7 @@ func (c *Client) ensureLiveSession(ctx context.Context, auth config.AuthProfile,
 	if err == nil {
 		return session, authState, nil
 	}
-	if authState == domain.AuthStateChallengeNeeded {
+	if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
 		return nil, authState, err
 	}
 	if normalizeAuthMode(auth.Mode) != "username_password" {
@@ -357,6 +350,80 @@ func (c *Client) fetchPostDetail(ctx context.Context, session *liveSession, sour
 	return c.get(ctx, session.client, requestURL, source.URL, &session.bundle, "application/json")
 }
 
+type postDocumentResult struct {
+	index     int
+	document  provider.ReleaseDocument
+	authState domain.AuthState
+	err       error
+}
+
+func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, source config.SourceConfig, postIDs []string) ([]provider.ReleaseDocument, domain.AuthState, error) {
+	if len(postIDs) == 0 {
+		return nil, domain.AuthStateAuthenticated, nil
+	}
+	workerCount := min(len(postIDs), liveFetchWorkerLimit)
+	jobs := make(chan int)
+	results := make(chan postDocumentResult, len(postIDs))
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				doc, authState, err := c.fetchPostDocument(ctx, session, source, postIDs[index])
+				results <- postDocumentResult{
+					index:     index,
+					document:  doc,
+					authState: authState,
+					err:       err,
+				}
+			}
+		}()
+	}
+	go func() {
+		for index := range len(postIDs) {
+			jobs <- index
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
+	docs := make([]provider.ReleaseDocument, len(postIDs))
+	authState := domain.AuthStateAuthenticated
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+				authState = result.authState
+			}
+			continue
+		}
+		docs[result.index] = result.document
+	}
+	if firstErr != nil {
+		return nil, authState, firstErr
+	}
+	provider.SortReleaseDocuments(docs)
+	return docs, domain.AuthStateAuthenticated, nil
+}
+
+func (c *Client) fetchPostDocument(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) (provider.ReleaseDocument, domain.AuthState, error) {
+	raw, authState, err := c.fetchPostDetail(ctx, session, source, postID)
+	if err != nil {
+		return provider.ReleaseDocument{}, authState, err
+	}
+	norm, err := parsePost(raw, "")
+	if err != nil {
+		return provider.ReleaseDocument{}, domain.AuthStateReauthRequired, fmt.Errorf("parse Patreon post %s: %w", postID, err)
+	}
+	norm.SourceType = string(detectSourceKind(source.URL))
+	return provider.ReleaseDocument{
+		Normalized: norm,
+		RawJSON:    append(json.RawMessage(nil), raw...),
+	}, domain.AuthStateAuthenticated, nil
+}
+
 func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision) (provider.ReleaseDocument, domain.AuthState, error) {
 	switch decision.ContentStrategy {
 	case domain.ContentStrategyAttachmentPreferred, domain.ContentStrategyAttachmentOnly:
@@ -424,9 +491,25 @@ func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSessio
 }
 
 func (c *Client) get(ctx context.Context, client *http.Client, requestURL, referer string, bundle *sessionBundle, accept string) ([]byte, domain.AuthState, error) {
+	for attempt := range patreonRetryAttempts {
+		body, authState, retryDelay, err := c.getOnce(ctx, client, requestURL, referer, bundle, accept, attempt+1)
+		if retryDelay < 0 {
+			return body, authState, err
+		}
+		if attempt == patreonRetryAttempts-1 {
+			return nil, authState, err
+		}
+		if waitErr := sleepWithContext(ctx, retryDelay); waitErr != nil {
+			return nil, authState, waitErr
+		}
+	}
+	return nil, domain.AuthStateAuthenticated, fmt.Errorf("Patreon request retries exhausted for %s", requestURL)
+}
+
+func (c *Client) getOnce(ctx context.Context, client *http.Client, requestURL, referer string, bundle *sessionBundle, accept string, attempt int) ([]byte, domain.AuthState, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return nil, domain.AuthStateReauthRequired, err
+		return nil, domain.AuthStateReauthRequired, -1, err
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
@@ -439,20 +522,23 @@ func (c *Client) get(ctx context.Context, client *http.Client, requestURL, refer
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, domain.AuthStateReauthRequired, err
+		return nil, domain.AuthStateReauthRequired, -1, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, domain.AuthStateReauthRequired, err
+		return nil, domain.AuthStateReauthRequired, -1, err
 	}
 	if authState, authErr := classifyHTTPAuthFailure(resp, body); authErr != nil {
-		return nil, authState, authErr
+		return nil, authState, -1, authErr
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, domain.AuthStateAuthenticated, retryDelay(resp.Header.Get("Retry-After"), attempt), fmt.Errorf("Patreon rate limited request with status %d for %s", resp.StatusCode, requestURL)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, domain.AuthStateReauthRequired, fmt.Errorf("unexpected Patreon response status %d for %s", resp.StatusCode, requestURL)
+		return nil, domain.AuthStateReauthRequired, -1, fmt.Errorf("unexpected Patreon response status %d for %s", resp.StatusCode, requestURL)
 	}
-	return body, domain.AuthStateAuthenticated, nil
+	return body, domain.AuthStateAuthenticated, -1, nil
 }
 
 func classifyHTTPAuthFailure(resp *http.Response, body []byte) (domain.AuthState, error) {
@@ -466,6 +552,9 @@ func classifyHTTPAuthFailure(resp *http.Response, body []byte) (domain.AuthState
 	}
 	if isHTML && (strings.Contains(bodyText, "two-factor") || strings.Contains(bodyText, "two factor") || strings.Contains(bodyText, "one-time code") || strings.Contains(bodyText, "verify it")) {
 		return domain.AuthStateChallengeNeeded, errors.New("Patreon requires an interactive verification step")
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", nil
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return domain.AuthStateExpired, fmt.Errorf("Patreon rejected the saved session with status %d", resp.StatusCode)
@@ -483,6 +572,54 @@ func responseLooksLikeHTML(resp *http.Response, bodyText string) bool {
 	}
 	trimmed := strings.TrimSpace(bodyText)
 	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
+}
+
+func retryDelay(header string, attempt int) time.Duration {
+	header = strings.TrimSpace(header)
+	if header != "" {
+		if seconds, err := strconv.Atoi(header); err == nil && seconds >= 0 {
+			return clampRetryDelay(time.Duration(seconds) * time.Second)
+		}
+		if when, err := http.ParseTime(header); err == nil {
+			return clampRetryDelay(time.Until(when))
+		}
+	}
+	return clampRetryDelay(backoffDelay(attempt))
+}
+
+func clampRetryDelay(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+	if delay > patreonRetryMaxDelay {
+		return patreonRetryMaxDelay
+	}
+	return delay
+}
+
+func backoffDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return patreonRetryBaseDelay
+	}
+	delay := patreonRetryBaseDelay
+	for remaining := 1; remaining < attempt; remaining++ {
+		delay *= 2
+		if delay >= patreonRetryMaxDelay {
+			return patreonRetryMaxDelay
+		}
+	}
+	return delay
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func httpClientFromSession() (*http.Client, error) {

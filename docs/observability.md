@@ -36,13 +36,11 @@ Event payload files are stored under:
 Useful operator commands:
 
 ```sh
-serial-sync runs list
-serial-sync runs inspect <run-id>
-serial-sync runs events <run-id>
-serial-sync runs explain <run-id>
-serial-sync source inspect <source>
-serial-sync publish-record list
-serial-sync support bundle <run-id>
+serial-sync debug runs
+serial-sync debug events <run-id>
+serial-sync debug run <run-id>
+serial-sync debug publishes
+serial-sync debug bundle <run-id>
 ```
 
 ## Daemon Endpoints
@@ -52,21 +50,10 @@ The daemon exposes:
 - `/healthz`
 - `/status`
 - `/metrics`
-- `/discover/sources`
-- `/discover/config`
-- `/runs`
-- `/runs/events`
-- `/runs/explain`
-
-Examples:
-
-- `GET /runs?limit=20`
-- `GET /runs/events?run_id=<run-id>&component=publish`
-- `GET /runs/explain?run_id=<run-id>`
 
 ## Support Bundles
 
-`support bundle <run-id>` includes:
+`debug bundle <run-id>` includes:
 
 - redacted config
 - run and event summaries

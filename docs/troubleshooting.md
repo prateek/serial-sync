@@ -9,7 +9,7 @@ Patreon presented an interactive step the current MVP does not solve automatical
 - SMS / email one-time code
 - passwordless or social-login-only auth flow
 
-If the challenge is an authenticator-app code, set `totp_secret_env` in the auth profile and retry. Otherwise the tool stops intentionally. Re-run after completing auth in the dedicated Chromium profile next to your configured `session_path`, or import a fresh session bundle with `serial-sync auth import-session`.
+If the challenge is an authenticator-app code, set `totp_secret_env` in the auth profile and retry. Otherwise the tool stops intentionally. Re-run after completing auth in the dedicated Chromium profile next to your configured `session_path`, or import a fresh session bundle with `serial-sync setup auth --import-session`.
 
 ## `reauth_required`
 
@@ -19,21 +19,21 @@ Check:
 - the configured Patreon creator URL is correct
 - the saved session file under `session_path` is still valid
 
-If the saved session is stale, remove the session file and its sibling profile directory, then run `serial-sync sync --dry-run` again.
+If the saved session is stale, remove the session file and its sibling profile directory, then run `serial-sync run --dry-run` again.
 
 ## I already have a Patreon session bundle
 
 Import it directly:
 
 ```sh
-serial-sync auth import-session /path/to/patreon-session.json --auth-profile patreon-default
+serial-sync setup auth --import-session /path/to/patreon-session.json --auth-profile patreon-default
 ```
 
 The command copies the bundle into `session_path` and validates it against the matching source configuration.
 
 ## Chrome / Chromium is missing
 
-Live Patreon bootstrap uses a dedicated Chromium profile in a headed browser session. In Docker on Linux, `serial-sync` starts Xvfb automatically when no display is available. If you are not using the bundled image, install Chrome or Chromium and `Xvfb`, then rerun the auth bootstrap or sync.
+Live Patreon bootstrap uses a dedicated Chromium profile in a headed browser session. In Docker on Linux, `serial-sync` starts Xvfb automatically when no display is available. If you are not using the bundled image, install Chrome or Chromium and `Xvfb`, then rerun `serial-sync setup auth` or `serial-sync run`.
 
 ## I want a fully offline demo
 
@@ -48,11 +48,11 @@ Use the bundled fixtures under `testdata/fixtures` or `examples/config.demo.toml
 
 Check:
 
-- `serial-sync source inspect <source>`
-- `serial-sync source discover --auth-profile <profile>`
-- `serial-sync runs inspect <run-id>`
-- `serial-sync publish-record list`
-- `serial-sync publish-record inspect <publish-record-id>`
+- `serial-sync setup dump --auth-profile <profile> --path ./serial-sync-rule-workspace --force`
+- `serial-sync debug run <run-id>`
+- `serial-sync debug events <run-id> --component publish`
+- `serial-sync debug publishes`
+- `serial-sync debug publish <publish-record-id>`
 - the `publish/` directory
 
 If the canonical artifact hash has already been published to the same target, `publish` will skip it by design.
@@ -68,4 +68,4 @@ Each run now writes:
 - `<log_root>/<run-id>.log`
 - `<log_root>/<run-id>.jsonl`
 
-By default, `log_root` is under your state directory. `support bundle <run-id>` copies those logs alongside the run summary and payload references.
+By default, `log_root` is under your state directory. `debug bundle <run-id>` copies those logs alongside the run summary and payload references.

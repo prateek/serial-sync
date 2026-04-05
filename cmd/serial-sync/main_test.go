@@ -20,11 +20,11 @@ func TestGlobalConfigFlagParsesBeforeOrAfterCommand(t *testing.T) {
 	}{
 		{
 			name: "before command",
-			args: []string{"--config", wantPath, "config", "validate"},
+			args: []string{"--config", wantPath, "setup", "check"},
 		},
 		{
 			name: "after command",
-			args: []string{"config", "validate", "--config", wantPath},
+			args: []string{"setup", "check", "--config", wantPath},
 		},
 	}
 
@@ -42,7 +42,7 @@ func TestGlobalConfigFlagParsesBeforeOrAfterCommand(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse() error = %v", err)
 			}
-			if got, want := ctx.Command(), "config validate"; got != want {
+			if got, want := ctx.Command(), "setup check"; got != want {
 				t.Fatalf("ctx.Command() = %q, want %q", got, want)
 			}
 			if got, want := cli.ConfigPath, wantPath; got != want {
@@ -52,7 +52,7 @@ func TestGlobalConfigFlagParsesBeforeOrAfterCommand(t *testing.T) {
 	}
 }
 
-func TestPlanSyncCommandShape(t *testing.T) {
+func TestRunCommandShape(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -61,19 +61,22 @@ func TestPlanSyncCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"plan", "sync", "--source", "plum-parrot"})
+	ctx, err := parser.Parse([]string{"run", "--source", "plum-parrot", "--target", "local-files"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := ctx.Command(), "plan sync"; got != want {
+	if got, want := ctx.Command(), "run exec"; got != want {
 		t.Fatalf("ctx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Plan.Sync.SourceID, "plum-parrot"; got != want {
-		t.Fatalf("cli.Plan.Sync.SourceID = %q, want %q", got, want)
+	if got, want := cli.Run.Exec.SourceID, "plum-parrot"; got != want {
+		t.Fatalf("cli.Run.Exec.SourceID = %q, want %q", got, want)
+	}
+	if got, want := cli.Run.Exec.TargetID, "local-files"; got != want {
+		t.Fatalf("cli.Run.Exec.TargetID = %q, want %q", got, want)
 	}
 }
 
-func TestRunOnceCommandShape(t *testing.T) {
+func TestRunDryRunCommandShape(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -82,22 +85,22 @@ func TestRunOnceCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"run", "once", "--source", "plum-parrot", "--target", "local-files"})
+	ctx, err := parser.Parse([]string{"run", "--source", "plum-parrot", "--dry-run"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := ctx.Command(), "run once"; got != want {
+	if got, want := ctx.Command(), "run exec"; got != want {
 		t.Fatalf("ctx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Run.Once.SourceID, "plum-parrot"; got != want {
-		t.Fatalf("cli.Run.Once.SourceID = %q, want %q", got, want)
+	if got, want := cli.Run.Exec.SourceID, "plum-parrot"; got != want {
+		t.Fatalf("cli.Run.Exec.SourceID = %q, want %q", got, want)
 	}
-	if got, want := cli.Run.Once.TargetID, "local-files"; got != want {
-		t.Fatalf("cli.Run.Once.TargetID = %q, want %q", got, want)
+	if !cli.Run.Exec.DryRun {
+		t.Fatal("expected dry-run flag to be set")
 	}
 }
 
-func TestAuthBootstrapCommandShape(t *testing.T) {
+func TestRunDaemonCommandShape(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -106,22 +109,49 @@ func TestAuthBootstrapCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"auth", "bootstrap", "--auth-profile", "patreon-default", "--force"})
+	ctx, err := parser.Parse([]string{"run", "daemon", "--source", "plum-parrot", "--target", "local-files", "--poll-interval", "5m"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := ctx.Command(), "auth bootstrap"; got != want {
+	if got, want := ctx.Command(), "run daemon"; got != want {
 		t.Fatalf("ctx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Auth.Bootstrap.AuthProfileID, "patreon-default"; got != want {
-		t.Fatalf("cli.Auth.Bootstrap.AuthProfileID = %q, want %q", got, want)
+	if got, want := cli.Run.Daemon.SourceID, "plum-parrot"; got != want {
+		t.Fatalf("cli.Run.Daemon.SourceID = %q, want %q", got, want)
 	}
-	if !cli.Auth.Bootstrap.Force {
+	if got, want := cli.Run.Daemon.TargetID, "local-files"; got != want {
+		t.Fatalf("cli.Run.Daemon.TargetID = %q, want %q", got, want)
+	}
+	if got, want := cli.Run.Daemon.PollInterval, "5m"; got != want {
+		t.Fatalf("cli.Run.Daemon.PollInterval = %q, want %q", got, want)
+	}
+}
+
+func TestSetupAuthBootstrapCommandShape(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{}
+	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	if err != nil {
+		t.Fatalf("newParser() error = %v", err)
+	}
+
+	ctx, err := parser.Parse([]string{"setup", "auth", "--auth-profile", "patreon-default", "--force"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := ctx.Command(), "setup auth"; got != want {
+		t.Fatalf("ctx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Setup.Auth.AuthProfileID, "patreon-default"; got != want {
+		t.Fatalf("cli.Setup.Auth.AuthProfileID = %q, want %q", got, want)
+	}
+	if !cli.Setup.Auth.Force {
 		t.Fatal("expected force flag to be set")
 	}
 }
 
-func TestAuthImportSessionCommandShape(t *testing.T) {
+func TestSetupAuthImportCommandShape(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -130,19 +160,19 @@ func TestAuthImportSessionCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"auth", "import-session", "/tmp/patreon.json", "--auth-profile", "patreon-default"})
+	ctx, err := parser.Parse([]string{"setup", "auth", "--import-session", "/tmp/patreon.json", "--auth-profile", "patreon-default"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := ctx.Command(), "auth import-session <session-file>"; got != want {
+	if got, want := ctx.Command(), "setup auth"; got != want {
 		t.Fatalf("ctx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Auth.ImportSession.SessionFile, "/tmp/patreon.json"; got != want {
-		t.Fatalf("cli.Auth.ImportSession.SessionFile = %q, want %q", got, want)
+	if got, want := cli.Setup.Auth.ImportSession, "/tmp/patreon.json"; got != want {
+		t.Fatalf("cli.Setup.Auth.ImportSession = %q, want %q", got, want)
 	}
 }
 
-func TestPublishRecordCommandsShape(t *testing.T) {
+func TestSetupDumpCommandShape(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -151,51 +181,25 @@ func TestPublishRecordCommandsShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	listCtx, err := parser.Parse([]string{"publish-record", "list", "--source", "plum-parrot", "--target", "local-files"})
-	if err != nil {
-		t.Fatalf("Parse(list) error = %v", err)
-	}
-	if got, want := listCtx.Command(), "publish-record list"; got != want {
-		t.Fatalf("listCtx.Command() = %q, want %q", got, want)
-	}
-
-	inspectCtx, err := parser.Parse([]string{"publish-record", "inspect", "pub_123"})
-	if err != nil {
-		t.Fatalf("Parse(inspect) error = %v", err)
-	}
-	if got, want := inspectCtx.Command(), "publish-record inspect <publish-record>"; got != want {
-		t.Fatalf("inspectCtx.Command() = %q, want %q", got, want)
-	}
-	if got, want := cli.PublishRecord.Inspect.Record, "pub_123"; got != want {
-		t.Fatalf("cli.PublishRecord.Inspect.Record = %q, want %q", got, want)
-	}
-}
-
-func TestWizardCommandShape(t *testing.T) {
-	t.Parallel()
-
-	cli := CLI{}
-	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
-	if err != nil {
-		t.Fatalf("newParser() error = %v", err)
-	}
-
-	ctx, err := parser.Parse([]string{"wizard", "--non-interactive", "--source-url", "https://www.patreon.com/c/ExampleCreator/posts"})
+	ctx, err := parser.Parse([]string{"setup", "dump", "--auth-profile", "patreon-default", "--membership", "paid", "--creator", "actus", "--path", "./workspace", "--force"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := ctx.Command(), "wizard"; got != want {
+	if got, want := ctx.Command(), "setup dump"; got != want {
 		t.Fatalf("ctx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Wizard.SourceURL, "https://www.patreon.com/c/ExampleCreator/posts"; got != want {
-		t.Fatalf("cli.Wizard.SourceURL = %q, want %q", got, want)
+	if got, want := cli.Setup.Dump.AuthProfileID, "patreon-default"; got != want {
+		t.Fatalf("cli.Setup.Dump.AuthProfileID = %q, want %q", got, want)
 	}
-	if !cli.Wizard.NonInteractive {
-		t.Fatal("expected non-interactive flag to be set")
+	if got, want := cli.Setup.Dump.Path, "./workspace"; got != want {
+		t.Fatalf("cli.Setup.Dump.Path = %q, want %q", got, want)
+	}
+	if !cli.Setup.Dump.Force {
+		t.Fatal("expected force flag to be set")
 	}
 }
 
-func TestSourceDiscoverCommandShape(t *testing.T) {
+func TestSetupPreviewCommandShape(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -204,28 +208,31 @@ func TestSourceDiscoverCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"source", "discover", "--auth-profile", "patreon-default", "--sample", "3", "--include-configured", "--format", "toml"})
+	ctx, err := parser.Parse([]string{"setup", "preview", "--workspace", "./workspace", "--rules-file", "./rules.toml", "--creator", "actus", "--show-posts", "--format", "json"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if got, want := ctx.Command(), "source discover"; got != want {
+	if got, want := ctx.Command(), "setup preview"; got != want {
 		t.Fatalf("ctx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Source.Discover.AuthProfileID, "patreon-default"; got != want {
-		t.Fatalf("cli.Source.Discover.AuthProfileID = %q, want %q", got, want)
+	if got, want := cli.Setup.Preview.Workspace, "./workspace"; got != want {
+		t.Fatalf("cli.Setup.Preview.Workspace = %q, want %q", got, want)
 	}
-	if got, want := cli.Source.Discover.Sample, 3; got != want {
-		t.Fatalf("cli.Source.Discover.Sample = %d, want %d", got, want)
+	if got, want := cli.Setup.Preview.RulesFile, "./rules.toml"; got != want {
+		t.Fatalf("cli.Setup.Preview.RulesFile = %q, want %q", got, want)
 	}
-	if !cli.Source.Discover.IncludeConfigured {
-		t.Fatal("expected include-configured flag to be set")
+	if got, want := len(cli.Setup.Preview.Creators), 1; got != want {
+		t.Fatalf("len(cli.Setup.Preview.Creators) = %d, want %d", got, want)
 	}
-	if got, want := cli.Source.Discover.Format, "toml"; got != want {
-		t.Fatalf("cli.Source.Discover.Format = %q, want %q", got, want)
+	if !cli.Setup.Preview.ShowPosts {
+		t.Fatal("expected show-posts flag to be set")
+	}
+	if got, want := cli.Setup.Preview.Format, "json"; got != want {
+		t.Fatalf("cli.Setup.Preview.Format = %q, want %q", got, want)
 	}
 }
 
-func TestRunsInspectCommandShape(t *testing.T) {
+func TestDebugCommandShapes(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{}
@@ -234,63 +241,72 @@ func TestRunsInspectCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"runs", "inspect", "run_123"})
+	runsCtx, err := parser.Parse([]string{"debug", "runs", "--limit", "5"})
 	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
+		t.Fatalf("Parse(runs) error = %v", err)
 	}
-	if got, want := ctx.Command(), "runs inspect <run-id>"; got != want {
-		t.Fatalf("ctx.Command() = %q, want %q", got, want)
+	if got, want := runsCtx.Command(), "debug runs"; got != want {
+		t.Fatalf("runsCtx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Runs.Inspect.RunID, "run_123"; got != want {
-		t.Fatalf("cli.Runs.Inspect.RunID = %q, want %q", got, want)
+	if got, want := cli.Debug.Runs.Limit, 5; got != want {
+		t.Fatalf("cli.Debug.Runs.Limit = %d, want %d", got, want)
 	}
-}
 
-func TestRunsExtendedCommandShape(t *testing.T) {
-	t.Parallel()
-
-	cli := CLI{}
-	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	runCtx, err := parser.Parse([]string{"debug", "run", "run_123"})
 	if err != nil {
-		t.Fatalf("newParser() error = %v", err)
+		t.Fatalf("Parse(run) error = %v", err)
+	}
+	if got, want := runCtx.Command(), "debug run <run-id>"; got != want {
+		t.Fatalf("runCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Debug.Run.RunID, "run_123"; got != want {
+		t.Fatalf("cli.Debug.Run.RunID = %q, want %q", got, want)
 	}
 
-	listCtx, err := parser.Parse([]string{"runs", "list", "--limit", "5"})
-	if err != nil {
-		t.Fatalf("Parse(list) error = %v", err)
-	}
-	if got, want := listCtx.Command(), "runs list"; got != want {
-		t.Fatalf("listCtx.Command() = %q, want %q", got, want)
-	}
-	if got, want := cli.Runs.List.Limit, 5; got != want {
-		t.Fatalf("cli.Runs.List.Limit = %d, want %d", got, want)
-	}
-
-	eventsCtx, err := parser.Parse([]string{"runs", "events", "run_123", "--level", "error", "--component", "publish"})
+	eventsCtx, err := parser.Parse([]string{"debug", "events", "run_123", "--level", "error", "--component", "publish"})
 	if err != nil {
 		t.Fatalf("Parse(events) error = %v", err)
 	}
-	if got, want := eventsCtx.Command(), "runs events <run-id>"; got != want {
+	if got, want := eventsCtx.Command(), "debug events <run-id>"; got != want {
 		t.Fatalf("eventsCtx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Runs.Events.RunID, "run_123"; got != want {
-		t.Fatalf("cli.Runs.Events.RunID = %q, want %q", got, want)
+	if got, want := cli.Debug.Events.RunID, "run_123"; got != want {
+		t.Fatalf("cli.Debug.Events.RunID = %q, want %q", got, want)
 	}
-	if got, want := cli.Runs.Events.Level, "error"; got != want {
-		t.Fatalf("cli.Runs.Events.Level = %q, want %q", got, want)
-	}
-	if got, want := cli.Runs.Events.Component, "publish"; got != want {
-		t.Fatalf("cli.Runs.Events.Component = %q, want %q", got, want)
+	if got, want := cli.Debug.Events.Component, "publish"; got != want {
+		t.Fatalf("cli.Debug.Events.Component = %q, want %q", got, want)
 	}
 
-	explainCtx, err := parser.Parse([]string{"runs", "explain", "run_123"})
+	publishesCtx, err := parser.Parse([]string{"debug", "publishes", "--source", "plum-parrot", "--target", "local-files"})
 	if err != nil {
-		t.Fatalf("Parse(explain) error = %v", err)
+		t.Fatalf("Parse(publishes) error = %v", err)
 	}
-	if got, want := explainCtx.Command(), "runs explain <run-id>"; got != want {
-		t.Fatalf("explainCtx.Command() = %q, want %q", got, want)
+	if got, want := publishesCtx.Command(), "debug publishes"; got != want {
+		t.Fatalf("publishesCtx.Command() = %q, want %q", got, want)
 	}
-	if got, want := cli.Runs.Explain.RunID, "run_123"; got != want {
-		t.Fatalf("cli.Runs.Explain.RunID = %q, want %q", got, want)
+	if got, want := cli.Debug.Publishes.SourceID, "plum-parrot"; got != want {
+		t.Fatalf("cli.Debug.Publishes.SourceID = %q, want %q", got, want)
+	}
+
+	publishCtx, err := parser.Parse([]string{"debug", "publish", "pub_123"})
+	if err != nil {
+		t.Fatalf("Parse(publish) error = %v", err)
+	}
+	if got, want := publishCtx.Command(), "debug publish <publish-record>"; got != want {
+		t.Fatalf("publishCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Debug.Publish.Record, "pub_123"; got != want {
+		t.Fatalf("cli.Debug.Publish.Record = %q, want %q", got, want)
+	}
+
+	bundleCtx, err := parser.Parse([]string{"debug", "bundle", "run_123"})
+	if err != nil {
+		t.Fatalf("Parse(bundle) error = %v", err)
+	}
+	if got, want := bundleCtx.Command(), "debug bundle <run-id>"; got != want {
+		t.Fatalf("bundleCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Debug.Bundle.RunID, "run_123"; got != want {
+		t.Fatalf("cli.Debug.Bundle.RunID = %q, want %q", got, want)
 	}
 }

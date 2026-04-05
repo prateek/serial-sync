@@ -93,11 +93,11 @@ Notes:
 - `totp_secret_env` is optional and only needed when Patreon asks for an authenticator-app code that can be satisfied with TOTP.
 - live bootstrap also keeps a dedicated Chromium profile beside that session file for reauth and challenge retries.
 - `lease_ttl` controls how long a daemon source lease survives if the worker crashes before it can release it.
-- `health_addr` controls the daemon’s local `/healthz`, `/status`, `/metrics`, `/discover/sources`, and `/discover/config` listener.
+- `health_addr` controls the daemon’s local `/healthz`, `/status`, and `/metrics` listener.
 - in the Docker image, `/config/config.toml` and `/state` are the default roots.
 - later runs reuse the saved session over plain HTTP unless Patreon forces a reauth.
-- `auth import-session` can seed `session_path` from an externally generated session bundle.
-- `source discover --format toml` emits additive `[[sources]]` and `[[rules]]` snippets based on the Patreon account tied to the selected auth profile.
+- `setup auth --import-session` can seed `session_path` from an externally generated session bundle.
+- `setup dump` writes additive `sources.toml` plus a local `rules.toml` scaffold based on the Patreon memberships tied to the selected auth profile.
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).
 

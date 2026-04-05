@@ -11,11 +11,12 @@ import (
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
+	"github.com/prateek/serial-sync/internal/rulepreview"
 )
 
-const defaultDiscoverySampleLimit = 5
+const defaultDiscoverySampleLimit = 20
 
-func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, existingSources []config.SourceConfig, sampleLimit int) (provider.DiscoverResult, error) {
+func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, existingSources []config.SourceConfig, options provider.DiscoverOptions) (provider.DiscoverResult, error) {
 	result := provider.DiscoverResult{
 		Provider:  c.Name(),
 		AuthState: domain.AuthStateReauthRequired,
@@ -26,8 +27,8 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 	if normalizeAuthMode(auth.Mode) != "username_password" {
 		return result, fmt.Errorf("Patreon source discovery requires username_password mode for auth profile %q", auth.ID)
 	}
-	if sampleLimit <= 0 {
-		sampleLimit = defaultDiscoverySampleLimit
+	if !options.MetadataOnly && !options.FullHistory && options.SampleLimit <= 0 {
+		options.SampleLimit = defaultDiscoverySampleLimit
 	}
 	session, user, authState, err := c.ensureDiscoverySession(ctx, auth)
 	result.AuthState = authState
@@ -61,20 +62,38 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 			CreatorHandle:  handle,
 			MembershipKind: membershipKinds[item.ID],
 		}
+		if !matchesMembershipFilter(suggestion.MembershipKind, options.MembershipFilter) {
+			continue
+		}
 		if existing, ok := matchExistingSource(existingByHandle, sourceURL, handle); ok {
 			suggestion.AlreadyConfigured = true
 			suggestion.ExistingSourceID = existing.ID
 		}
+		if !matchesCreatorFilters(suggestion, options.CreatorFilters) {
+			continue
+		}
 		sessionWithCampaign := *session
 		sessionWithCampaign.campaign = campaignInfo{ID: item.ID, Name: suggestion.CreatorName}
-		sampledDocs, sampleErr := c.sampleDiscoveryDocuments(ctx, &sessionWithCampaign, suggestion.Source, sampleLimit)
-		if sampleErr != nil {
-			return result, sampleErr
+		if !options.MetadataOnly {
+			documentLimit := options.SampleLimit
+			if options.FullHistory {
+				documentLimit = 0
+			}
+			sampledDocs, sampleErr := c.sampleDiscoveryDocuments(ctx, &sessionWithCampaign, suggestion.Source, documentLimit)
+			if sampleErr != nil {
+				return result, sampleErr
+			}
+			suggestion.SampledPosts = len(sampledDocs)
+			sampleSummaryLimit := options.SampleLimit
+			if sampleSummaryLimit <= 0 || sampleSummaryLimit > len(sampledDocs) {
+				sampleSummaryLimit = len(sampledDocs)
+			}
+			suggestion.SampleTitles = sampleTitles(sampledDocs, sampleSummaryLimit)
+			suggestion.SampleTags = sampleValues(sampledDocs, sampleSummaryLimit, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Tags })
+			suggestion.SampleCollections = sampleValues(sampledDocs, sampleSummaryLimit, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Collections })
+			suggestion.SuggestedRules = suggestRulesForSource(suggestion.Source.ID, sampledDocs)
+			suggestion.Preview = rulepreview.Build(suggestion.Source.ID, normalizedReleases(sampledDocs), suggestion.SuggestedRules, true)
 		}
-		suggestion.SampleTitles = sampleTitles(sampledDocs, sampleLimit)
-		suggestion.SampleTags = sampleValues(sampledDocs, sampleLimit, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Tags })
-		suggestion.SampleCollections = sampleValues(sampledDocs, sampleLimit, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Collections })
-		suggestion.SuggestedRules = suggestRulesForSource(suggestion.Source.ID, sampledDocs)
 		suggestions = append(suggestions, suggestion)
 	}
 	sort.SliceStable(suggestions, func(i, j int) bool {
@@ -83,6 +102,41 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 	result.Suggestions = suggestions
 	result.AuthState = domain.AuthStateAuthenticated
 	return result, nil
+}
+
+func matchesMembershipFilter(kind, filter string) bool {
+	switch strings.ToLower(strings.TrimSpace(filter)) {
+	case "", "all":
+		return true
+	default:
+		return strings.EqualFold(firstNonEmpty(kind, "unknown"), filter)
+	}
+}
+
+func matchesCreatorFilters(suggestion provider.SourceSuggestion, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	candidates := []string{
+		strings.ToLower(strings.TrimSpace(suggestion.Source.ID)),
+		strings.ToLower(strings.TrimSpace(suggestion.CreatorHandle)),
+		strings.ToLower(strings.TrimSpace(suggestion.CreatorName)),
+	}
+	for _, raw := range filters {
+		filter := strings.ToLower(strings.TrimSpace(raw))
+		if filter == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			if candidate == "" {
+				continue
+			}
+			if candidate == filter || strings.Contains(candidate, filter) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthProfile) (*liveSession, *currentUserEnvelope, domain.AuthState, error) {
@@ -102,18 +156,18 @@ func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthPro
 		if clientErr != nil {
 			return nil, nil, domain.AuthStateReauthRequired, clientErr
 		}
-		user, authState, userErr := c.fetchCurrentUser(ctx, client, dummySource, bundle)
-		if userErr == nil {
-			return &liveSession{
-				bundle:        *bundle,
-				client:        client,
-				currentUserID: user.Data.ID,
-			}, user, authState, nil
+			user, authState, userErr := c.fetchCurrentUser(ctx, client, dummySource, bundle)
+			if userErr == nil {
+				return &liveSession{
+					bundle:        *bundle,
+					client:        client,
+					currentUserID: user.Data.ID,
+				}, user, authState, nil
+			}
+			if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
+				return nil, nil, authState, userErr
+			}
 		}
-		if authState == domain.AuthStateChallengeNeeded {
-			return nil, nil, authState, userErr
-		}
-	}
 	if c.bootstrap == nil {
 		return nil, nil, domain.AuthStateReauthRequired, fmt.Errorf("no Patreon bootstrapper configured")
 	}
@@ -145,23 +199,10 @@ func (c *Client) sampleDiscoveryDocuments(ctx context.Context, session *liveSess
 	if err != nil {
 		return nil, fmt.Errorf("discover Patreon posts for %q (%s): %w", source.ID, authState, err)
 	}
-	docs := make([]provider.ReleaseDocument, 0, len(postIDs))
-	for _, postID := range postIDs {
-		raw, authState, err := c.fetchPostDetail(ctx, session, source, postID)
-		if err != nil {
-			return nil, fmt.Errorf("fetch Patreon post %s for %q (%s): %w", postID, source.ID, authState, err)
-		}
-		norm, err := parsePost(raw, "")
-		if err != nil {
-			return nil, fmt.Errorf("parse Patreon post %s for %q: %w", postID, source.ID, err)
-		}
-		norm.SourceType = string(sourceKindCreatorFeed)
-		docs = append(docs, provider.ReleaseDocument{
-			Normalized: norm,
-			RawJSON:    append([]byte(nil), raw...),
-		})
+	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs)
+	if err != nil {
+		return nil, fmt.Errorf("discover Patreon posts for %q (%s): %w", source.ID, authState, err)
 	}
-	provider.SortReleaseDocuments(docs)
 	return docs, nil
 }
 
@@ -285,6 +326,14 @@ func sampleValues(docs []provider.ReleaseDocument, limit int, selector func(prov
 	return rankedKeys(counts, limit)
 }
 
+func normalizedReleases(docs []provider.ReleaseDocument) []domain.NormalizedRelease {
+	releases := make([]domain.NormalizedRelease, 0, len(docs))
+	for _, doc := range docs {
+		releases = append(releases, doc.Normalized)
+	}
+	return releases
+}
+
 func suggestRulesForSource(sourceID string, docs []provider.ReleaseDocument) []config.RuleConfig {
 	if len(docs) == 0 {
 		return []config.RuleConfig{
@@ -295,33 +344,6 @@ func suggestRulesForSource(sourceID string, docs []provider.ReleaseDocument) []c
 	defaultStrategy := suggestedContentStrategy(docs)
 	rules := make([]config.RuleConfig, 0, 4)
 	priority := 10
-	for _, tag := range rankedKeys(valueCounts(docs, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Tags }), 3) {
-		tagDocs := filterDocuments(docs, func(doc provider.ReleaseDocument) bool {
-			for _, value := range doc.Normalized.Tags {
-				if strings.EqualFold(strings.TrimSpace(value), tag) {
-					return true
-				}
-			}
-			return false
-		})
-		if len(tagDocs) < 2 {
-			continue
-		}
-		strategy := suggestedContentStrategy(tagDocs)
-		rules = append(rules, config.RuleConfig{
-			Source:             sourceID,
-			Priority:           priority,
-			MatchType:          "tag",
-			MatchValue:         tag,
-			TrackKey:           slugifyPatreonIdentifier(tag),
-			TrackName:          humanizePatreonIdentifier(tag),
-			ReleaseRole:        string(domain.ReleaseRoleChapter),
-			ContentStrategy:    string(strategy),
-			AttachmentGlob:     attachmentGlob,
-			AttachmentPriority: attachmentPriority,
-		})
-		priority += 10
-	}
 	for _, collection := range rankedKeys(valueCounts(docs, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Collections }), 3) {
 		collectionDocs := filterDocuments(docs, func(doc provider.ReleaseDocument) bool {
 			for _, value := range doc.Normalized.Collections {
@@ -348,22 +370,47 @@ func suggestRulesForSource(sourceID string, docs []provider.ReleaseDocument) []c
 		})
 		priority += 10
 	}
-	if len(rules) == 0 {
-		if prefix, regex := commonTitlePrefixRule(docs); prefix != "" && regex != "" {
-			rules = append(rules, config.RuleConfig{
-				Source:             sourceID,
-				Priority:           priority,
-				MatchType:          "title_regex",
-				MatchValue:         regex,
-				TrackKey:           slugifyPatreonIdentifier(prefix),
-				TrackName:          prefix,
-				ReleaseRole:        string(domain.ReleaseRoleChapter),
-				ContentStrategy:    string(defaultStrategy),
-				AttachmentGlob:     attachmentGlob,
-				AttachmentPriority: attachmentPriority,
-			})
-			priority += 10
+	if prefix, regex := commonTitlePrefixRule(docs); prefix != "" && regex != "" {
+		rules = append(rules, config.RuleConfig{
+			Source:             sourceID,
+			Priority:           priority,
+			MatchType:          "title_regex",
+			MatchValue:         regex,
+			TrackKey:           slugifyPatreonIdentifier(prefix),
+			TrackName:          prefix,
+			ReleaseRole:        string(domain.ReleaseRoleChapter),
+			ContentStrategy:    string(defaultStrategy),
+			AttachmentGlob:     attachmentGlob,
+			AttachmentPriority: attachmentPriority,
+		})
+		priority += 10
+	}
+	for _, tag := range rankedKeys(valueCounts(docs, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Tags }), 6) {
+		tagDocs := filterDocuments(docs, func(doc provider.ReleaseDocument) bool {
+			for _, value := range doc.Normalized.Tags {
+				if strings.EqualFold(strings.TrimSpace(value), tag) {
+					return true
+				}
+			}
+			return false
+		})
+		if len(tagDocs) < 2 || isGenericDiscoveryTag(tag, len(tagDocs), len(docs)) {
+			continue
 		}
+		strategy := suggestedContentStrategy(tagDocs)
+		rules = append(rules, config.RuleConfig{
+			Source:             sourceID,
+			Priority:           priority,
+			MatchType:          "tag",
+			MatchValue:         tag,
+			TrackKey:           slugifyPatreonIdentifier(tag),
+			TrackName:          humanizePatreonIdentifier(tag),
+			ReleaseRole:        string(domain.ReleaseRoleChapter),
+			ContentStrategy:    string(strategy),
+			AttachmentGlob:     attachmentGlob,
+			AttachmentPriority: attachmentPriority,
+		})
+		priority += 10
 	}
 	if len(rules) == 0 {
 		rules = append(rules, config.RuleConfig{
@@ -460,12 +507,55 @@ func commonTitlePrefixRule(docs []provider.ReleaseDocument) (string, string) {
 
 func titlePrefix(title string) string {
 	title = strings.TrimSpace(title)
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^(.+?)(?:[.:\-\s]+book\s+[^.:\-]+)?[.:\-\s]+chapters?\b`),
+		regexp.MustCompile(`(?i)^(.+?)(?:[.:\-\s]+book\s+[^.:\-]+)?[.:\-\s]+episode\b`),
+		regexp.MustCompile(`(?i)^(.+?)(?:[.:\-\s]+book\s+[^.:\-]+)?[.:\-\s]+part\b`),
+	} {
+		if match := pattern.FindStringSubmatch(title); len(match) == 2 {
+			prefix := strings.Trim(match[1], " .:-|")
+			if prefix != "" {
+				return prefix
+			}
+		}
+	}
 	for _, separator := range []string{" - ", ": ", " | "} {
 		if head, _, ok := strings.Cut(title, separator); ok {
 			return strings.TrimSpace(head)
 		}
 	}
 	return ""
+}
+
+func isGenericDiscoveryTag(tag string, occurrences, total int) bool {
+	tag = strings.TrimSpace(strings.ToLower(tag))
+	if tag == "" {
+		return true
+	}
+	if total > 0 && occurrences == total && !looksSpecificStoryLabel(tag) {
+		return true
+	}
+	switch tag {
+	case "fantasy", "magic", "mage", "system", "story", "poll", "info", "news", "update", "updates", "chapter", "chapters":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksSpecificStoryLabel(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.ContainsAny(value, "0123456789") {
+		return true
+	}
+	parts := strings.Fields(value)
+	if len(parts) >= 2 {
+		return true
+	}
+	return len(value) >= 12
 }
 
 func valueCounts(docs []provider.ReleaseDocument, selector func(provider.ReleaseDocument) []string) map[string]int {

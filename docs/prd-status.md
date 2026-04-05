@@ -4,16 +4,17 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 
 ## Implemented
 
-- one-shot CLI commands for `init`, config validation, inspect flows, `plan sync`, `sync`, `publish`, `auth bootstrap`, `run once`, and support-bundle export
-- one-shot CLI commands for `wizard`, `source discover`, `auth import-session`, and publish-record inspection
-- a single-process `daemon` that reuses the same sync/publish pipeline on an interval
+- a compact public CLI organized around `setup`, `run`, and `debug`
+- `setup` covers config validation, auth bootstrap/import, source dumps, and rules preview
+- `run` covers the normal sync-plus-publish path, plus `run daemon` for interval scheduling
+- `debug` covers recent-run inspection, publish-record inspection, and support-bundle export
 - XDG-aware config loading, defaults, and container-first `/config` + `/state` roots
 - live Patreon username/password bootstrap for the non-challenge case
 - optional TOTP-assisted Patreon bootstrap when the challenge is an authenticator-app code
 - persisted Patreon session reuse and explicit live auth state reporting
 - session-bundle import validation as an operator convenience path
 - live Patreon release discovery and normalization, with recent-id incremental steady-state syncs
-- Patreon membership discovery with source and rule suggestions from active subscriptions
+- Patreon membership-driven source dumping from active subscriptions
 - Patreon collection-style source discovery through authenticated HTML
 - fixture-backed Patreon demo inputs
 - story-track rule classification with deterministic unmatched fallback behavior
@@ -23,16 +24,15 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - `exec` publisher with stable environment variables and idempotent replay behavior
 - Docker packaging with Chromium, Xvfb, and `tini` for first-run auth bootstrap inside the image
 - static binary release packaging config via `.goreleaser.yml`
-- Docker quickstart, config docs, discovery docs, observability docs, troubleshooting docs, hook docs, and developer docs
-- Docker quickstart, config docs, discovery docs, observability docs, troubleshooting docs, rule-authoring docs, hook docs, and developer docs
+- Docker quickstart, config docs, observability docs, troubleshooting docs, rule-authoring docs, hook docs, and developer docs
 
 ## Partial
 
 - support bundle export now includes redacted config, run data, release bundles, payload copies, and per-run text/JSON logs, but external log shipping is still future work
-- observability now includes recent-run listing, filtered event inspection, run explanations, per-run text/JSON logs, event payload files, and daemon forensics endpoints, but richer metrics backends are still future work
+- observability now includes recent-run listing, filtered event inspection, run explanations, per-run text/JSON logs, event payload files, and daemon health/status/metrics, but richer metrics backends are still future work
 - CUE config validation exists as an optional schema layer, not as the runtime control-plane source of truth
 - daemon mode now includes source leases and local health/status endpoints, but deeper multi-replica coordination is still future work
-- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, discovery docs, observability docs, rule-authoring docs, and a first-source walkthrough)
+- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, observability docs, rule-authoring docs, and a first-source walkthrough)
 - the store seam is generic at the repository boundary, but lease-specific store contracts and alternative backends are still future work
 
 ## Remaining

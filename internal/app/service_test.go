@@ -112,7 +112,7 @@ content_strategy = "text_post"
 	}
 	service := app.New(cfg, roots, configPath, repo, provider.NewRegistry(patreon.New()))
 
-	plan, err := service.Sync(context.Background(), "", true, "plan sync")
+	plan, err := service.Sync(context.Background(), "", true, "sync --dry-run")
 	if err != nil {
 		t.Fatal(err)
 	}

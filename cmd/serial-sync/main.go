@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,137 +26,67 @@ import (
 type CLI struct {
 	ConfigPath string `name:"config" short:"c" help:"Path to config file."`
 
-	Init          InitCmd          `cmd:"" help:"Write an example config file."`
-	Config        ConfigCmd        `cmd:"" help:"Validate configuration."`
-	Auth          AuthCmd          `cmd:"" help:"Auth bootstrap and session helpers."`
-	Source        SourceCmd        `cmd:"" help:"Inspect configured sources."`
-	Track         TrackCmd         `cmd:"" help:"Inspect a track."`
-	Release       ReleaseCmd       `cmd:"" help:"Inspect a release."`
-	Artifact      ArtifactCmd      `cmd:"" help:"Inspect an artifact."`
-	PublishRecord PublishRecordCmd `cmd:"" name:"publish-record" help:"Inspect publish records."`
-	Runs          RunsCmd          `cmd:"" name:"runs" help:"Inspect a prior run."`
-	Support       SupportCmd       `cmd:"" help:"Support bundle helpers."`
-	Plan          PlanCmd          `cmd:"" help:"Show planned sync work."`
-	Run           RunCmd           `cmd:"" help:"Run end-to-end workflows."`
-	Sync          SyncCmd          `cmd:"" help:"Run a sync."`
-	Publish       PublishCmd       `cmd:"" help:"Publish canonical artifacts."`
-	Wizard        WizardCmd        `cmd:"" help:"Interactive setup wizard."`
-	Daemon        DaemonCmd        `cmd:"" help:"Background scheduler."`
+	Setup SetupCmd `cmd:"" help:"Bootstrap config, auth, and rule-authoring workspaces."`
+	Run   RunCmd   `cmd:"" help:"Run the normal sync+publish workflow, or the daemon."`
+	Debug DebugCmd `cmd:"" help:"Inspect prior runs, publish records, and support bundles."`
 }
 
-type InitCmd struct {
+type SetupCmd struct {
+	Init    SetupInitCmd    `cmd:"" help:"Write an example config file."`
+	Check   SetupCheckCmd   `cmd:"" help:"Validate config and print the loaded counts. Replaces 'config validate'."`
+	Auth    SetupAuthCmd    `cmd:"" help:"Create, verify, or import provider session state. Replaces 'auth bootstrap' and 'auth import-session'."`
+	Dump    SetupDumpCmd    `cmd:"" help:"Dump creator posts into a local rule-authoring workspace. Replaces 'source dump'."`
+	Preview SetupPreviewCmd `cmd:"" help:"Preview how a rules file classifies a dumped workspace. Replaces 'rules preview'."`
+}
+
+type DebugCmd struct {
+	Runs      DebugRunsCmd      `cmd:"" help:"List recent runs."`
+	Run       DebugRunCmd       `cmd:"" help:"Summarize one run for operator forensics. Replaces 'runs explain'."`
+	Events    DebugEventsCmd    `cmd:"" help:"List filtered events for a run. Replaces 'runs events'."`
+	Publishes DebugPublishesCmd `cmd:"" help:"List publish records. Replaces 'publish-record list'."`
+	Publish   DebugPublishCmd   `cmd:"" help:"Inspect a publish record. Replaces 'publish-record inspect'."`
+	Bundle    DebugBundleCmd    `cmd:"" help:"Export a support bundle for a run. Replaces 'support bundle'."`
+}
+
+type SetupInitCmd struct {
 	Path  string `help:"Write config to this path."`
 	Force bool   `help:"Overwrite an existing config."`
 }
 
-type ConfigCmd struct {
-	Validate ConfigValidateCmd `cmd:"" help:"Validate config and print the loaded counts."`
+type SetupCheckCmd struct{}
+
+type SetupAuthCmd struct {
+	SourceID      string `name:"source" help:"Limit auth work to one source."`
+	AuthProfileID string `name:"auth-profile" help:"Limit auth work to one auth profile."`
+	ImportSession string `name:"import-session" help:"Import this session bundle JSON file instead of bootstrapping auth."`
+	Force         bool   `name:"force" help:"Discard any existing session and log in again during bootstrap."`
 }
 
-type AuthCmd struct {
-	Bootstrap     AuthBootstrapCmd     `cmd:"" help:"Create or verify provider session state."`
-	ImportSession AuthImportSessionCmd `cmd:"" help:"Import a provider session bundle and validate it."`
+type SetupDumpCmd struct {
+	AuthProfileID string   `name:"auth-profile" help:"Auth profile to use for Patreon discovery."`
+	Path          string   `name:"path" help:"Write the dump workspace to this path."`
+	Membership    string   `name:"membership" default:"paid" enum:"paid,free,trial,all" help:"Limit dumping to this membership kind."`
+	Creators      []string `name:"creator" help:"Limit the dump to creator handle, source id, or creator name. Repeat the flag for multiple authors."`
+	Force         bool     `name:"force" help:"Overwrite an existing workspace path."`
 }
 
-type SourceCmd struct {
-	List     SourceListCmd     `cmd:"" help:"List configured sources."`
-	Inspect  SourceInspectCmd  `cmd:"" help:"Inspect a configured source."`
-	Discover SourceDiscoverCmd `cmd:"" help:"Discover Patreon sources and suggest config from the current account."`
+type SetupPreviewCmd struct {
+	Workspace string   `name:"workspace" help:"Path to a source dump workspace."`
+	RulesFile string   `name:"rules-file" help:"Path to a rules TOML file. Defaults to <workspace>/rules.toml."`
+	Creators  []string `name:"creator" help:"Limit preview to specific dumped creators. Repeat the flag for multiple authors."`
+	ShowPosts bool     `name:"show-posts" help:"Include per-post classification output in text mode."`
+	Format    string   `name:"format" default:"text" enum:"text,json" help:"Output format."`
 }
 
-type TrackCmd struct {
-	Inspect TrackInspectCmd `cmd:"" help:"Inspect a track."`
-}
-
-type ReleaseCmd struct {
-	Inspect ReleaseInspectCmd `cmd:"" help:"Inspect a release."`
-}
-
-type ArtifactCmd struct {
-	Inspect ArtifactInspectCmd `cmd:"" help:"Inspect an artifact."`
-}
-
-type PublishRecordCmd struct {
-	List    PublishRecordListCmd    `cmd:"" help:"List publish records."`
-	Inspect PublishRecordInspectCmd `cmd:"" help:"Inspect a publish record."`
-}
-
-type RunsCmd struct {
-	List    RunListCmd    `cmd:"" help:"List recent runs."`
-	Inspect RunInspectCmd `cmd:"" help:"Inspect a prior run."`
-	Events  RunEventsCmd  `cmd:"" help:"List filtered events for a run."`
-	Explain RunExplainCmd `cmd:"" help:"Summarize a run for operator forensics."`
-}
-
-type RunCmd struct {
-	Once RunOnceCmd `cmd:"" help:"Run sync and publish back-to-back."`
-}
-
-type SupportCmd struct {
-	Bundle SupportBundleCmd `cmd:"" help:"Export a support bundle for a run."`
-}
-
-type PlanCmd struct {
-	Sync PlanSyncCmd `cmd:"" help:"Show sync work without mutating state."`
-}
-
-type ConfigValidateCmd struct{}
-
-type AuthBootstrapCmd struct {
-	SourceID      string `name:"source" help:"Limit auth bootstrap to one source."`
-	AuthProfileID string `name:"auth-profile" help:"Limit auth bootstrap to one auth profile."`
-	Force         bool   `name:"force" help:"Discard any existing session and log in again."`
-}
-
-type AuthImportSessionCmd struct {
-	SessionFile   string `arg:"" name:"session-file" help:"Path to the session bundle JSON file."`
-	SourceID      string `name:"source" help:"Limit session import validation to one source."`
-	AuthProfileID string `name:"auth-profile" help:"Limit session import validation to one auth profile."`
-}
-
-type SourceListCmd struct{}
-
-type SourceInspectCmd struct {
-	Source string `arg:"" name:"source" help:"Source ID to inspect."`
-}
-
-type SourceDiscoverCmd struct {
-	AuthProfileID     string `name:"auth-profile" help:"Auth profile to use for Patreon discovery."`
-	Sample            int    `name:"sample" default:"5" help:"Sample this many recent releases per discovered source."`
-	IncludeConfigured bool   `name:"include-configured" help:"Include already configured sources in the generated snippet."`
-	Format            string `name:"format" default:"text" enum:"text,json,toml" help:"Output format."`
-}
-
-type TrackInspectCmd struct {
-	Track string `arg:"" name:"track" help:"Track ID to inspect."`
-}
-
-type ReleaseInspectCmd struct {
-	Release string `arg:"" name:"release" help:"Release ID to inspect."`
-}
-
-type ArtifactInspectCmd struct {
-	Artifact string `arg:"" name:"artifact" help:"Artifact ID to inspect."`
-}
-
-type PublishRecordListCmd struct {
-	SourceID string `name:"source" help:"Limit records to one source."`
-	TargetID string `name:"target" help:"Limit records to one publish target."`
-}
-
-type PublishRecordInspectCmd struct {
-	Record string `arg:"" name:"publish-record" help:"Publish record ID to inspect."`
-}
-
-type RunInspectCmd struct {
-	RunID string `arg:"" name:"run-id" help:"Run ID to inspect."`
-}
-
-type RunListCmd struct {
+type DebugRunsCmd struct {
 	Limit int `name:"limit" default:"20" help:"Show this many recent runs."`
 }
 
-type RunEventsCmd struct {
+type DebugRunCmd struct {
+	RunID string `arg:"" name:"run-id" help:"Run ID to explain."`
+}
+
+type DebugEventsCmd struct {
 	RunID      string `arg:"" name:"run-id" help:"Run ID to inspect."`
 	Level      string `name:"level" help:"Filter events by level."`
 	Component  string `name:"component" help:"Filter events by component."`
@@ -166,47 +95,28 @@ type RunEventsCmd struct {
 	Limit      int    `name:"limit" default:"0" help:"Limit the number of events shown after filtering."`
 }
 
-type RunExplainCmd struct {
-	RunID string `arg:"" name:"run-id" help:"Run ID to explain."`
+type RunCmd struct {
+	Exec   RunExecCmd `cmd:"" default:"withargs" hidden:""`
+	Daemon DaemonCmd  `cmd:"" help:"Background scheduler that repeats the same run pipeline."`
 }
 
-type SupportBundleCmd struct {
-	RunID string `arg:"" name:"run-id" help:"Run ID to export."`
-}
-
-type RunOnceCmd struct {
+type RunExecCmd struct {
 	SourceID string `name:"source" help:"Limit the run to one source."`
 	TargetID string `name:"target" help:"Limit publish to one target."`
+	DryRun   bool   `name:"dry-run" help:"Show the sync plan without mutating state or publishing."`
 }
 
-type PlanSyncCmd struct {
-	SourceID string `name:"source" help:"Limit planning to one source."`
+type DebugPublishesCmd struct {
+	SourceID string `name:"source" help:"Limit records to one source."`
+	TargetID string `name:"target" help:"Limit records to one publish target."`
 }
 
-type SyncCmd struct {
-	SourceID string `name:"source" help:"Limit sync to one source."`
-	DryRun   bool   `name:"dry-run" help:"Show planned actions without mutating state."`
+type DebugPublishCmd struct {
+	Record string `arg:"" name:"publish-record" help:"Publish record ID to inspect."`
 }
 
-type PublishCmd struct {
-	SourceID string `name:"source" help:"Limit publish to one source."`
-	TargetID string `name:"target" help:"Limit publish to one target."`
-	DryRun   bool   `name:"dry-run" help:"Show planned publish actions without mutating state."`
-}
-
-type WizardCmd struct {
-	Path           string `name:"path" help:"Write the generated config to this path."`
-	Force          bool   `name:"force" help:"Overwrite an existing config file."`
-	SourceURL      string `name:"source-url" help:"Patreon source URL to configure."`
-	SourceID       string `name:"source-id" help:"Source ID to write into the config."`
-	AuthProfileID  string `name:"auth-profile" help:"Auth profile ID to write into the config."`
-	PublisherID    string `name:"publisher" help:"Filesystem publisher ID to write into the config."`
-	PublisherPath  string `name:"publisher-path" help:"Filesystem publish path."`
-	TrackKey       string `name:"track-key" help:"Starter fallback track key."`
-	TrackName      string `name:"track-name" help:"Starter fallback track name."`
-	BootstrapAuth  bool   `name:"bootstrap-auth" help:"Bootstrap auth immediately after writing the config."`
-	Sample         bool   `name:"sample" help:"Run a dry-run sync after writing the config."`
-	NonInteractive bool   `name:"non-interactive" help:"Fail instead of prompting for missing fields."`
+type DebugBundleCmd struct {
+	RunID string `arg:"" name:"run-id" help:"Run ID to export."`
 }
 
 type DaemonCmd struct {
@@ -230,10 +140,18 @@ func run(args []string) error {
 	}
 	args = normalizeHelpArgs(args)
 	if len(args) == 0 {
-		_, _ = parser.Parse([]string{"--help"})
+		printRootHelp(os.Stdout)
+		return nil
+	}
+	if wantsRunHelp(args) {
+		printRunHelp(os.Stdout)
 		return nil
 	}
 	if wantsHelp(args) {
+		if isRootHelp(args) {
+			printRootHelp(os.Stdout)
+			return nil
+		}
 		_, _ = parser.Parse(args)
 		return nil
 	}
@@ -244,7 +162,7 @@ func run(args []string) error {
 	return ctx.Run(&cli)
 }
 
-func (cmd *InitCmd) Run() error {
+func (cmd *SetupInitCmd) Run() error {
 	path := cmd.Path
 	if path == "" {
 		defaultPath, err := config.DefaultConfigPath()
@@ -268,7 +186,7 @@ func (cmd *InitCmd) Run() error {
 	return nil
 }
 
-func (cmd *ConfigValidateCmd) Run(cli *CLI) error {
+func (cmd *SetupCheckCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
 		fmt.Printf(
 			"config ok: %d source(s), %d rule(s), %d publisher(s)\n",
@@ -280,95 +198,57 @@ func (cmd *ConfigValidateCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *AuthBootstrapCmd) Run(cli *CLI) error {
+func (cmd *SetupAuthCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.BootstrapAuth(ctx, cmd.SourceID, cmd.AuthProfileID, cmd.Force, "auth bootstrap")
+		if strings.TrimSpace(cmd.ImportSession) != "" {
+			result, err := service.ImportAuthSession(ctx, cmd.SourceID, cmd.AuthProfileID, cmd.ImportSession, "setup auth --import-session")
+			fmt.Println(app.FormatAuthImportResult(result))
+			return err
+		}
+		result, err := service.BootstrapAuth(ctx, cmd.SourceID, cmd.AuthProfileID, cmd.Force, "setup auth")
 		fmt.Println(app.FormatAuthBootstrapResult(result))
 		return err
 	})
 }
 
-func (cmd *AuthImportSessionCmd) Run(cli *CLI) error {
+func (cmd *SetupDumpCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.ImportAuthSession(ctx, cmd.SourceID, cmd.AuthProfileID, cmd.SessionFile, "auth import-session")
-		fmt.Println(app.FormatAuthImportResult(result))
-		return err
-	})
-}
-
-func (cmd *SourceListCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
-		for _, source := range service.Config.Sources {
-			status := "disabled"
-			if source.Enabled {
-				status = "enabled"
-			}
-			fmt.Printf("%s\t%s\t%s\t%s\n", source.ID, source.Provider, status, source.URL)
+		result, err := service.DumpSources(ctx, cmd.AuthProfileID, app.SourceDumpOptions{
+			Path:             cmd.Path,
+			MembershipFilter: cmd.Membership,
+			CreatorFilters:   trimStrings(cmd.Creators),
+			Force:            cmd.Force,
+		}, "setup dump")
+		if err != nil {
+			return err
 		}
+		fmt.Println(app.FormatSourceDumpResult(result))
 		return nil
 	})
 }
 
-func (cmd *SourceInspectCmd) Run(cli *CLI) error {
+func (cmd *SetupPreviewCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		payload, err := service.InspectSource(ctx, cmd.Source)
-		if err != nil {
-			return err
-		}
-		return printJSON(payload)
-	})
-}
-
-func (cmd *SourceDiscoverCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.DiscoverSources(ctx, cmd.AuthProfileID, cmd.Sample, cmd.IncludeConfigured, "source discover")
+		result, err := service.PreviewRules(ctx, app.RulesPreviewOptions{
+			WorkspacePath:  cmd.Workspace,
+			RulesFile:      cmd.RulesFile,
+			CreatorFilters: trimStrings(cmd.Creators),
+			ShowPosts:      cmd.ShowPosts,
+		}, "setup preview")
 		if err != nil {
 			return err
 		}
 		switch strings.ToLower(strings.TrimSpace(cmd.Format)) {
 		case "json":
 			return printJSON(result)
-		case "toml":
-			fmt.Print(result.SnippetTOML)
-			return nil
 		default:
-			fmt.Println(app.FormatSourceDiscoverResult(result))
+			fmt.Println(app.FormatRulesPreviewResult(result, cmd.ShowPosts))
 			return nil
 		}
 	})
 }
 
-func (cmd *TrackInspectCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		payload, err := service.InspectTrack(ctx, cmd.Track)
-		if err != nil {
-			return err
-		}
-		return printJSON(payload)
-	})
-}
-
-func (cmd *ReleaseInspectCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		payload, err := service.InspectRelease(ctx, cmd.Release)
-		if err != nil {
-			return err
-		}
-		return printJSON(payload)
-	})
-}
-
-func (cmd *ArtifactInspectCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		payload, err := service.InspectArtifact(ctx, cmd.Artifact)
-		if err != nil {
-			return err
-		}
-		return printJSON(payload)
-	})
-}
-
-func (cmd *PublishRecordListCmd) Run(cli *CLI) error {
+func (cmd *DebugPublishesCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		records, err := service.ListPublishRecords(ctx, cmd.SourceID, cmd.TargetID)
 		if err != nil {
@@ -389,7 +269,7 @@ func (cmd *PublishRecordListCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *PublishRecordInspectCmd) Run(cli *CLI) error {
+func (cmd *DebugPublishCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		payload, err := service.InspectPublishRecord(ctx, cmd.Record)
 		if err != nil {
@@ -399,7 +279,7 @@ func (cmd *PublishRecordInspectCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *RunListCmd) Run(cli *CLI) error {
+func (cmd *DebugRunsCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		runs, err := service.ListRuns(ctx, cmd.Limit)
 		if err != nil {
@@ -416,17 +296,7 @@ func (cmd *RunListCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *RunInspectCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		payload, err := service.InspectRun(ctx, cmd.RunID)
-		if err != nil {
-			return err
-		}
-		return printJSON(payload)
-	})
-}
-
-func (cmd *RunEventsCmd) Run(cli *CLI) error {
+func (cmd *DebugEventsCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		payload, err := service.ListRunEvents(ctx, cmd.RunID, app.RunEventFilter{
 			Level:      cmd.Level,
@@ -442,7 +312,7 @@ func (cmd *RunEventsCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *RunExplainCmd) Run(cli *CLI) error {
+func (cmd *DebugRunCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		payload, err := service.ExplainRun(ctx, cmd.RunID)
 		if err != nil {
@@ -453,7 +323,7 @@ func (cmd *RunExplainCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *SupportBundleCmd) Run(cli *CLI) error {
+func (cmd *DebugBundleCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		dir, err := service.SupportBundle(ctx, cmd.RunID)
 		if err != nil {
@@ -464,46 +334,22 @@ func (cmd *SupportBundleCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *RunOnceCmd) Run(cli *CLI) error {
+func (cmd *RunExecCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.RunOnce(ctx, cmd.SourceID, cmd.TargetID, "run once")
+		if cmd.DryRun {
+			result, err := service.Sync(ctx, cmd.SourceID, true, "run --dry-run")
+			if err != nil {
+				return err
+			}
+			fmt.Println(app.FormatSyncResult(result))
+			fmt.Println("publish skipped because --dry-run only previews sync classification and materialization")
+			return nil
+		}
+		result, err := service.RunOnce(ctx, cmd.SourceID, cmd.TargetID, "run")
 		if err != nil {
 			return err
 		}
 		fmt.Println(app.FormatRunOnceResult(result))
-		return nil
-	})
-}
-
-func (cmd *PlanSyncCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.Sync(ctx, cmd.SourceID, true, "plan sync")
-		if err != nil {
-			return err
-		}
-		fmt.Println(app.FormatSyncResult(result))
-		return nil
-	})
-}
-
-func (cmd *SyncCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.Sync(ctx, cmd.SourceID, cmd.DryRun, "sync")
-		if err != nil {
-			return err
-		}
-		fmt.Println(app.FormatSyncResult(result))
-		return nil
-	})
-}
-
-func (cmd *PublishCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.Publish(ctx, cmd.SourceID, cmd.TargetID, cmd.DryRun, "publish")
-		if err != nil {
-			return err
-		}
-		fmt.Println(app.FormatPublishResult(result))
 		return nil
 	})
 }
@@ -547,128 +393,7 @@ func (cmd *DaemonCmd) Run(cli *CLI) error {
 		}
 		holderID := daemonHolderID()
 		state := runtimedaemon.NewState(holderID, duration, sourceIDs)
-		handlers := &runtimedaemon.Handlers{
-			DiscoverSources: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				sample := 5
-				if raw := strings.TrimSpace(r.URL.Query().Get("sample")); raw != "" {
-					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
-						sample = parsed
-					}
-				}
-				includeConfigured := parseBoolQuery(r.URL.Query().Get("include_configured"))
-				result, discoverErr := service.DiscoverSources(
-					r.Context(),
-					r.URL.Query().Get("auth_profile"),
-					sample,
-					includeConfigured,
-					"daemon discover sources",
-				)
-				if discoverErr != nil {
-					http.Error(w, discoverErr.Error(), http.StatusBadRequest)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(result)
-			},
-			DiscoverConfig: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				sample := 5
-				if raw := strings.TrimSpace(r.URL.Query().Get("sample")); raw != "" {
-					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
-						sample = parsed
-					}
-				}
-				includeConfigured := parseBoolQuery(r.URL.Query().Get("include_configured"))
-				result, discoverErr := service.DiscoverSources(
-					r.Context(),
-					r.URL.Query().Get("auth_profile"),
-					sample,
-					includeConfigured,
-					"daemon discover config",
-				)
-				if discoverErr != nil {
-					http.Error(w, discoverErr.Error(), http.StatusBadRequest)
-					return
-				}
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				_, _ = w.Write([]byte(result.SnippetTOML))
-			},
-			ListRuns: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				limit := 20
-				if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
-						limit = parsed
-					}
-				}
-				runs, runErr := service.ListRuns(r.Context(), limit)
-				if runErr != nil {
-					http.Error(w, runErr.Error(), http.StatusBadRequest)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(runs)
-			},
-			RunEvents: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
-				if runID == "" {
-					http.Error(w, "run_id is required", http.StatusBadRequest)
-					return
-				}
-				limit := 0
-				if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-					if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 {
-						limit = parsed
-					}
-				}
-				payload, runErr := service.ListRunEvents(r.Context(), runID, app.RunEventFilter{
-					Level:      r.URL.Query().Get("level"),
-					Component:  r.URL.Query().Get("component"),
-					EntityKind: r.URL.Query().Get("entity_kind"),
-					EntityID:   r.URL.Query().Get("entity_id"),
-					Limit:      limit,
-				})
-				if runErr != nil {
-					http.Error(w, runErr.Error(), http.StatusBadRequest)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(payload)
-			},
-			RunExplain: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet {
-					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
-				if runID == "" {
-					http.Error(w, "run_id is required", http.StatusBadRequest)
-					return
-				}
-				payload, runErr := service.ExplainRun(r.Context(), runID)
-				if runErr != nil {
-					http.Error(w, runErr.Error(), http.StatusBadRequest)
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(payload)
-			},
-		}
-		server, err := runtimedaemon.Start(ctx, service.Config.Scheduler.HealthAddr, state, handlers)
+		server, err := runtimedaemon.Start(ctx, service.Config.Scheduler.HealthAddr, state)
 		if err != nil {
 			return fmt.Errorf("start daemon health server: %w", err)
 		}
@@ -745,19 +470,33 @@ func enabledSources(all []config.SourceConfig, sourceFilter string) []config.Sou
 	return items
 }
 
-func parseBoolQuery(raw string) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "true", "yes", "y", "on":
-		return true
-	default:
-		return false
+func trimStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			out = append(out, part)
+		}
 	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, error) {
 	options := []kong.Option{
 		kong.Name("serial-sync"),
-		kong.Description("Sync serialized releases into local artifacts and publish targets."),
+		kong.Description("Use `setup` to bootstrap config/auth/rules, `run` for execution, and `debug` for forensics."),
 		kong.UsageOnError(),
 		kong.Writers(stdout, stderr),
 	}
@@ -835,4 +574,89 @@ func wantsHelp(args []string) bool {
 		}
 	}
 	return false
+}
+
+func isRootHelp(args []string) bool {
+	return len(args) == 1 && (args[0] == "--help" || args[0] == "-h")
+}
+
+func wantsRunHelp(args []string) bool {
+	return len(args) >= 1 && args[0] == "run" && wantsHelp(args[1:])
+}
+
+func printRootHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage: serial-sync <command> [flags]
+
+Use `+"`setup`"+` to bootstrap config/auth/rules, `+"`run`"+` for execution, and `+"`debug`"+` for
+forensics.
+
+Flags:
+  -h, --help             Show context-sensitive help.
+  -c, --config=STRING    Path to config file.
+
+Commands:
+  setup init [flags]
+    Write an example config file.
+
+  setup check
+    Validate config and print the loaded counts. Replaces 'config validate'.
+
+  setup auth [flags]
+    Create, verify, or import provider session state. Replaces 'auth bootstrap'
+    and 'auth import-session'.
+
+  setup dump [flags]
+    Dump creator posts into a local rule-authoring workspace. Replaces 'source
+    dump'.
+
+  setup preview [flags]
+    Preview how a rules file classifies a dumped workspace. Replaces 'rules
+    preview'.
+
+  run [flags]
+    Run the normal sync-plus-publish workflow.
+
+  run daemon [flags]
+    Background scheduler that repeats the same run pipeline.
+
+  debug runs [flags]
+    List recent runs.
+
+  debug run <run-id>
+    Summarize one run for operator forensics. Replaces 'runs explain'.
+
+  debug events <run-id> [flags]
+    List filtered events for a run. Replaces 'runs events'.
+
+  debug publishes [flags]
+    List publish records. Replaces 'publish-record list'.
+
+  debug publish <publish-record>
+    Inspect a publish record. Replaces 'publish-record inspect'.
+
+  debug bundle <run-id>
+    Export a support bundle for a run. Replaces 'support bundle'.
+
+Run "serial-sync <command> --help" for more information on a command.
+`)
+}
+
+func printRunHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage: serial-sync run [flags]
+       serial-sync run daemon [flags]
+
+Run the normal sync-plus-publish workflow by default. Use `+"`--dry-run`"+` to preview
+the sync classification/materialization step without mutating state or
+publishing.
+
+Flags:
+  -h, --help             Show context-sensitive help.
+      --source=STRING    Limit the run to one source.
+      --target=STRING    Limit publish to one target.
+      --dry-run          Show the sync plan without mutating state or publishing.
+
+Commands:
+  run daemon [flags]
+    Background scheduler that repeats the same run pipeline.
+`)
 }

@@ -14,11 +14,28 @@ Rules are applied by ascending `priority`. The first matching rule wins.
 
 ## Recommended Workflow
 
-1. Start with `source discover` or the wizard.
-2. Run `plan sync` against one source.
-3. Inspect unmatched releases with `runs explain <run-id>` and `runs events <run-id> --component classify`.
-4. Add or tighten source-specific rules.
-5. Re-run `plan sync` until the track decisions look right.
+1. Run `setup dump` for the authors you care about.
+2. Edit `rules.toml` inside the dump workspace.
+3. Run `setup preview --show-posts` against that workspace.
+4. Tighten source-specific rules until the fallback bucket is acceptable.
+5. Merge the resulting `[[rules]]` and `[[sources]]` back into your main config.
+
+Example:
+
+```sh
+serial-sync --config ./config.toml setup dump \
+  --auth-profile patreon-default \
+  --creator plumparrot \
+  --path ./serial-sync-rule-workspace \
+  --force
+
+serial-sync --config ./config.toml setup preview \
+  --workspace ./serial-sync-rule-workspace \
+  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --show-posts
+```
+
+For agent-driven rule work, the repo also ships a local skill at `skills/serial-sync-rule-authoring/SKILL.md`.
 
 ## Match Types
 
@@ -154,10 +171,10 @@ Keep related rules spaced apart so inserting a more specific rule later does not
 Useful commands:
 
 ```sh
-serial-sync --config ./config.toml plan sync --source example-creator
-serial-sync --config ./config.toml runs explain <run-id>
-serial-sync --config ./config.toml runs events <run-id> --component classify
-serial-sync --config ./config.toml source inspect example-creator
+serial-sync --config ./config.toml setup preview --workspace ./serial-sync-rule-workspace --rules-file ./serial-sync-rule-workspace/rules.toml --show-posts
+serial-sync --config ./config.toml run --dry-run --source example-creator
+serial-sync --config ./config.toml debug run <run-id>
+serial-sync --config ./config.toml debug events <run-id> --component classify
 ```
 
 Look for:
