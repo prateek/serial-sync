@@ -3,7 +3,6 @@ package patreon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,10 +18,20 @@ import (
 
 var creatorPattern = regexp.MustCompile(`^https?://(?:www\.)?patreon\.com/(?:(?:c|cw)/)?[^/?#]+/posts`)
 
-type Client struct{}
+type sessionBootstrapper func(context.Context, config.AuthProfile, config.SourceConfig, string) (domain.AuthState, error)
+
+type Client struct {
+	apiBaseURL string
+	loginURL   string
+	bootstrap  sessionBootstrapper
+}
 
 func New() *Client {
-	return &Client{}
+	return &Client{
+		apiBaseURL: "https://www.patreon.com",
+		loginURL:   "https://www.patreon.com/login",
+		bootstrap:  bootstrapWithChromium,
+	}
 }
 
 func (c *Client) Name() string {
@@ -33,9 +42,6 @@ func (c *Client) ValidateSource(source config.SourceConfig) error {
 	if !creatorPattern.MatchString(source.URL) {
 		return fmt.Errorf("patreon source %q must look like a creator posts feed URL", source.ID)
 	}
-	if source.FixtureDir == "" {
-		return errors.New("live Patreon auth/discovery is not implemented yet; set fixture_dir for the current MVP")
-	}
 	return nil
 }
 
@@ -43,6 +49,13 @@ func (c *Client) ListReleases(ctx context.Context, auth config.AuthProfile, sour
 	if err := c.ValidateSource(source); err != nil {
 		return nil, domain.AuthStateReauthRequired, err
 	}
+	if source.FixtureDir != "" {
+		return c.listFixtureReleases(ctx, source)
+	}
+	return c.listLiveReleases(ctx, auth, source)
+}
+
+func (c *Client) listFixtureReleases(ctx context.Context, source config.SourceConfig) ([]provider.ReleaseDocument, domain.AuthState, error) {
 	postFiles, err := filepath.Glob(filepath.Join(source.FixtureDir, "posts", "*.json"))
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, err

@@ -206,6 +206,24 @@ func (c *Config) Validate() error {
 		if auth.ID == "" {
 			return errors.New("auth profile id is required")
 		}
+		if auth.Provider == "" {
+			return fmt.Errorf("auth profile %q provider is required", auth.ID)
+		}
+		switch normalizeAuthMode(auth.Mode) {
+		case "", "fixture":
+		case "username_password":
+			if auth.UsernameEnv == "" {
+				return fmt.Errorf("auth profile %q username_env is required for username_password mode", auth.ID)
+			}
+			if auth.PasswordEnv == "" {
+				return fmt.Errorf("auth profile %q password_env is required for username_password mode", auth.ID)
+			}
+			if auth.SessionPath == "" {
+				return fmt.Errorf("auth profile %q session_path is required for username_password mode", auth.ID)
+			}
+		default:
+			return fmt.Errorf("auth profile %q has unsupported mode %q", auth.ID, auth.Mode)
+		}
 		authIDs[auth.ID] = struct{}{}
 	}
 	for _, source := range c.Sources {
@@ -223,8 +241,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("source %q url is required", source.ID)
 		}
 		if source.AuthProfile != "" {
-			if _, ok := authIDs[source.AuthProfile]; !ok {
+			auth, ok := c.AuthProfileByID(source.AuthProfile)
+			if !ok {
 				return fmt.Errorf("source %q references unknown auth profile %q", source.ID, source.AuthProfile)
+			}
+			if auth.Provider != source.Provider {
+				return fmt.Errorf("source %q provider %q does not match auth profile %q provider %q", source.ID, source.Provider, auth.ID, auth.Provider)
 			}
 		}
 	}
@@ -343,7 +365,9 @@ support_root = "${XDG_STATE_HOME}/serial-sync/support"
 [[auth_profiles]]
 id = "patreon-default"
 provider = "patreon"
-mode = "fixture"
+mode = "username_password"
+username_env = "PATREON_USERNAME"
+password_env = "PATREON_PASSWORD"
 session_path = "${XDG_STATE_HOME}/serial-sync/sessions/patreon-default.json"
 
 [[publishers]]
@@ -353,20 +377,19 @@ path = "${XDG_STATE_HOME}/serial-sync/published"
 enabled = true
 
 [[sources]]
-id = "plum-parrot"
+id = "example-creator"
 provider = "patreon"
-url = "https://www.patreon.com/c/PlumParrot/posts"
+url = "https://www.patreon.com/c/ExampleCreator/posts"
 auth_profile = "patreon-default"
-fixture_dir = "./testdata/fixtures/patreon/plum-parrot"
 enabled = true
 
 [[rules]]
-source = "plum-parrot"
+source = "example-creator"
 priority = 10
-match_type = "tag"
-match_value = "AA3"
-track_key = "andy-again-3"
-track_name = "Andy, Again 3"
+match_type = "fallback"
+match_value = ""
+track_key = "main-series"
+track_name = "Main Series"
 release_role = "chapter"
 content_strategy = "attachment_preferred"
 attachment_glob = ["*.epub", "*.pdf"]
@@ -388,4 +411,8 @@ func normalizePublisherKind(kind string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(kind))
 	}
+}
+
+func normalizeAuthMode(mode string) string {
+	return strings.ToLower(strings.TrimSpace(mode))
 }

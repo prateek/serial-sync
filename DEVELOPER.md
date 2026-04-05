@@ -35,9 +35,9 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 
 ## Current Scope
 
-- Patreon is fixture-backed in the MVP.
+- Patreon supports both live auth and the fixture demo flow.
 - `filesystem` and `exec` publishing are implemented.
-- `daemon` and richer auth paths remain future work.
+- `daemon`, session-bundle import, and richer challenge handling remain future work.
 
 ## Docs
 

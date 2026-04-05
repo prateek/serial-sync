@@ -79,12 +79,12 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 		}
 		if auth, ok := s.Config.AuthProfileByID(sourceCfg.AuthProfile); ok {
 			docs, authState, listErr := client.ListReleases(ctx, auth, sourceCfg)
+			_ = recorder.Event(ctx, "info", "provider", "auth state "+string(authState), "source", sourceCfg.ID)
 			if listErr != nil {
 				err = listErr
 				_ = recorder.Event(ctx, "error", "provider", listErr.Error(), "source", sourceCfg.ID)
 				return result, err
 			}
-			_ = recorder.Event(ctx, "info", "provider", "auth state "+string(authState), "source", sourceCfg.ID)
 			for _, doc := range docs {
 				result.Discovered++
 				decision := classify.Decide(sourceCfg.ID, doc.Normalized, s.Config.RulesForSource(sourceCfg.ID))
@@ -256,7 +256,11 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 	if err != nil {
 		return domain.SyncItemPlan{}, false, false, err
 	}
-	contentHash := hashBytes(normalizedJSON)
+	contentHashJSON, err := json.Marshal(hashableNormalizedRelease(doc.Normalized))
+	if err != nil {
+		return domain.SyncItemPlan{}, false, false, err
+	}
+	contentHash := hashBytes(contentHashJSON)
 	releaseID := "rel_" + uuid.NewString()
 	if existingRelease != nil {
 		releaseID = existingRelease.ID
@@ -539,6 +543,20 @@ func selectPublishers(all []config.PublisherConfig, targetFilter string) []confi
 func hashBytes(input []byte) string {
 	sum := sha256.Sum256(input)
 	return hex.EncodeToString(sum[:])
+}
+
+func hashableNormalizedRelease(release domain.NormalizedRelease) domain.NormalizedRelease {
+	cloned := release
+	if len(release.Attachments) == 0 {
+		return cloned
+	}
+	cloned.Attachments = make([]domain.Attachment, len(release.Attachments))
+	copy(cloned.Attachments, release.Attachments)
+	for idx := range cloned.Attachments {
+		cloned.Attachments[idx].DownloadURL = ""
+		cloned.Attachments[idx].LocalPath = ""
+	}
+	return cloned
 }
 
 func prettyJSON(input []byte) []byte {

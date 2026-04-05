@@ -5,16 +5,15 @@
 ## Quickstart
 
 ```sh
-go run ./cmd/serial-sync init --path ./examples/config.demo.toml --force
-go run ./cmd/serial-sync --config ./examples/config.demo.toml sync
-go run ./cmd/serial-sync --config ./examples/config.demo.toml publish
+export PATREON_USERNAME="you@example.com"
+export PATREON_PASSWORD="your-password"
+go run ./cmd/serial-sync init
 ```
 
-Use `--dry-run` first if you want to preview changes:
+Edit the generated config with your Patreon creator URL and rules, then start with:
 
 ```sh
-go run ./cmd/serial-sync --config ./examples/config.demo.toml sync --dry-run
-go run ./cmd/serial-sync --config ./examples/config.demo.toml publish --dry-run
+go run ./cmd/serial-sync sync --dry-run
 ```
 
 ## What It Does
@@ -28,9 +27,10 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml publish --dry-run
 ## Current Scope
 
 - Patreon is the first provider
-- the MVP currently uses fixture-backed Patreon payloads
+- live Patreon `username_password` bootstrap and persisted session reuse are implemented
+- the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- live auth, `wizard`, and `daemon` are future work
+- `wizard`, `daemon`, and session-bundle import are still future work
 
 ## More
 
