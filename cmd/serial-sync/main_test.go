@@ -121,6 +121,80 @@ func TestAuthBootstrapCommandShape(t *testing.T) {
 	}
 }
 
+func TestAuthImportSessionCommandShape(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{}
+	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	if err != nil {
+		t.Fatalf("newParser() error = %v", err)
+	}
+
+	ctx, err := parser.Parse([]string{"auth", "import-session", "/tmp/patreon.json", "--auth-profile", "patreon-default"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := ctx.Command(), "auth import-session <session-file>"; got != want {
+		t.Fatalf("ctx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Auth.ImportSession.SessionFile, "/tmp/patreon.json"; got != want {
+		t.Fatalf("cli.Auth.ImportSession.SessionFile = %q, want %q", got, want)
+	}
+}
+
+func TestPublishRecordCommandsShape(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{}
+	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	if err != nil {
+		t.Fatalf("newParser() error = %v", err)
+	}
+
+	listCtx, err := parser.Parse([]string{"publish-record", "list", "--source", "plum-parrot", "--target", "local-files"})
+	if err != nil {
+		t.Fatalf("Parse(list) error = %v", err)
+	}
+	if got, want := listCtx.Command(), "publish-record list"; got != want {
+		t.Fatalf("listCtx.Command() = %q, want %q", got, want)
+	}
+
+	inspectCtx, err := parser.Parse([]string{"publish-record", "inspect", "pub_123"})
+	if err != nil {
+		t.Fatalf("Parse(inspect) error = %v", err)
+	}
+	if got, want := inspectCtx.Command(), "publish-record inspect <publish-record>"; got != want {
+		t.Fatalf("inspectCtx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.PublishRecord.Inspect.Record, "pub_123"; got != want {
+		t.Fatalf("cli.PublishRecord.Inspect.Record = %q, want %q", got, want)
+	}
+}
+
+func TestWizardCommandShape(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{}
+	parser, err := newParser(&cli, io.Discard, io.Discard, func(int) {})
+	if err != nil {
+		t.Fatalf("newParser() error = %v", err)
+	}
+
+	ctx, err := parser.Parse([]string{"wizard", "--non-interactive", "--source-url", "https://www.patreon.com/c/ExampleCreator/posts"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got, want := ctx.Command(), "wizard"; got != want {
+		t.Fatalf("ctx.Command() = %q, want %q", got, want)
+	}
+	if got, want := cli.Wizard.SourceURL, "https://www.patreon.com/c/ExampleCreator/posts"; got != want {
+		t.Fatalf("cli.Wizard.SourceURL = %q, want %q", got, want)
+	}
+	if !cli.Wizard.NonInteractive {
+		t.Fatal("expected non-interactive flag to be set")
+	}
+}
+
 func TestRunsInspectCommandShape(t *testing.T) {
 	t.Parallel()
 

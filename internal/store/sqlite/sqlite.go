@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -499,6 +500,94 @@ func (s *Store) UpsertPublishRecord(ctx context.Context, record domain.PublishRe
 	})
 }
 
+func (s *Store) ListPublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error) {
+	switch {
+	case sourceID == "" && targetID == "":
+		rows, err := s.queries.ListPublishRecords(ctx)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]domain.PublishRecordBundle, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, publishRecordBundleFromListRow(row))
+		}
+		return items, nil
+	case sourceID != "" && targetID == "":
+		rows, err := s.queries.ListPublishRecordsBySource(ctx, sourceID)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]domain.PublishRecordBundle, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, publishRecordBundleFromListBySourceRow(row))
+		}
+		return items, nil
+	case sourceID == "" && targetID != "":
+		rows, err := s.queries.ListPublishRecordsByTarget(ctx, targetID)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]domain.PublishRecordBundle, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, publishRecordBundleFromListByTargetRow(row))
+		}
+		return items, nil
+	default:
+		rows, err := s.queries.ListPublishRecordsBySourceAndTarget(ctx, sqldb.ListPublishRecordsBySourceAndTargetParams{
+			SourceID: sourceID,
+			TargetID: targetID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]domain.PublishRecordBundle, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, publishRecordBundleFromListBySourceAndTargetRow(row))
+		}
+		return items, nil
+	}
+}
+
+func (s *Store) GetPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error) {
+	row, err := s.queries.GetPublishRecordBundle(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item := publishRecordBundleFromGetRow(row)
+	return &item, nil
+}
+
+func (s *Store) AcquireLease(ctx context.Context, key, holder string, ttl time.Duration) (bool, error) {
+	if key == "" || holder == "" {
+		return false, fmt.Errorf("lease key and holder are required")
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(ttl)
+	rowsAffected, err := s.queries.AcquireLease(ctx, sqldb.AcquireLeaseParams{
+		Key:       key,
+		Holder:    holder,
+		ExpiresAt: formatTime(expiresAt),
+		UpdatedAt: formatTime(now),
+	})
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
+}
+
+func (s *Store) ReleaseLease(ctx context.Context, key, holder string) error {
+	if key == "" || holder == "" {
+		return nil
+	}
+	return s.queries.ReleaseLease(ctx, sqldb.ReleaseLeaseParams{
+		Key:    key,
+		Holder: holder,
+	})
+}
+
 func (s *Store) getAssignment(ctx context.Context, releaseID string) (*domain.ReleaseAssignment, error) {
 	row, err := s.queries.GetReleaseAssignment(ctx, releaseID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -718,6 +807,441 @@ func publishCandidateFromRowBySource(row sqldb.ListPublishCandidatesBySourceRow)
 			NormalizedRef: row.NormalizedRef,
 			RawRef:        row.RawRef,
 		}),
+	}
+}
+
+func publishRecordBundleFromGetRow(row sqldb.GetPublishRecordBundleRow) domain.PublishRecordBundle {
+	return buildPublishRecordBundle(publishRecordBundleFields{
+		recordID:             row.ID,
+		artifactID:           row.ArtifactID,
+		targetID:             row.TargetID,
+		targetKind:           row.TargetKind,
+		targetRef:            row.TargetRef,
+		publishHash:          row.PublishHash,
+		publishedAt:          row.PublishedAt,
+		publishStatus:        row.Status,
+		publishMessage:       row.Message,
+		artID:                row.ID_2,
+		artReleaseID:         row.ReleaseID,
+		artTrackID:           row.TrackID,
+		artKind:              row.ArtifactKind,
+		artCanonical:         row.IsCanonical,
+		artFilename:          row.Filename,
+		artMIME:              row.MimeType,
+		artSHA:               row.Sha256,
+		artStorage:           row.StorageRef,
+		artBuiltAt:           row.BuiltAt,
+		artState:             row.State,
+		artMetadataRef:       row.MetadataRef,
+		artNormalizedRef:     row.NormalizedRef,
+		artRawRef:            row.RawRef,
+		releaseID:            row.ID_3,
+		releaseSourceID:      row.SourceID,
+		providerReleaseID:    row.ProviderReleaseID,
+		releaseURL:           row.Url,
+		releaseTitle:         row.Title,
+		releasePublishedAt:   row.PublishedAt_2,
+		releaseEditedAt:      row.EditedAt,
+		releasePostType:      row.PostType,
+		releaseVisibility:    row.VisibilityState,
+		releaseNormalizedRef: row.NormalizedPayloadRef,
+		releaseRawRef:        row.RawPayloadRef,
+		releaseHash:          row.ContentHash,
+		releaseDiscoveredAt:  row.DiscoveredAt,
+		releaseStatus:        row.Status_2,
+		sourceID:             row.ID_4,
+		sourceProvider:       row.Provider,
+		sourceURL:            row.SourceUrl,
+		sourceType:           row.SourceType,
+		creatorID:            row.CreatorID,
+		creatorName:          row.CreatorName,
+		authProfileID:        row.AuthProfileID,
+		sourceEnabled:        row.Enabled,
+		sourceSyncCursor:     row.SyncCursor,
+		sourceLastSyncedAt:   row.LastSyncedAt,
+		trackID:              row.ID_5,
+		trackSourceID:        row.SourceID_2,
+		trackKey:             row.TrackKey,
+		trackName:            row.TrackName,
+		canonicalAuthor:      row.CanonicalAuthor,
+		seriesMeta:           row.SeriesMeta,
+		outputPolicy:         row.OutputPolicy,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
+}
+
+func publishRecordBundleFromListRow(row sqldb.ListPublishRecordsRow) domain.PublishRecordBundle {
+	return buildPublishRecordBundle(publishRecordBundleFields{
+		recordID:             row.ID,
+		artifactID:           row.ArtifactID,
+		targetID:             row.TargetID,
+		targetKind:           row.TargetKind,
+		targetRef:            row.TargetRef,
+		publishHash:          row.PublishHash,
+		publishedAt:          row.PublishedAt,
+		publishStatus:        row.Status,
+		publishMessage:       row.Message,
+		artID:                row.ID_2,
+		artReleaseID:         row.ReleaseID,
+		artTrackID:           row.TrackID,
+		artKind:              row.ArtifactKind,
+		artCanonical:         row.IsCanonical,
+		artFilename:          row.Filename,
+		artMIME:              row.MimeType,
+		artSHA:               row.Sha256,
+		artStorage:           row.StorageRef,
+		artBuiltAt:           row.BuiltAt,
+		artState:             row.State,
+		artMetadataRef:       row.MetadataRef,
+		artNormalizedRef:     row.NormalizedRef,
+		artRawRef:            row.RawRef,
+		releaseID:            row.ID_3,
+		releaseSourceID:      row.SourceID,
+		providerReleaseID:    row.ProviderReleaseID,
+		releaseURL:           row.Url,
+		releaseTitle:         row.Title,
+		releasePublishedAt:   row.PublishedAt_2,
+		releaseEditedAt:      row.EditedAt,
+		releasePostType:      row.PostType,
+		releaseVisibility:    row.VisibilityState,
+		releaseNormalizedRef: row.NormalizedPayloadRef,
+		releaseRawRef:        row.RawPayloadRef,
+		releaseHash:          row.ContentHash,
+		releaseDiscoveredAt:  row.DiscoveredAt,
+		releaseStatus:        row.Status_2,
+		sourceID:             row.ID_4,
+		sourceProvider:       row.Provider,
+		sourceURL:            row.SourceUrl,
+		sourceType:           row.SourceType,
+		creatorID:            row.CreatorID,
+		creatorName:          row.CreatorName,
+		authProfileID:        row.AuthProfileID,
+		sourceEnabled:        row.Enabled,
+		sourceSyncCursor:     row.SyncCursor,
+		sourceLastSyncedAt:   row.LastSyncedAt,
+		trackID:              row.ID_5,
+		trackSourceID:        row.SourceID_2,
+		trackKey:             row.TrackKey,
+		trackName:            row.TrackName,
+		canonicalAuthor:      row.CanonicalAuthor,
+		seriesMeta:           row.SeriesMeta,
+		outputPolicy:         row.OutputPolicy,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
+}
+
+func publishRecordBundleFromListBySourceRow(row sqldb.ListPublishRecordsBySourceRow) domain.PublishRecordBundle {
+	return buildPublishRecordBundle(publishRecordBundleFields{
+		recordID:             row.ID,
+		artifactID:           row.ArtifactID,
+		targetID:             row.TargetID,
+		targetKind:           row.TargetKind,
+		targetRef:            row.TargetRef,
+		publishHash:          row.PublishHash,
+		publishedAt:          row.PublishedAt,
+		publishStatus:        row.Status,
+		publishMessage:       row.Message,
+		artID:                row.ID_2,
+		artReleaseID:         row.ReleaseID,
+		artTrackID:           row.TrackID,
+		artKind:              row.ArtifactKind,
+		artCanonical:         row.IsCanonical,
+		artFilename:          row.Filename,
+		artMIME:              row.MimeType,
+		artSHA:               row.Sha256,
+		artStorage:           row.StorageRef,
+		artBuiltAt:           row.BuiltAt,
+		artState:             row.State,
+		artMetadataRef:       row.MetadataRef,
+		artNormalizedRef:     row.NormalizedRef,
+		artRawRef:            row.RawRef,
+		releaseID:            row.ID_3,
+		releaseSourceID:      row.SourceID,
+		providerReleaseID:    row.ProviderReleaseID,
+		releaseURL:           row.Url,
+		releaseTitle:         row.Title,
+		releasePublishedAt:   row.PublishedAt_2,
+		releaseEditedAt:      row.EditedAt,
+		releasePostType:      row.PostType,
+		releaseVisibility:    row.VisibilityState,
+		releaseNormalizedRef: row.NormalizedPayloadRef,
+		releaseRawRef:        row.RawPayloadRef,
+		releaseHash:          row.ContentHash,
+		releaseDiscoveredAt:  row.DiscoveredAt,
+		releaseStatus:        row.Status_2,
+		sourceID:             row.ID_4,
+		sourceProvider:       row.Provider,
+		sourceURL:            row.SourceUrl,
+		sourceType:           row.SourceType,
+		creatorID:            row.CreatorID,
+		creatorName:          row.CreatorName,
+		authProfileID:        row.AuthProfileID,
+		sourceEnabled:        row.Enabled,
+		sourceSyncCursor:     row.SyncCursor,
+		sourceLastSyncedAt:   row.LastSyncedAt,
+		trackID:              row.ID_5,
+		trackSourceID:        row.SourceID_2,
+		trackKey:             row.TrackKey,
+		trackName:            row.TrackName,
+		canonicalAuthor:      row.CanonicalAuthor,
+		seriesMeta:           row.SeriesMeta,
+		outputPolicy:         row.OutputPolicy,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
+}
+
+func publishRecordBundleFromListBySourceAndTargetRow(row sqldb.ListPublishRecordsBySourceAndTargetRow) domain.PublishRecordBundle {
+	return buildPublishRecordBundle(publishRecordBundleFields{
+		recordID:             row.ID,
+		artifactID:           row.ArtifactID,
+		targetID:             row.TargetID,
+		targetKind:           row.TargetKind,
+		targetRef:            row.TargetRef,
+		publishHash:          row.PublishHash,
+		publishedAt:          row.PublishedAt,
+		publishStatus:        row.Status,
+		publishMessage:       row.Message,
+		artID:                row.ID_2,
+		artReleaseID:         row.ReleaseID,
+		artTrackID:           row.TrackID,
+		artKind:              row.ArtifactKind,
+		artCanonical:         row.IsCanonical,
+		artFilename:          row.Filename,
+		artMIME:              row.MimeType,
+		artSHA:               row.Sha256,
+		artStorage:           row.StorageRef,
+		artBuiltAt:           row.BuiltAt,
+		artState:             row.State,
+		artMetadataRef:       row.MetadataRef,
+		artNormalizedRef:     row.NormalizedRef,
+		artRawRef:            row.RawRef,
+		releaseID:            row.ID_3,
+		releaseSourceID:      row.SourceID,
+		providerReleaseID:    row.ProviderReleaseID,
+		releaseURL:           row.Url,
+		releaseTitle:         row.Title,
+		releasePublishedAt:   row.PublishedAt_2,
+		releaseEditedAt:      row.EditedAt,
+		releasePostType:      row.PostType,
+		releaseVisibility:    row.VisibilityState,
+		releaseNormalizedRef: row.NormalizedPayloadRef,
+		releaseRawRef:        row.RawPayloadRef,
+		releaseHash:          row.ContentHash,
+		releaseDiscoveredAt:  row.DiscoveredAt,
+		releaseStatus:        row.Status_2,
+		sourceID:             row.ID_4,
+		sourceProvider:       row.Provider,
+		sourceURL:            row.SourceUrl,
+		sourceType:           row.SourceType,
+		creatorID:            row.CreatorID,
+		creatorName:          row.CreatorName,
+		authProfileID:        row.AuthProfileID,
+		sourceEnabled:        row.Enabled,
+		sourceSyncCursor:     row.SyncCursor,
+		sourceLastSyncedAt:   row.LastSyncedAt,
+		trackID:              row.ID_5,
+		trackSourceID:        row.SourceID_2,
+		trackKey:             row.TrackKey,
+		trackName:            row.TrackName,
+		canonicalAuthor:      row.CanonicalAuthor,
+		seriesMeta:           row.SeriesMeta,
+		outputPolicy:         row.OutputPolicy,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
+}
+
+func publishRecordBundleFromListByTargetRow(row sqldb.ListPublishRecordsByTargetRow) domain.PublishRecordBundle {
+	return buildPublishRecordBundle(publishRecordBundleFields{
+		recordID:             row.ID,
+		artifactID:           row.ArtifactID,
+		targetID:             row.TargetID,
+		targetKind:           row.TargetKind,
+		targetRef:            row.TargetRef,
+		publishHash:          row.PublishHash,
+		publishedAt:          row.PublishedAt,
+		publishStatus:        row.Status,
+		publishMessage:       row.Message,
+		artID:                row.ID_2,
+		artReleaseID:         row.ReleaseID,
+		artTrackID:           row.TrackID,
+		artKind:              row.ArtifactKind,
+		artCanonical:         row.IsCanonical,
+		artFilename:          row.Filename,
+		artMIME:              row.MimeType,
+		artSHA:               row.Sha256,
+		artStorage:           row.StorageRef,
+		artBuiltAt:           row.BuiltAt,
+		artState:             row.State,
+		artMetadataRef:       row.MetadataRef,
+		artNormalizedRef:     row.NormalizedRef,
+		artRawRef:            row.RawRef,
+		releaseID:            row.ID_3,
+		releaseSourceID:      row.SourceID,
+		providerReleaseID:    row.ProviderReleaseID,
+		releaseURL:           row.Url,
+		releaseTitle:         row.Title,
+		releasePublishedAt:   row.PublishedAt_2,
+		releaseEditedAt:      row.EditedAt,
+		releasePostType:      row.PostType,
+		releaseVisibility:    row.VisibilityState,
+		releaseNormalizedRef: row.NormalizedPayloadRef,
+		releaseRawRef:        row.RawPayloadRef,
+		releaseHash:          row.ContentHash,
+		releaseDiscoveredAt:  row.DiscoveredAt,
+		releaseStatus:        row.Status_2,
+		sourceID:             row.ID_4,
+		sourceProvider:       row.Provider,
+		sourceURL:            row.SourceUrl,
+		sourceType:           row.SourceType,
+		creatorID:            row.CreatorID,
+		creatorName:          row.CreatorName,
+		authProfileID:        row.AuthProfileID,
+		sourceEnabled:        row.Enabled,
+		sourceSyncCursor:     row.SyncCursor,
+		sourceLastSyncedAt:   row.LastSyncedAt,
+		trackID:              row.ID_5,
+		trackSourceID:        row.SourceID_2,
+		trackKey:             row.TrackKey,
+		trackName:            row.TrackName,
+		canonicalAuthor:      row.CanonicalAuthor,
+		seriesMeta:           row.SeriesMeta,
+		outputPolicy:         row.OutputPolicy,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
+}
+
+type publishRecordBundleFields struct {
+	recordID             string
+	artifactID           string
+	targetID             string
+	targetKind           string
+	targetRef            string
+	publishHash          string
+	publishedAt          string
+	publishStatus        string
+	publishMessage       string
+	artID                string
+	artReleaseID         string
+	artTrackID           string
+	artKind              string
+	artCanonical         int64
+	artFilename          string
+	artMIME              string
+	artSHA               string
+	artStorage           string
+	artBuiltAt           string
+	artState             string
+	artMetadataRef       string
+	artNormalizedRef     string
+	artRawRef            string
+	releaseID            string
+	releaseSourceID      string
+	providerReleaseID    string
+	releaseURL           string
+	releaseTitle         string
+	releasePublishedAt   string
+	releaseEditedAt      string
+	releasePostType      string
+	releaseVisibility    string
+	releaseNormalizedRef string
+	releaseRawRef        string
+	releaseHash          string
+	releaseDiscoveredAt  string
+	releaseStatus        string
+	sourceID             string
+	sourceProvider       string
+	sourceURL            string
+	sourceType           string
+	creatorID            string
+	creatorName          string
+	authProfileID        string
+	sourceEnabled        int64
+	sourceSyncCursor     string
+	sourceLastSyncedAt   string
+	trackID              sql.NullString
+	trackSourceID        sql.NullString
+	trackKey             sql.NullString
+	trackName            sql.NullString
+	canonicalAuthor      sql.NullString
+	seriesMeta           sql.NullString
+	outputPolicy         sql.NullString
+	createdAt            sql.NullString
+	updatedAt            sql.NullString
+}
+
+func buildPublishRecordBundle(fields publishRecordBundleFields) domain.PublishRecordBundle {
+	return domain.PublishRecordBundle{
+		Record: domain.PublishRecord{
+			ID:          fields.recordID,
+			ArtifactID:  fields.artifactID,
+			TargetID:    fields.targetID,
+			TargetKind:  fields.targetKind,
+			TargetRef:   fields.targetRef,
+			PublishHash: fields.publishHash,
+			PublishedAt: parseTime(fields.publishedAt),
+			Status:      domain.PublishStatus(fields.publishStatus),
+			Message:     fields.publishMessage,
+		},
+		Artifact: domain.Artifact{
+			ID:            fields.artID,
+			ReleaseID:     fields.artReleaseID,
+			TrackID:       fields.artTrackID,
+			ArtifactKind:  fields.artKind,
+			IsCanonical:   fields.artCanonical == 1,
+			Filename:      fields.artFilename,
+			MIMEType:      fields.artMIME,
+			SHA256:        fields.artSHA,
+			StorageRef:    fields.artStorage,
+			BuiltAt:       parseTime(fields.artBuiltAt),
+			State:         domain.ArtifactState(fields.artState),
+			MetadataRef:   fields.artMetadataRef,
+			NormalizedRef: fields.artNormalizedRef,
+			RawRef:        fields.artRawRef,
+		},
+		Release: domain.Release{
+			ID:                   fields.releaseID,
+			SourceID:             fields.releaseSourceID,
+			ProviderReleaseID:    fields.providerReleaseID,
+			URL:                  fields.releaseURL,
+			Title:                fields.releaseTitle,
+			PublishedAt:          parseTime(fields.releasePublishedAt),
+			EditedAt:             parseTime(fields.releaseEditedAt),
+			PostType:             fields.releasePostType,
+			VisibilityState:      fields.releaseVisibility,
+			NormalizedPayloadRef: fields.releaseNormalizedRef,
+			RawPayloadRef:        fields.releaseRawRef,
+			ContentHash:          fields.releaseHash,
+			DiscoveredAt:         parseTime(fields.releaseDiscoveredAt),
+			Status:               fields.releaseStatus,
+		},
+		Source: domain.Source{
+			ID:            fields.sourceID,
+			Provider:      fields.sourceProvider,
+			SourceURL:     fields.sourceURL,
+			SourceType:    fields.sourceType,
+			CreatorID:     fields.creatorID,
+			CreatorName:   fields.creatorName,
+			AuthProfileID: fields.authProfileID,
+			Enabled:       fields.sourceEnabled == 1,
+			SyncCursor:    fields.sourceSyncCursor,
+			LastSyncedAt:  parseTime(fields.sourceLastSyncedAt),
+		},
+		Track: trackFromNullableRow(
+			fields.trackID,
+			fields.trackSourceID,
+			fields.trackKey,
+			fields.trackName,
+			fields.canonicalAuthor,
+			fields.seriesMeta,
+			fields.outputPolicy,
+			fields.createdAt,
+			fields.updatedAt,
+		),
 	}
 }
 

@@ -224,6 +224,94 @@ ON CONFLICT(artifact_id, target_id, publish_hash) DO UPDATE SET
   status = excluded.status,
   message = excluded.message;
 
+-- name: ListPublishRecords :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+ORDER BY pr.published_at DESC, pr.id DESC;
+
+-- name: ListPublishRecordsBySource :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE s.id = sqlc.arg(source_id)
+ORDER BY pr.published_at DESC, pr.id DESC;
+
+-- name: ListPublishRecordsByTarget :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE pr.target_id = sqlc.arg(target_id)
+ORDER BY pr.published_at DESC, pr.id DESC;
+
+-- name: ListPublishRecordsBySourceAndTarget :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE s.id = sqlc.arg(source_id)
+  AND pr.target_id = sqlc.arg(target_id)
+ORDER BY pr.published_at DESC, pr.id DESC;
+
+-- name: GetPublishRecordBundle :one
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE pr.id = sqlc.arg(id);
+
+-- name: AcquireLease :execrows
+INSERT INTO leases (key, holder, expires_at, updated_at)
+VALUES (sqlc.arg(key), sqlc.arg(holder), sqlc.arg(expires_at), sqlc.arg(updated_at))
+ON CONFLICT(key) DO UPDATE SET
+  holder = excluded.holder,
+  expires_at = excluded.expires_at,
+  updated_at = excluded.updated_at
+WHERE leases.expires_at <= excluded.updated_at
+   OR leases.holder = excluded.holder;
+
+-- name: ReleaseLease :exec
+DELETE FROM leases
+WHERE key = sqlc.arg(key) AND holder = sqlc.arg(holder);
+
 -- name: ListPublishCandidates :many
 SELECT
   s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,

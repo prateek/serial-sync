@@ -28,6 +28,7 @@ type AuthBootstrapResult struct {
 type Client interface {
 	Name() string
 	ValidateSource(source config.SourceConfig) error
+	ValidateSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (domain.AuthState, error)
 	BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (AuthBootstrapResult, error)
 	ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (ListResult, error)
 	PrepareRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc ReleaseDocument, decision domain.TrackDecision) (ReleaseDocument, domain.AuthState, error)

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,27 +19,29 @@ import (
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/provider"
 	"github.com/prateek/serial-sync/internal/provider/patreon"
+	runtimedaemon "github.com/prateek/serial-sync/internal/runtime/daemon"
 	"github.com/prateek/serial-sync/internal/store/sqlite"
 )
 
 type CLI struct {
 	ConfigPath string `name:"config" short:"c" help:"Path to config file."`
 
-	Init     InitCmd     `cmd:"" help:"Write an example config file."`
-	Config   ConfigCmd   `cmd:"" help:"Validate configuration."`
-	Auth     AuthCmd     `cmd:"" help:"Auth bootstrap and session helpers."`
-	Source   SourceCmd   `cmd:"" help:"Inspect configured sources."`
-	Track    TrackCmd    `cmd:"" help:"Inspect a track."`
-	Release  ReleaseCmd  `cmd:"" help:"Inspect a release."`
-	Artifact ArtifactCmd `cmd:"" help:"Inspect an artifact."`
-	Runs     RunsCmd     `cmd:"" name:"runs" help:"Inspect a prior run."`
-	Support  SupportCmd  `cmd:"" help:"Support bundle helpers."`
-	Plan     PlanCmd     `cmd:"" help:"Show planned sync work."`
-	Run      RunCmd      `cmd:"" help:"Run end-to-end workflows."`
-	Sync     SyncCmd     `cmd:"" help:"Run a sync."`
-	Publish  PublishCmd  `cmd:"" help:"Publish canonical artifacts."`
-	Wizard   WizardCmd   `cmd:"" help:"Interactive setup wizard."`
-	Daemon   DaemonCmd   `cmd:"" help:"Background scheduler."`
+	Init          InitCmd          `cmd:"" help:"Write an example config file."`
+	Config        ConfigCmd        `cmd:"" help:"Validate configuration."`
+	Auth          AuthCmd          `cmd:"" help:"Auth bootstrap and session helpers."`
+	Source        SourceCmd        `cmd:"" help:"Inspect configured sources."`
+	Track         TrackCmd         `cmd:"" help:"Inspect a track."`
+	Release       ReleaseCmd       `cmd:"" help:"Inspect a release."`
+	Artifact      ArtifactCmd      `cmd:"" help:"Inspect an artifact."`
+	PublishRecord PublishRecordCmd `cmd:"" name:"publish-record" help:"Inspect publish records."`
+	Runs          RunsCmd          `cmd:"" name:"runs" help:"Inspect a prior run."`
+	Support       SupportCmd       `cmd:"" help:"Support bundle helpers."`
+	Plan          PlanCmd          `cmd:"" help:"Show planned sync work."`
+	Run           RunCmd           `cmd:"" help:"Run end-to-end workflows."`
+	Sync          SyncCmd          `cmd:"" help:"Run a sync."`
+	Publish       PublishCmd       `cmd:"" help:"Publish canonical artifacts."`
+	Wizard        WizardCmd        `cmd:"" help:"Interactive setup wizard."`
+	Daemon        DaemonCmd        `cmd:"" help:"Background scheduler."`
 }
 
 type InitCmd struct {
@@ -50,7 +54,8 @@ type ConfigCmd struct {
 }
 
 type AuthCmd struct {
-	Bootstrap AuthBootstrapCmd `cmd:"" help:"Create or verify provider session state."`
+	Bootstrap     AuthBootstrapCmd     `cmd:"" help:"Create or verify provider session state."`
+	ImportSession AuthImportSessionCmd `cmd:"" help:"Import a provider session bundle and validate it."`
 }
 
 type SourceCmd struct {
@@ -68,6 +73,11 @@ type ReleaseCmd struct {
 
 type ArtifactCmd struct {
 	Inspect ArtifactInspectCmd `cmd:"" help:"Inspect an artifact."`
+}
+
+type PublishRecordCmd struct {
+	List    PublishRecordListCmd    `cmd:"" help:"List publish records."`
+	Inspect PublishRecordInspectCmd `cmd:"" help:"Inspect a publish record."`
 }
 
 type RunsCmd struct {
@@ -94,6 +104,12 @@ type AuthBootstrapCmd struct {
 	Force         bool   `name:"force" help:"Discard any existing session and log in again."`
 }
 
+type AuthImportSessionCmd struct {
+	SessionFile   string `arg:"" name:"session-file" help:"Path to the session bundle JSON file."`
+	SourceID      string `name:"source" help:"Limit session import validation to one source."`
+	AuthProfileID string `name:"auth-profile" help:"Limit session import validation to one auth profile."`
+}
+
 type SourceListCmd struct{}
 
 type SourceInspectCmd struct {
@@ -110,6 +126,15 @@ type ReleaseInspectCmd struct {
 
 type ArtifactInspectCmd struct {
 	Artifact string `arg:"" name:"artifact" help:"Artifact ID to inspect."`
+}
+
+type PublishRecordListCmd struct {
+	SourceID string `name:"source" help:"Limit records to one source."`
+	TargetID string `name:"target" help:"Limit records to one publish target."`
+}
+
+type PublishRecordInspectCmd struct {
+	Record string `arg:"" name:"publish-record" help:"Publish record ID to inspect."`
 }
 
 type RunInspectCmd struct {
@@ -140,7 +165,20 @@ type PublishCmd struct {
 	DryRun   bool   `name:"dry-run" help:"Show planned publish actions without mutating state."`
 }
 
-type WizardCmd struct{}
+type WizardCmd struct {
+	Path           string `name:"path" help:"Write the generated config to this path."`
+	Force          bool   `name:"force" help:"Overwrite an existing config file."`
+	SourceURL      string `name:"source-url" help:"Patreon source URL to configure."`
+	SourceID       string `name:"source-id" help:"Source ID to write into the config."`
+	AuthProfileID  string `name:"auth-profile" help:"Auth profile ID to write into the config."`
+	PublisherID    string `name:"publisher" help:"Filesystem publisher ID to write into the config."`
+	PublisherPath  string `name:"publisher-path" help:"Filesystem publish path."`
+	TrackKey       string `name:"track-key" help:"Starter fallback track key."`
+	TrackName      string `name:"track-name" help:"Starter fallback track name."`
+	BootstrapAuth  bool   `name:"bootstrap-auth" help:"Bootstrap auth immediately after writing the config."`
+	Sample         bool   `name:"sample" help:"Run a dry-run sync after writing the config."`
+	NonInteractive bool   `name:"non-interactive" help:"Fail instead of prompting for missing fields."`
+}
 
 type DaemonCmd struct {
 	SourceID     string `name:"source" help:"Limit daemon runs to one source."`
@@ -221,6 +259,14 @@ func (cmd *AuthBootstrapCmd) Run(cli *CLI) error {
 	})
 }
 
+func (cmd *AuthImportSessionCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.ImportAuthSession(ctx, cmd.SourceID, cmd.AuthProfileID, cmd.SessionFile, "auth import-session")
+		fmt.Println(app.FormatAuthImportResult(result))
+		return err
+	})
+}
+
 func (cmd *SourceListCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
 		for _, source := range service.Config.Sources {
@@ -267,6 +313,37 @@ func (cmd *ReleaseInspectCmd) Run(cli *CLI) error {
 func (cmd *ArtifactInspectCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		payload, err := service.InspectArtifact(ctx, cmd.Artifact)
+		if err != nil {
+			return err
+		}
+		return printJSON(payload)
+	})
+}
+
+func (cmd *PublishRecordListCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		records, err := service.ListPublishRecords(ctx, cmd.SourceID, cmd.TargetID)
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			fmt.Printf(
+				"%s\t%s\t%s\t%s\t%s\t%s\n",
+				record.Record.ID,
+				record.Source.ID,
+				record.Record.TargetID,
+				record.Record.Status,
+				record.Record.PublishedAt.Format(time.RFC3339),
+				record.Artifact.ID,
+			)
+		}
+		return nil
+	})
+}
+
+func (cmd *PublishRecordInspectCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		payload, err := service.InspectPublishRecord(ctx, cmd.Record)
 		if err != nil {
 			return err
 		}
@@ -339,10 +416,6 @@ func (cmd *PublishCmd) Run(cli *CLI) error {
 	})
 }
 
-func (cmd *WizardCmd) Run() error {
-	return app.NotImplemented("wizard")
-}
-
 func (cmd *DaemonCmd) Run(cli *CLI) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -361,11 +434,69 @@ func (cmd *DaemonCmd) Run(cli *CLI) error {
 		if duration <= 0 {
 			return fmt.Errorf("daemon poll interval must be positive")
 		}
+		leaseTTLValue := service.Config.Scheduler.LeaseTTL
+		if leaseTTLValue == "" {
+			leaseTTLValue = "30m"
+		}
+		leaseTTL, err := time.ParseDuration(leaseTTLValue)
+		if err != nil {
+			return fmt.Errorf("invalid daemon lease ttl %q: %w", leaseTTLValue, err)
+		}
+		if leaseTTL <= 0 {
+			return fmt.Errorf("daemon lease ttl must be positive")
+		}
+		sources := enabledSources(service.Config.Sources, cmd.SourceID)
+		if len(sources) == 0 {
+			return fmt.Errorf("no enabled sources match %q", cmd.SourceID)
+		}
+		sourceIDs := make([]string, 0, len(sources))
+		for _, source := range sources {
+			sourceIDs = append(sourceIDs, source.ID)
+		}
+		holderID := daemonHolderID()
+		state := runtimedaemon.NewState(holderID, duration, sourceIDs)
+		server, err := runtimedaemon.Start(ctx, service.Config.Scheduler.HealthAddr, state)
+		if err != nil {
+			return fmt.Errorf("start daemon health server: %w", err)
+		}
+		defer func() {
+			if server != nil {
+				_ = server.Close()
+			}
+		}()
 		for {
-			result, err := service.RunOnce(ctx, cmd.SourceID, cmd.TargetID, "daemon")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "daemon cycle failed: %v\n", err)
-			} else {
+			for _, source := range sources {
+				state.MarkRunStart(source.ID)
+				acquired, leaseErr := service.Repo.AcquireLease(ctx, "source:"+source.ID, holderID, leaseTTL)
+				if leaseErr != nil {
+					state.MarkRunFailure(source.ID, leaseErr)
+					fmt.Fprintf(os.Stderr, "daemon lease failed for %s: %v\n", source.ID, leaseErr)
+					continue
+				}
+				if !acquired {
+					state.MarkLeaseSkipped(source.ID)
+					fmt.Fprintf(os.Stderr, "daemon skipped %s: lease held by another worker\n", source.ID)
+					continue
+				}
+				result, runErr := service.RunOnce(ctx, source.ID, cmd.TargetID, "daemon")
+				if releaseErr := service.Repo.ReleaseLease(context.Background(), "source:"+source.ID, holderID); releaseErr != nil {
+					fmt.Fprintf(os.Stderr, "daemon lease release failed for %s: %v\n", source.ID, releaseErr)
+				}
+				if runErr != nil {
+					state.MarkRunFailure(source.ID, runErr)
+					fmt.Fprintf(os.Stderr, "daemon cycle failed for %s: %v\n", source.ID, runErr)
+					continue
+				}
+				state.MarkRunSuccess(
+					source.ID,
+					result.Sync.RunID,
+					result.Publish.RunID,
+					result.Sync.Discovered,
+					result.Sync.Changed,
+					result.Sync.MaterializedArtifacts,
+					result.Publish.Published,
+					result.Publish.Failed,
+				)
 				fmt.Println(app.FormatRunOnceResult(result))
 			}
 			timer := time.NewTimer(duration)
@@ -377,6 +508,28 @@ func (cmd *DaemonCmd) Run(cli *CLI) error {
 			}
 		}
 	})
+}
+
+func daemonHolderID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "serial-sync"
+	}
+	return hostname + "-" + strconv.Itoa(os.Getpid())
+}
+
+func enabledSources(all []config.SourceConfig, sourceFilter string) []config.SourceConfig {
+	items := make([]config.SourceConfig, 0, len(all))
+	for _, source := range all {
+		if !source.Enabled {
+			continue
+		}
+		if strings.TrimSpace(sourceFilter) != "" && source.ID != sourceFilter {
+			continue
+		}
+		items = append(items, source)
+	}
+	return items
 }
 
 func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, error) {

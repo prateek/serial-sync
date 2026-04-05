@@ -25,16 +25,19 @@ docker run --rm \
 ## Current Scope
 
 - Patreon is the first provider
-- live Patreon `username_password` bootstrap and persisted session reuse are implemented
-- `run once`, `auth bootstrap`, and a single-process `daemon` are implemented
+- live Patreon `username_password` bootstrap, TOTP-assisted login, session import, and persisted session reuse are implemented
+- creator-feed and collection Patreon sources are implemented
+- `wizard`, `run once`, `auth bootstrap`, `auth import-session`, `publish-record inspect`, and a single-process `daemon` are implemented
 - the Docker image includes Chromium and Xvfb for first-run Patreon bootstrap inside the container
+- the daemon exposes `/healthz`, `/status`, and `/metrics`
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- `wizard`, session-bundle import, richer challenge handling, and richer daemon coordination remain future work
+- static binary release packaging is configured through `.goreleaser.yml`
 
 ## More
 
 - [Developer guide](DEVELOPER.md)
+- [First source walkthrough](docs/first-source.md)
 - [Config reference](docs/config.md)
 - [Docker quickstart](docs/docker-quickstart.md)
 - [Troubleshooting](docs/troubleshooting.md)

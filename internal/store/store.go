@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/prateek/serial-sync/internal/domain"
 )
@@ -44,4 +45,9 @@ type Repository interface {
 	ListPublishCandidates(ctx context.Context, sourceID string) ([]domain.PublishCandidate, error)
 	HasSuccessfulPublish(ctx context.Context, artifactID, targetID, publishHash string) (bool, error)
 	UpsertPublishRecord(ctx context.Context, record domain.PublishRecord) error
+	ListPublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error)
+	GetPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error)
+
+	AcquireLease(ctx context.Context, key, holder string, ttl time.Duration) (bool, error)
+	ReleaseLease(ctx context.Context, key, holder string) error
 }

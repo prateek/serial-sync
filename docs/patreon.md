@@ -4,10 +4,13 @@ The built-in Patreon provider now supports both the fixture demo path and a live
 
 Implemented:
 
-- creator-feed URL validation
+- creator-feed and collection URL validation
 - persisted Patreon session reuse from `session_path`
+- session-bundle import validation through `auth import-session`
 - isolated Chromium bootstrap in a headed browser session for the non-challenge login case
+- optional TOTP-assisted login when `totp_secret_env` is configured
 - creator-feed discovery through Patreon’s web JSON endpoints
+- collection discovery through authenticated Patreon HTML pages plus post-detail fetches
 - steady-state live syncs that stop after a recent known-id boundary instead of re-walking the full corpus every run
 - normalization of title, post type, visibility, tags, collections, attachments, and text content
 - lazy attachment caching for live download URLs only when a classified release actually needs the selected attachment
@@ -22,6 +25,5 @@ Operational notes:
 
 Deferred:
 
-- session-bundle import
-- richer challenge providers beyond clear `challenge_required` failures
-- richer daemon-specific auth refresh and health helpers
+- richer non-TOTP challenge providers beyond clear `challenge_required` failures
+- richer daemon-specific auth refresh heuristics

@@ -36,6 +36,16 @@ docker run --rm \
 
 The image includes Chromium and Xvfb. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
 
+If you already have a valid Patreon session bundle, you can import it instead:
+
+```sh
+docker run --rm \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  -v "$PWD/patreon-session.json:/tmp/patreon-session.json:ro" \
+  serial-sync auth import-session /tmp/patreon-session.json
+```
+
 ## Run One Sync Cycle
 
 ```sh
@@ -73,6 +83,12 @@ docker run -d \
 ```
 
 The daemon is a single-process scheduler. It runs the same `run once` pipeline on the configured interval.
+
+If `health_addr` is set in the config, the daemon also exposes:
+
+- `/healthz`
+- `/status`
+- `/metrics`
 
 A Compose example lives in `examples/docker-compose.yml`.
 

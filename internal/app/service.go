@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -59,6 +60,24 @@ type AuthBootstrapResult struct {
 	Bootstrapped int                 `json:"bootstrapped"`
 	Failed       int                 `json:"failed"`
 	Items        []AuthBootstrapItem `json:"items"`
+}
+
+type AuthImportItem struct {
+	SourceID      string           `json:"source_id"`
+	Provider      string           `json:"provider"`
+	AuthProfileID string           `json:"auth_profile_id"`
+	SessionPath   string           `json:"session_path"`
+	AuthState     domain.AuthState `json:"auth_state"`
+	Action        string           `json:"action"`
+	Message       string           `json:"message,omitempty"`
+}
+
+type AuthImportResult struct {
+	RunID     string           `json:"run_id"`
+	Imported  int              `json:"imported"`
+	Validated int              `json:"validated"`
+	Failed    int              `json:"failed"`
+	Items     []AuthImportItem `json:"items"`
 }
 
 type RunOnceResult struct {
@@ -258,6 +277,127 @@ func (s *Service) BootstrapAuth(ctx context.Context, sourceFilter, authFilter st
 	}
 	if len(failures) > 0 {
 		return result, fmt.Errorf("auth bootstrap failed for %d source(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+	return result, nil
+}
+
+func (s *Service) ImportAuthSession(ctx context.Context, sourceFilter, authFilter, sessionFile, command string) (AuthImportResult, error) {
+	recorder, err := observe.Start(ctx, s.Repo, command, strings.TrimSpace(authFilter), false)
+	if err != nil {
+		return AuthImportResult{}, err
+	}
+	result := AuthImportResult{RunID: recorder.RunID()}
+	defer func() {
+		if err != nil {
+			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
+		}
+	}()
+	sessionBytes, err := os.ReadFile(sessionFile)
+	if err != nil {
+		return result, fmt.Errorf("read session bundle %s: %w", sessionFile, err)
+	}
+	sources := selectSources(s.Config.Sources, sourceFilter)
+	if authFilter != "" {
+		filtered := make([]config.SourceConfig, 0, len(sources))
+		for _, source := range sources {
+			if source.AuthProfile == authFilter {
+				filtered = append(filtered, source)
+			}
+		}
+		sources = filtered
+	}
+	if len(sources) == 0 {
+		err = fmt.Errorf("no enabled sources match source=%q auth_profile=%q", sourceFilter, authFilter)
+		return result, err
+	}
+	importedAuthProfiles := map[string]bool{}
+	var failures []string
+	for _, sourceCfg := range sources {
+		client, ok := s.Providers.Get(sourceCfg.Provider)
+		if !ok {
+			err = fmt.Errorf("no provider registered for %q", sourceCfg.Provider)
+			failures = append(failures, err.Error())
+			result.Failed++
+			result.Items = append(result.Items, AuthImportItem{
+				SourceID:      sourceCfg.ID,
+				Provider:      sourceCfg.Provider,
+				AuthProfileID: sourceCfg.AuthProfile,
+				AuthState:     domain.AuthStateReauthRequired,
+				Action:        "failed",
+				Message:       err.Error(),
+			})
+			_ = recorder.Event(ctx, "error", "auth", err.Error(), "source", sourceCfg.ID)
+			continue
+		}
+		auth, ok := s.Config.AuthProfileByID(sourceCfg.AuthProfile)
+		if !ok {
+			err = fmt.Errorf("source %q references missing auth profile %q", sourceCfg.ID, sourceCfg.AuthProfile)
+			failures = append(failures, err.Error())
+			result.Failed++
+			result.Items = append(result.Items, AuthImportItem{
+				SourceID:      sourceCfg.ID,
+				Provider:      sourceCfg.Provider,
+				AuthProfileID: sourceCfg.AuthProfile,
+				AuthState:     domain.AuthStateReauthRequired,
+				Action:        "failed",
+				Message:       err.Error(),
+			})
+			_ = recorder.Event(ctx, "error", "auth", err.Error(), "source", sourceCfg.ID)
+			continue
+		}
+		action := "validated"
+		if !importedAuthProfiles[auth.ID] {
+			if err := writeSessionBundle(auth.SessionPath, sessionBytes); err != nil {
+				failures = append(failures, err.Error())
+				result.Failed++
+				result.Items = append(result.Items, AuthImportItem{
+					SourceID:      sourceCfg.ID,
+					Provider:      sourceCfg.Provider,
+					AuthProfileID: auth.ID,
+					SessionPath:   auth.SessionPath,
+					AuthState:     domain.AuthStateReauthRequired,
+					Action:        "failed",
+					Message:       err.Error(),
+				})
+				_ = recorder.Event(ctx, "error", "auth", err.Error(), "source", sourceCfg.ID)
+				continue
+			}
+			importedAuthProfiles[auth.ID] = true
+			action = "imported"
+			result.Imported++
+			_ = recorder.Event(ctx, "info", "auth", "imported session bundle", "source", sourceCfg.ID)
+		}
+		authState, validateErr := client.ValidateSession(ctx, auth, sourceCfg)
+		item := AuthImportItem{
+			SourceID:      sourceCfg.ID,
+			Provider:      sourceCfg.Provider,
+			AuthProfileID: auth.ID,
+			SessionPath:   auth.SessionPath,
+			AuthState:     authState,
+			Action:        action,
+		}
+		if validateErr != nil {
+			item.Action = "failed"
+			item.Message = validateErr.Error()
+			result.Failed++
+			failures = append(failures, validateErr.Error())
+			_ = recorder.Event(ctx, "error", "auth", validateErr.Error(), "source", sourceCfg.ID)
+		} else {
+			result.Validated++
+			_ = recorder.Event(ctx, "info", "auth", action+" session bundle", "source", sourceCfg.ID)
+		}
+		result.Items = append(result.Items, item)
+	}
+	status := domain.RunStatusSucceeded
+	summary := fmt.Sprintf("imported=%d validated=%d failed=%d", result.Imported, result.Validated, result.Failed)
+	if len(failures) > 0 {
+		status = domain.RunStatusFailed
+	}
+	if finishErr := recorder.Finish(ctx, status, summary); finishErr != nil {
+		return result, finishErr
+	}
+	if len(failures) > 0 {
+		return result, fmt.Errorf("session import failed for %d source(s): %s", len(failures), strings.Join(failures, "; "))
 	}
 	return result, nil
 }
@@ -644,6 +784,21 @@ func (s *Service) InspectRun(ctx context.Context, id string) (*domain.RunBundle,
 	return run, nil
 }
 
+func (s *Service) ListPublishRecords(ctx context.Context, sourceFilter, targetFilter string) ([]domain.PublishRecordBundle, error) {
+	return s.Repo.ListPublishRecords(ctx, sourceFilter, targetFilter)
+}
+
+func (s *Service) InspectPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error) {
+	record, err := s.Repo.GetPublishRecord(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, fmt.Errorf("unknown publish record %q", id)
+	}
+	return record, nil
+}
+
 func (s *Service) SupportBundle(ctx context.Context, runID string) (string, error) {
 	bundle, err := s.InspectRun(ctx, runID)
 	if err != nil {
@@ -660,14 +815,82 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 	if err := os.WriteFile(filepath.Join(dir, "run.json"), runJSON, 0o644); err != nil {
 		return "", err
 	}
-	configJSON, err := json.MarshalIndent(s.Config, "", "  ")
+	configJSON, err := json.MarshalIndent(redactConfigForSupport(s.Config), "", "  ")
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), configJSON, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.redacted.json"), configJSON, 0o644); err != nil {
 		return "", err
 	}
-	readme := "serial-sync support bundle\nrun_id=" + runID + "\nconfig_path=" + s.ConfigPath + "\n"
+	releaseIDs, artifactIDs := collectRunEntityIDs(bundle)
+	for _, releaseID := range releaseIDs {
+		releaseBundle, err := s.Repo.GetReleaseBundle(ctx, releaseID)
+		if err != nil || releaseBundle == nil {
+			continue
+		}
+		releaseJSON, err := json.MarshalIndent(releaseBundle, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		releasePath := filepath.Join(dir, "releases", releaseID+".json")
+		if err := os.MkdirAll(filepath.Dir(releasePath), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(releasePath, releaseJSON, 0o644); err != nil {
+			return "", err
+		}
+		if _, err := copySupportFile(releaseBundle.Release.NormalizedPayloadRef, filepath.Join(dir, "payloads", "releases", releaseID)); err != nil {
+			return "", err
+		}
+		if _, err := copySupportFile(releaseBundle.Release.RawPayloadRef, filepath.Join(dir, "payloads", "releases", releaseID)); err != nil {
+			return "", err
+		}
+		for _, artifact := range releaseBundle.Artifacts {
+			if _, err := copySupportFile(artifact.MetadataRef, filepath.Join(dir, "payloads", "artifacts", artifact.ID)); err != nil {
+				return "", err
+			}
+			if _, err := copySupportFile(artifact.NormalizedRef, filepath.Join(dir, "payloads", "artifacts", artifact.ID)); err != nil {
+				return "", err
+			}
+			if _, err := copySupportFile(artifact.RawRef, filepath.Join(dir, "payloads", "artifacts", artifact.ID)); err != nil {
+				return "", err
+			}
+		}
+	}
+	eventPayloads := make([]string, 0, len(bundle.Events))
+	for _, event := range bundle.Events {
+		if event.PayloadRef == "" {
+			continue
+		}
+		relPath, err := copySupportFile(event.PayloadRef, filepath.Join(dir, "payloads", "events", event.ID))
+		if err != nil {
+			return "", err
+		}
+		if relPath != "" {
+			eventPayloads = append(eventPayloads, relPath)
+		}
+	}
+	manifest := map[string]any{
+		"run_id":              runID,
+		"generated_at":        time.Now().UTC(),
+		"config_path":         redactPathForSupport(s.ConfigPath),
+		"release_ids":         releaseIDs,
+		"artifact_ids":        artifactIDs,
+		"event_payload_files": eventPayloads,
+		"redactions": []string{
+			"auth env var names are redacted",
+			"session paths and runtime storage paths are redacted",
+			"exec publisher arguments after argv[0] are redacted",
+		},
+	}
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestJSON, 0o644); err != nil {
+		return "", err
+	}
+	readme := "serial-sync support bundle\nrun_id=" + runID + "\nconfig_path=" + redactPathForSupport(s.ConfigPath) + "\nredactions=env names, session paths, runtime storage paths, exec args\n"
 	if err := os.WriteFile(filepath.Join(dir, "README.txt"), []byte(readme), 0o644); err != nil {
 		return "", err
 	}
@@ -768,6 +991,120 @@ func mergeSourceSyncState(sourceCfg config.SourceConfig, stored *domain.Source, 
 	return &merged
 }
 
+func collectRunEntityIDs(bundle *domain.RunBundle) ([]string, []string) {
+	releaseSet := map[string]struct{}{}
+	artifactSet := map[string]struct{}{}
+	for _, event := range bundle.Events {
+		switch event.EntityKind {
+		case "release":
+			if strings.TrimSpace(event.EntityID) != "" {
+				releaseSet[event.EntityID] = struct{}{}
+			}
+		case "artifact":
+			if strings.TrimSpace(event.EntityID) != "" {
+				artifactSet[event.EntityID] = struct{}{}
+			}
+		}
+	}
+	releaseIDs := make([]string, 0, len(releaseSet))
+	for id := range releaseSet {
+		releaseIDs = append(releaseIDs, id)
+	}
+	artifactIDs := make([]string, 0, len(artifactSet))
+	for id := range artifactSet {
+		artifactIDs = append(artifactIDs, id)
+	}
+	sort.Strings(releaseIDs)
+	sort.Strings(artifactIDs)
+	return releaseIDs, artifactIDs
+}
+
+func copySupportFile(src, dstDir string) (string, error) {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return "", err
+	}
+	dstPath := filepath.Join(dstDir, filepath.Base(src))
+	if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+		return "", err
+	}
+	return dstPath, nil
+}
+
+func writeSessionBundle(dst string, payload []byte) error {
+	if strings.TrimSpace(dst) == "" {
+		return errors.New("session destination path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, payload, 0o600)
+}
+
+func redactConfigForSupport(cfg *config.Config) *config.Config {
+	redacted := *cfg
+	redacted.Runtime.StoreDSN = redactPathForSupport(cfg.Runtime.StoreDSN)
+	redacted.Runtime.ArtifactRoot = redactPathForSupport(cfg.Runtime.ArtifactRoot)
+	redacted.Runtime.SupportRoot = redactPathForSupport(cfg.Runtime.SupportRoot)
+	redacted.AuthProfiles = append([]config.AuthProfile(nil), cfg.AuthProfiles...)
+	for idx := range redacted.AuthProfiles {
+		redacted.AuthProfiles[idx].UsernameEnv = redactEnvName(redacted.AuthProfiles[idx].UsernameEnv)
+		redacted.AuthProfiles[idx].PasswordEnv = redactEnvName(redacted.AuthProfiles[idx].PasswordEnv)
+		redacted.AuthProfiles[idx].TOTPSecretEnv = redactEnvName(redacted.AuthProfiles[idx].TOTPSecretEnv)
+		redacted.AuthProfiles[idx].SessionPath = redactPathForSupport(redacted.AuthProfiles[idx].SessionPath)
+	}
+	redacted.Publishers = append([]config.PublisherConfig(nil), cfg.Publishers...)
+	for idx := range redacted.Publishers {
+		redacted.Publishers[idx].Path = redactPathForSupport(redacted.Publishers[idx].Path)
+		redacted.Publishers[idx].Command = redactCommand(redacted.Publishers[idx].Command)
+	}
+	redacted.Sources = append([]config.SourceConfig(nil), cfg.Sources...)
+	for idx := range redacted.Sources {
+		redacted.Sources[idx].FixtureDir = redactPathForSupport(redacted.Sources[idx].FixtureDir)
+	}
+	redacted.Rules = append([]config.RuleConfig(nil), cfg.Rules...)
+	return &redacted
+}
+
+func redactEnvName(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+	return "<redacted-env>"
+}
+
+func redactCommand(command []string) []string {
+	if len(command) == 0 {
+		return nil
+	}
+	if len(command) == 1 {
+		return []string{filepath.Base(command[0])}
+	}
+	return []string{filepath.Base(command[0]), "<redacted-args>"}
+}
+
+func redactPathForSupport(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	base := filepath.Base(input)
+	if base == "." || base == string(filepath.Separator) {
+		return "<redacted>"
+	}
+	return filepath.Join("<redacted>", base)
+}
+
 func NotImplemented(feature string) error {
 	return errors.New(feature + " is not implemented in the current MVP")
 }
@@ -805,6 +1142,21 @@ func FormatAuthBootstrapResult(result AuthBootstrapResult) string {
 	lines := []string{
 		fmt.Sprintf("run_id: %s", result.RunID),
 		fmt.Sprintf("verified=%d bootstrapped=%d failed=%d", result.Verified, result.Bootstrapped, result.Failed),
+	}
+	for _, item := range result.Items {
+		line := fmt.Sprintf("- [%s] %s -> %s (%s)", item.Action, item.SourceID, item.AuthProfileID, item.AuthState)
+		if strings.TrimSpace(item.Message) != "" {
+			line += " :: " + item.Message
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func FormatAuthImportResult(result AuthImportResult) string {
+	lines := []string{
+		fmt.Sprintf("run_id: %s", result.RunID),
+		fmt.Sprintf("imported=%d validated=%d failed=%d", result.Imported, result.Validated, result.Failed),
 	}
 	for _, item := range result.Items {
 		line := fmt.Sprintf("- [%s] %s -> %s (%s)", item.Action, item.SourceID, item.AuthProfileID, item.AuthState)

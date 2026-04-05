@@ -37,6 +37,13 @@ type EventRecord struct {
 	PayloadRef string
 }
 
+type Lease struct {
+	Key       string
+	Holder    string
+	ExpiresAt string
+	UpdatedAt string
+}
+
 type PublishRecord struct {
 	ID          string
 	ArtifactID  string

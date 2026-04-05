@@ -103,3 +103,10 @@ CREATE TABLE IF NOT EXISTS event_records (
   entity_id TEXT NOT NULL,
   payload_ref TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS leases (
+  key TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

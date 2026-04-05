@@ -5,7 +5,7 @@
 Core sections:
 
 - `[runtime]`: store and artifact roots
-- `[scheduler]`: daemon interval settings
+- `[scheduler]`: daemon interval, lease, and health settings
 - `[[auth_profiles]]`: auth bootstrap and session persistence references
 - `[[publishers]]`: downstream targets
 - `[[sources]]`: upstream sources
@@ -28,6 +28,8 @@ artifact_root = "/state/artifacts"
 [scheduler]
 mode = "interval"
 poll_interval = "1h"
+lease_ttl = "30m"
+health_addr = "127.0.0.1:8099"
 
 [[auth_profiles]]
 id = "patreon-default"
@@ -35,6 +37,7 @@ provider = "patreon"
 mode = "username_password"
 username_env = "PATREON_USERNAME"
 password_env = "PATREON_PASSWORD"
+totp_secret_env = "PATREON_TOTP_SECRET"
 session_path = "/state/sessions/patreon-default.json"
 
 [[sources]]
@@ -43,6 +46,13 @@ provider = "patreon"
 url = "https://www.patreon.com/c/ExampleCreator/posts"
 auth_profile = "patreon-default"
 enabled = true
+
+[[sources]]
+id = "example-collection"
+provider = "patreon"
+url = "https://www.patreon.com/collection/123456"
+auth_profile = "patreon-default"
+enabled = false
 ```
 
 Fixture demo example:
@@ -78,8 +88,12 @@ enabled = false
 Notes:
 
 - `session_path` stores the persisted Patreon cookie bundle.
+- `totp_secret_env` is optional and only needed when Patreon asks for an authenticator-app code that can be satisfied with TOTP.
 - live bootstrap also keeps a dedicated Chromium profile beside that session file for reauth and challenge retries.
+- `lease_ttl` controls how long a daemon source lease survives if the worker crashes before it can release it.
+- `health_addr` controls the daemon’s local `/healthz`, `/status`, and `/metrics` listener.
 - in the Docker image, `/config/config.toml` and `/state` are the default roots.
 - later runs reuse the saved session over plain HTTP unless Patreon forces a reauth.
+- `auth import-session` can seed `session_path` from an externally generated session bundle.
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).

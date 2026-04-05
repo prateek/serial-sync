@@ -250,6 +250,53 @@ func TestListReleasesUsesStoredCursorLookback(t *testing.T) {
 	}
 }
 
+func TestListReleasesCollectionSourceUsesHTMLLinks(t *testing.T) {
+	t.Parallel()
+
+	server := newPatreonCollectionTestServer(t)
+	client := New()
+	client.apiBaseURL = server.URL
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-collection",
+		Provider:    "patreon",
+		URL:         server.URL + "/collection/abc123",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ListReleases() error = %v", err)
+	}
+	if got, want := len(result.Documents), 2; got != want {
+		t.Fatalf("len(docs) = %d, want %d", got, want)
+	}
+	if got, want := result.Documents[0].Normalized.SourceType, "collection"; got != want {
+		t.Fatalf("SourceType = %q, want %q", got, want)
+	}
+}
+
+func TestValidateSourceAcceptsCollectionURL(t *testing.T) {
+	t.Parallel()
+
+	client := New()
+	if err := client.ValidateSource(config.SourceConfig{
+		ID:       "example-collection",
+		Provider: "patreon",
+		URL:      "https://www.patreon.com/collection/abc123",
+	}); err != nil {
+		t.Fatalf("ValidateSource() error = %v", err)
+	}
+}
+
 func TestCampaignMatchesHandleNormalizesVanityVariants(t *testing.T) {
 	t.Parallel()
 
@@ -491,6 +538,87 @@ func newPatreonPagedTestServer(t *testing.T, postIDs []string) (*httptest.Server
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server, &detailRequests
+}
+
+func newPatreonCollectionTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.Header.Get("Cookie"), "session_id=patreon-test-session") {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("/api/current_user", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":{"id":"user-1"},"included":[]}`)
+	}))
+	mux.HandleFunc("/collection/abc123", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><body>
+<a href="https://www.patreon.com/posts/chapter-one-123">First</a>
+<a href="https://www.patreon.com/posts/chapter-two-456">Second</a>
+<a href="https://www.patreon.com/posts/chapter-two-456">Second duplicate</a>
+</body></html>`)
+	}))
+	mux.HandleFunc("/api/posts/123", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, collectionPostJSON("123"))
+	}))
+	mux.HandleFunc("/api/posts/456", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, collectionPostJSON("456"))
+	}))
+
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func collectionPostJSON(id string) string {
+	return fmt.Sprintf(`{
+  "data": {
+    "id": %q,
+    "type": "post",
+    "attributes": {
+      "title": "Collection Chapter %s",
+      "post_type": "text",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/collection-%s",
+      "content": "<p>Hello %s</p>",
+      "content_json_string": "",
+      "published_at": "2026-04-01T00:00:00Z",
+      "edited_at": "2026-04-01T00:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "campaign-1" } },
+      "user": { "data": { "id": "creator-user-1" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "campaign-1",
+      "type": "campaign",
+      "attributes": { "name": "Example Creator" },
+      "relationships": { "creator": { "data": { "id": "creator-user-1" } } }
+    },
+    {
+      "id": "creator-user-1",
+      "type": "user",
+      "attributes": { "full_name": "Example Creator", "vanity": "ExampleCreator" },
+      "relationships": {}
+    }
+  ]
+}`, id, id, id, id)
 }
 
 func writeTestSessionBundle(t *testing.T, path string, baseURL string) {

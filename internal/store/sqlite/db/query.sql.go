@@ -10,6 +10,37 @@ import (
 	"database/sql"
 )
 
+const acquireLease = `-- name: AcquireLease :execrows
+INSERT INTO leases (key, holder, expires_at, updated_at)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(key) DO UPDATE SET
+  holder = excluded.holder,
+  expires_at = excluded.expires_at,
+  updated_at = excluded.updated_at
+WHERE leases.expires_at <= excluded.updated_at
+   OR leases.holder = excluded.holder
+`
+
+type AcquireLeaseParams struct {
+	Key       string
+	Holder    string
+	ExpiresAt string
+	UpdatedAt string
+}
+
+func (q *Queries) AcquireLease(ctx context.Context, arg AcquireLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireLease,
+		arg.Key,
+		arg.Holder,
+		arg.ExpiresAt,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearCanonicalArtifactsForRelease = `-- name: ClearCanonicalArtifactsForRelease :exec
 UPDATE artifacts
 SET is_canonical = 0
@@ -103,6 +134,144 @@ func (q *Queries) GetCanonicalArtifactByReleaseID(ctx context.Context, releaseID
 		&i.MetadataRef,
 		&i.NormalizedRef,
 		&i.RawRef,
+	)
+	return i, err
+}
+
+const getPublishRecordBundle = `-- name: GetPublishRecordBundle :one
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE pr.id = ?1
+`
+
+type GetPublishRecordBundleRow struct {
+	ID                   string
+	ArtifactID           string
+	TargetID             string
+	TargetKind           string
+	TargetRef            string
+	PublishHash          string
+	PublishedAt          string
+	Status               string
+	Message              string
+	ID_2                 string
+	ReleaseID            string
+	TrackID              string
+	ArtifactKind         string
+	IsCanonical          int64
+	Filename             string
+	MimeType             string
+	Sha256               string
+	StorageRef           string
+	BuiltAt              string
+	State                string
+	MetadataRef          string
+	NormalizedRef        string
+	RawRef               string
+	ID_3                 string
+	SourceID             string
+	ProviderReleaseID    string
+	Url                  string
+	Title                string
+	PublishedAt_2        string
+	EditedAt             string
+	PostType             string
+	VisibilityState      string
+	NormalizedPayloadRef string
+	RawPayloadRef        string
+	ContentHash          string
+	DiscoveredAt         string
+	Status_2             string
+	ID_4                 string
+	Provider             string
+	SourceUrl            string
+	SourceType           string
+	CreatorID            string
+	CreatorName          string
+	AuthProfileID        string
+	Enabled              int64
+	SyncCursor           string
+	LastSyncedAt         string
+	ID_5                 sql.NullString
+	SourceID_2           sql.NullString
+	TrackKey             sql.NullString
+	TrackName            sql.NullString
+	CanonicalAuthor      sql.NullString
+	SeriesMeta           sql.NullString
+	OutputPolicy         sql.NullString
+	CreatedAt            sql.NullString
+	UpdatedAt            sql.NullString
+}
+
+func (q *Queries) GetPublishRecordBundle(ctx context.Context, id string) (GetPublishRecordBundleRow, error) {
+	row := q.db.QueryRowContext(ctx, getPublishRecordBundle, id)
+	var i GetPublishRecordBundleRow
+	err := row.Scan(
+		&i.ID,
+		&i.ArtifactID,
+		&i.TargetID,
+		&i.TargetKind,
+		&i.TargetRef,
+		&i.PublishHash,
+		&i.PublishedAt,
+		&i.Status,
+		&i.Message,
+		&i.ID_2,
+		&i.ReleaseID,
+		&i.TrackID,
+		&i.ArtifactKind,
+		&i.IsCanonical,
+		&i.Filename,
+		&i.MimeType,
+		&i.Sha256,
+		&i.StorageRef,
+		&i.BuiltAt,
+		&i.State,
+		&i.MetadataRef,
+		&i.NormalizedRef,
+		&i.RawRef,
+		&i.ID_3,
+		&i.SourceID,
+		&i.ProviderReleaseID,
+		&i.Url,
+		&i.Title,
+		&i.PublishedAt_2,
+		&i.EditedAt,
+		&i.PostType,
+		&i.VisibilityState,
+		&i.NormalizedPayloadRef,
+		&i.RawPayloadRef,
+		&i.ContentHash,
+		&i.DiscoveredAt,
+		&i.Status_2,
+		&i.ID_4,
+		&i.Provider,
+		&i.SourceUrl,
+		&i.SourceType,
+		&i.CreatorID,
+		&i.CreatorName,
+		&i.AuthProfileID,
+		&i.Enabled,
+		&i.SyncCursor,
+		&i.LastSyncedAt,
+		&i.ID_5,
+		&i.SourceID_2,
+		&i.TrackKey,
+		&i.TrackName,
+		&i.CanonicalAuthor,
+		&i.SeriesMeta,
+		&i.OutputPolicy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -732,6 +901,631 @@ func (q *Queries) ListPublishCandidatesBySource(ctx context.Context, sourceID st
 	return items, nil
 }
 
+const listPublishRecords = `-- name: ListPublishRecords :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+ORDER BY pr.published_at DESC, pr.id DESC
+`
+
+type ListPublishRecordsRow struct {
+	ID                   string
+	ArtifactID           string
+	TargetID             string
+	TargetKind           string
+	TargetRef            string
+	PublishHash          string
+	PublishedAt          string
+	Status               string
+	Message              string
+	ID_2                 string
+	ReleaseID            string
+	TrackID              string
+	ArtifactKind         string
+	IsCanonical          int64
+	Filename             string
+	MimeType             string
+	Sha256               string
+	StorageRef           string
+	BuiltAt              string
+	State                string
+	MetadataRef          string
+	NormalizedRef        string
+	RawRef               string
+	ID_3                 string
+	SourceID             string
+	ProviderReleaseID    string
+	Url                  string
+	Title                string
+	PublishedAt_2        string
+	EditedAt             string
+	PostType             string
+	VisibilityState      string
+	NormalizedPayloadRef string
+	RawPayloadRef        string
+	ContentHash          string
+	DiscoveredAt         string
+	Status_2             string
+	ID_4                 string
+	Provider             string
+	SourceUrl            string
+	SourceType           string
+	CreatorID            string
+	CreatorName          string
+	AuthProfileID        string
+	Enabled              int64
+	SyncCursor           string
+	LastSyncedAt         string
+	ID_5                 sql.NullString
+	SourceID_2           sql.NullString
+	TrackKey             sql.NullString
+	TrackName            sql.NullString
+	CanonicalAuthor      sql.NullString
+	SeriesMeta           sql.NullString
+	OutputPolicy         sql.NullString
+	CreatedAt            sql.NullString
+	UpdatedAt            sql.NullString
+}
+
+func (q *Queries) ListPublishRecords(ctx context.Context) ([]ListPublishRecordsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPublishRecords)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishRecordsRow
+	for rows.Next() {
+		var i ListPublishRecordsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ArtifactID,
+			&i.TargetID,
+			&i.TargetKind,
+			&i.TargetRef,
+			&i.PublishHash,
+			&i.PublishedAt,
+			&i.Status,
+			&i.Message,
+			&i.ID_2,
+			&i.ReleaseID,
+			&i.TrackID,
+			&i.ArtifactKind,
+			&i.IsCanonical,
+			&i.Filename,
+			&i.MimeType,
+			&i.Sha256,
+			&i.StorageRef,
+			&i.BuiltAt,
+			&i.State,
+			&i.MetadataRef,
+			&i.NormalizedRef,
+			&i.RawRef,
+			&i.ID_3,
+			&i.SourceID,
+			&i.ProviderReleaseID,
+			&i.Url,
+			&i.Title,
+			&i.PublishedAt_2,
+			&i.EditedAt,
+			&i.PostType,
+			&i.VisibilityState,
+			&i.NormalizedPayloadRef,
+			&i.RawPayloadRef,
+			&i.ContentHash,
+			&i.DiscoveredAt,
+			&i.Status_2,
+			&i.ID_4,
+			&i.Provider,
+			&i.SourceUrl,
+			&i.SourceType,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.AuthProfileID,
+			&i.Enabled,
+			&i.SyncCursor,
+			&i.LastSyncedAt,
+			&i.ID_5,
+			&i.SourceID_2,
+			&i.TrackKey,
+			&i.TrackName,
+			&i.CanonicalAuthor,
+			&i.SeriesMeta,
+			&i.OutputPolicy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublishRecordsBySource = `-- name: ListPublishRecordsBySource :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE s.id = ?1
+ORDER BY pr.published_at DESC, pr.id DESC
+`
+
+type ListPublishRecordsBySourceRow struct {
+	ID                   string
+	ArtifactID           string
+	TargetID             string
+	TargetKind           string
+	TargetRef            string
+	PublishHash          string
+	PublishedAt          string
+	Status               string
+	Message              string
+	ID_2                 string
+	ReleaseID            string
+	TrackID              string
+	ArtifactKind         string
+	IsCanonical          int64
+	Filename             string
+	MimeType             string
+	Sha256               string
+	StorageRef           string
+	BuiltAt              string
+	State                string
+	MetadataRef          string
+	NormalizedRef        string
+	RawRef               string
+	ID_3                 string
+	SourceID             string
+	ProviderReleaseID    string
+	Url                  string
+	Title                string
+	PublishedAt_2        string
+	EditedAt             string
+	PostType             string
+	VisibilityState      string
+	NormalizedPayloadRef string
+	RawPayloadRef        string
+	ContentHash          string
+	DiscoveredAt         string
+	Status_2             string
+	ID_4                 string
+	Provider             string
+	SourceUrl            string
+	SourceType           string
+	CreatorID            string
+	CreatorName          string
+	AuthProfileID        string
+	Enabled              int64
+	SyncCursor           string
+	LastSyncedAt         string
+	ID_5                 sql.NullString
+	SourceID_2           sql.NullString
+	TrackKey             sql.NullString
+	TrackName            sql.NullString
+	CanonicalAuthor      sql.NullString
+	SeriesMeta           sql.NullString
+	OutputPolicy         sql.NullString
+	CreatedAt            sql.NullString
+	UpdatedAt            sql.NullString
+}
+
+func (q *Queries) ListPublishRecordsBySource(ctx context.Context, sourceID string) ([]ListPublishRecordsBySourceRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPublishRecordsBySource, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishRecordsBySourceRow
+	for rows.Next() {
+		var i ListPublishRecordsBySourceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ArtifactID,
+			&i.TargetID,
+			&i.TargetKind,
+			&i.TargetRef,
+			&i.PublishHash,
+			&i.PublishedAt,
+			&i.Status,
+			&i.Message,
+			&i.ID_2,
+			&i.ReleaseID,
+			&i.TrackID,
+			&i.ArtifactKind,
+			&i.IsCanonical,
+			&i.Filename,
+			&i.MimeType,
+			&i.Sha256,
+			&i.StorageRef,
+			&i.BuiltAt,
+			&i.State,
+			&i.MetadataRef,
+			&i.NormalizedRef,
+			&i.RawRef,
+			&i.ID_3,
+			&i.SourceID,
+			&i.ProviderReleaseID,
+			&i.Url,
+			&i.Title,
+			&i.PublishedAt_2,
+			&i.EditedAt,
+			&i.PostType,
+			&i.VisibilityState,
+			&i.NormalizedPayloadRef,
+			&i.RawPayloadRef,
+			&i.ContentHash,
+			&i.DiscoveredAt,
+			&i.Status_2,
+			&i.ID_4,
+			&i.Provider,
+			&i.SourceUrl,
+			&i.SourceType,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.AuthProfileID,
+			&i.Enabled,
+			&i.SyncCursor,
+			&i.LastSyncedAt,
+			&i.ID_5,
+			&i.SourceID_2,
+			&i.TrackKey,
+			&i.TrackName,
+			&i.CanonicalAuthor,
+			&i.SeriesMeta,
+			&i.OutputPolicy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublishRecordsBySourceAndTarget = `-- name: ListPublishRecordsBySourceAndTarget :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE s.id = ?1
+  AND pr.target_id = ?2
+ORDER BY pr.published_at DESC, pr.id DESC
+`
+
+type ListPublishRecordsBySourceAndTargetParams struct {
+	SourceID string
+	TargetID string
+}
+
+type ListPublishRecordsBySourceAndTargetRow struct {
+	ID                   string
+	ArtifactID           string
+	TargetID             string
+	TargetKind           string
+	TargetRef            string
+	PublishHash          string
+	PublishedAt          string
+	Status               string
+	Message              string
+	ID_2                 string
+	ReleaseID            string
+	TrackID              string
+	ArtifactKind         string
+	IsCanonical          int64
+	Filename             string
+	MimeType             string
+	Sha256               string
+	StorageRef           string
+	BuiltAt              string
+	State                string
+	MetadataRef          string
+	NormalizedRef        string
+	RawRef               string
+	ID_3                 string
+	SourceID             string
+	ProviderReleaseID    string
+	Url                  string
+	Title                string
+	PublishedAt_2        string
+	EditedAt             string
+	PostType             string
+	VisibilityState      string
+	NormalizedPayloadRef string
+	RawPayloadRef        string
+	ContentHash          string
+	DiscoveredAt         string
+	Status_2             string
+	ID_4                 string
+	Provider             string
+	SourceUrl            string
+	SourceType           string
+	CreatorID            string
+	CreatorName          string
+	AuthProfileID        string
+	Enabled              int64
+	SyncCursor           string
+	LastSyncedAt         string
+	ID_5                 sql.NullString
+	SourceID_2           sql.NullString
+	TrackKey             sql.NullString
+	TrackName            sql.NullString
+	CanonicalAuthor      sql.NullString
+	SeriesMeta           sql.NullString
+	OutputPolicy         sql.NullString
+	CreatedAt            sql.NullString
+	UpdatedAt            sql.NullString
+}
+
+func (q *Queries) ListPublishRecordsBySourceAndTarget(ctx context.Context, arg ListPublishRecordsBySourceAndTargetParams) ([]ListPublishRecordsBySourceAndTargetRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPublishRecordsBySourceAndTarget, arg.SourceID, arg.TargetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishRecordsBySourceAndTargetRow
+	for rows.Next() {
+		var i ListPublishRecordsBySourceAndTargetRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ArtifactID,
+			&i.TargetID,
+			&i.TargetKind,
+			&i.TargetRef,
+			&i.PublishHash,
+			&i.PublishedAt,
+			&i.Status,
+			&i.Message,
+			&i.ID_2,
+			&i.ReleaseID,
+			&i.TrackID,
+			&i.ArtifactKind,
+			&i.IsCanonical,
+			&i.Filename,
+			&i.MimeType,
+			&i.Sha256,
+			&i.StorageRef,
+			&i.BuiltAt,
+			&i.State,
+			&i.MetadataRef,
+			&i.NormalizedRef,
+			&i.RawRef,
+			&i.ID_3,
+			&i.SourceID,
+			&i.ProviderReleaseID,
+			&i.Url,
+			&i.Title,
+			&i.PublishedAt_2,
+			&i.EditedAt,
+			&i.PostType,
+			&i.VisibilityState,
+			&i.NormalizedPayloadRef,
+			&i.RawPayloadRef,
+			&i.ContentHash,
+			&i.DiscoveredAt,
+			&i.Status_2,
+			&i.ID_4,
+			&i.Provider,
+			&i.SourceUrl,
+			&i.SourceType,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.AuthProfileID,
+			&i.Enabled,
+			&i.SyncCursor,
+			&i.LastSyncedAt,
+			&i.ID_5,
+			&i.SourceID_2,
+			&i.TrackKey,
+			&i.TrackName,
+			&i.CanonicalAuthor,
+			&i.SeriesMeta,
+			&i.OutputPolicy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublishRecordsByTarget = `-- name: ListPublishRecordsByTarget :many
+SELECT
+  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
+  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
+  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
+  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
+  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
+FROM publish_records pr
+JOIN artifacts art ON art.id = pr.artifact_id
+JOIN releases r ON r.id = art.release_id
+JOIN sources s ON s.id = r.source_id
+LEFT JOIN story_tracks t ON t.id = art.track_id
+WHERE pr.target_id = ?1
+ORDER BY pr.published_at DESC, pr.id DESC
+`
+
+type ListPublishRecordsByTargetRow struct {
+	ID                   string
+	ArtifactID           string
+	TargetID             string
+	TargetKind           string
+	TargetRef            string
+	PublishHash          string
+	PublishedAt          string
+	Status               string
+	Message              string
+	ID_2                 string
+	ReleaseID            string
+	TrackID              string
+	ArtifactKind         string
+	IsCanonical          int64
+	Filename             string
+	MimeType             string
+	Sha256               string
+	StorageRef           string
+	BuiltAt              string
+	State                string
+	MetadataRef          string
+	NormalizedRef        string
+	RawRef               string
+	ID_3                 string
+	SourceID             string
+	ProviderReleaseID    string
+	Url                  string
+	Title                string
+	PublishedAt_2        string
+	EditedAt             string
+	PostType             string
+	VisibilityState      string
+	NormalizedPayloadRef string
+	RawPayloadRef        string
+	ContentHash          string
+	DiscoveredAt         string
+	Status_2             string
+	ID_4                 string
+	Provider             string
+	SourceUrl            string
+	SourceType           string
+	CreatorID            string
+	CreatorName          string
+	AuthProfileID        string
+	Enabled              int64
+	SyncCursor           string
+	LastSyncedAt         string
+	ID_5                 sql.NullString
+	SourceID_2           sql.NullString
+	TrackKey             sql.NullString
+	TrackName            sql.NullString
+	CanonicalAuthor      sql.NullString
+	SeriesMeta           sql.NullString
+	OutputPolicy         sql.NullString
+	CreatedAt            sql.NullString
+	UpdatedAt            sql.NullString
+}
+
+func (q *Queries) ListPublishRecordsByTarget(ctx context.Context, targetID string) ([]ListPublishRecordsByTargetRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPublishRecordsByTarget, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishRecordsByTargetRow
+	for rows.Next() {
+		var i ListPublishRecordsByTargetRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ArtifactID,
+			&i.TargetID,
+			&i.TargetKind,
+			&i.TargetRef,
+			&i.PublishHash,
+			&i.PublishedAt,
+			&i.Status,
+			&i.Message,
+			&i.ID_2,
+			&i.ReleaseID,
+			&i.TrackID,
+			&i.ArtifactKind,
+			&i.IsCanonical,
+			&i.Filename,
+			&i.MimeType,
+			&i.Sha256,
+			&i.StorageRef,
+			&i.BuiltAt,
+			&i.State,
+			&i.MetadataRef,
+			&i.NormalizedRef,
+			&i.RawRef,
+			&i.ID_3,
+			&i.SourceID,
+			&i.ProviderReleaseID,
+			&i.Url,
+			&i.Title,
+			&i.PublishedAt_2,
+			&i.EditedAt,
+			&i.PostType,
+			&i.VisibilityState,
+			&i.NormalizedPayloadRef,
+			&i.RawPayloadRef,
+			&i.ContentHash,
+			&i.DiscoveredAt,
+			&i.Status_2,
+			&i.ID_4,
+			&i.Provider,
+			&i.SourceUrl,
+			&i.SourceType,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.AuthProfileID,
+			&i.Enabled,
+			&i.SyncCursor,
+			&i.LastSyncedAt,
+			&i.ID_5,
+			&i.SourceID_2,
+			&i.TrackKey,
+			&i.TrackName,
+			&i.CanonicalAuthor,
+			&i.SeriesMeta,
+			&i.OutputPolicy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReleasesBySource = `-- name: ListReleasesBySource :many
 SELECT id, source_id, provider_release_id, url, title, published_at, edited_at, post_type, visibility_state, normalized_payload_ref, raw_payload_ref, content_hash, discovered_at, status
 FROM releases
@@ -894,6 +1688,21 @@ func (q *Queries) ListTracksBySource(ctx context.Context, sourceID string) ([]St
 		return nil, err
 	}
 	return items, nil
+}
+
+const releaseLease = `-- name: ReleaseLease :exec
+DELETE FROM leases
+WHERE key = ?1 AND holder = ?2
+`
+
+type ReleaseLeaseParams struct {
+	Key    string
+	Holder string
+}
+
+func (q *Queries) ReleaseLease(ctx context.Context, arg ReleaseLeaseParams) error {
+	_, err := q.db.ExecContext(ctx, releaseLease, arg.Key, arg.Holder)
+	return err
 }
 
 const updateRunRecord = `-- name: UpdateRunRecord :exec

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,7 +18,8 @@ import (
 	"github.com/prateek/serial-sync/internal/provider"
 )
 
-var creatorPattern = regexp.MustCompile(`^https?://(?:www\.)?patreon\.com/(?:(?:c|cw)/)?[^/?#]+/posts`)
+var creatorPattern = regexp.MustCompile(`^https?://(?:www\.)?patreon\.com/(?:(?:c|cw)/)?[^/?#]+/posts(?:[/?#].*)?$`)
+var collectionPattern = regexp.MustCompile(`^https?://(?:www\.)?patreon\.com/collection/[^/?#]+(?:[/?#].*)?$`)
 
 type sessionBootstrapper func(context.Context, config.AuthProfile, config.SourceConfig, string) (domain.AuthState, error)
 
@@ -39,10 +42,18 @@ func (c *Client) Name() string {
 }
 
 func (c *Client) ValidateSource(source config.SourceConfig) error {
-	if !creatorPattern.MatchString(source.URL) {
-		return fmt.Errorf("patreon source %q must look like a creator posts feed URL", source.ID)
+	if detectSourceKind(source.URL) != sourceKindUnknown && isPatreonSourceHost(source.URL) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("patreon source %q must look like a creator posts feed or collection URL", source.ID)
+}
+
+func (c *Client) ValidateSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (domain.AuthState, error) {
+	if source.FixtureDir != "" || normalizeAuthMode(auth.Mode) == "fixture" {
+		return domain.AuthStateAuthenticated, nil
+	}
+	_, authState, err := c.resolveLiveSession(ctx, auth, source)
+	return authState, err
 }
 
 func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (provider.AuthBootstrapResult, error) {
@@ -129,6 +140,18 @@ func (c *Client) listFixtureReleases(ctx context.Context, source config.SourceCo
 		AuthState:  domain.AuthStateAuthenticated,
 		SyncCursor: buildLiveSyncCursor(docs),
 	}, nil
+}
+
+func isPatreonSourceHost(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "patreon.com" || strings.HasSuffix(host, ".patreon.com") || host == "localhost" {
+		return true
+	}
+	return net.ParseIP(host) != nil
 }
 
 type postEnvelope struct {

@@ -5,11 +5,15 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 ## Implemented
 
 - one-shot CLI commands for `init`, config validation, inspect flows, `plan sync`, `sync`, `publish`, `auth bootstrap`, `run once`, and support-bundle export
+- one-shot CLI commands for `wizard`, `auth import-session`, and publish-record inspection
 - a single-process `daemon` that reuses the same sync/publish pipeline on an interval
 - XDG-aware config loading, defaults, and container-first `/config` + `/state` roots
 - live Patreon username/password bootstrap for the non-challenge case
+- optional TOTP-assisted Patreon bootstrap when the challenge is an authenticator-app code
 - persisted Patreon session reuse and explicit live auth state reporting
+- session-bundle import validation as an operator convenience path
 - live Patreon release discovery and normalization, with recent-id incremental steady-state syncs
+- Patreon collection-style source discovery through authenticated HTML
 - fixture-backed Patreon demo inputs
 - story-track rule classification with deterministic unmatched fallback behavior
 - durable artifact planning and materialization for `text_post` and `attachment_preferred`, with lazy selected-attachment downloads
@@ -17,31 +21,26 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - `filesystem` publisher
 - `exec` publisher with stable environment variables and idempotent replay behavior
 - Docker packaging with Chromium, Xvfb, and `tini` for first-run auth bootstrap inside the image
+- static binary release packaging config via `.goreleaser.yml`
 - Docker quickstart, config docs, troubleshooting docs, hook docs, and developer docs
 
 ## Partial
 
-- support bundle export exists, but richer packing and redaction policy can still improve
-- observability exists through run/event persistence, but structured log shipping and richer metrics are still future work
+- support bundle export now includes redacted config, run data, release bundles, and payload copies, but broader log capture can still improve
+- observability exists through run/event persistence plus daemon `/metrics`, but external structured log shipping is still future work
 - CUE config validation exists as an optional schema layer, not as the runtime control-plane source of truth
-- daemon mode exists, but source leases, richer health surfaces, and multi-replica coordination are still future work
-- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates), but the operator-facing setup/tutorial layer is still thin
+- daemon mode now includes source leases and local health/status endpoints, but deeper multi-replica coordination is still future work
+- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, and a first-source walkthrough), but deeper rule-authoring examples are still thin
 - the store seam is generic at the repository boundary, but lease-specific store contracts and alternative backends are still future work
 
 ## Remaining
 
 High-priority remaining work:
 
-- `wizard` and guided source/rule/auth bootstrap flows
-- session-bundle import as an operator convenience auth path
-- richer challenge-provider handling beyond clear `challenge_required` / `reauth_required` failures
-- daemon hardening: source leases, richer health surfaces, metrics, and the optional local HTTP status endpoint
-- richer support-bundle contents, including broader log capture, payload inclusion, and explicit redaction policy
+- richer challenge-provider handling beyond username/password plus TOTP
+- broader observability and operator forensics beyond the current support-bundle/log surfaces
+- deeper multi-replica daemon coordination beyond source-level leases
 
 Secondary PRD gaps:
 
 - anthology-mode publication behavior
-- publish-record inspection surfaces called out by the PRD but not exposed in the CLI yet
-- broader Patreon source shapes beyond creator feeds, especially collection-oriented sources
-- distribution beyond the Docker image, including static binary release packaging
-- a clearer first-source setup tutorial to complement the reference docs

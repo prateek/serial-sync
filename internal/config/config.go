@@ -41,15 +41,18 @@ type RuntimeConfig struct {
 type SchedulerConfig struct {
 	Mode         string `toml:"mode"`
 	PollInterval string `toml:"poll_interval"`
+	LeaseTTL     string `toml:"lease_ttl"`
+	HealthAddr   string `toml:"health_addr"`
 }
 
 type AuthProfile struct {
-	ID          string `toml:"id"`
-	Provider    string `toml:"provider"`
-	Mode        string `toml:"mode"`
-	UsernameEnv string `toml:"username_env"`
-	PasswordEnv string `toml:"password_env"`
-	SessionPath string `toml:"session_path"`
+	ID            string `toml:"id"`
+	Provider      string `toml:"provider"`
+	Mode          string `toml:"mode"`
+	UsernameEnv   string `toml:"username_env"`
+	PasswordEnv   string `toml:"password_env"`
+	TOTPSecretEnv string `toml:"totp_secret_env"`
+	SessionPath   string `toml:"session_path"`
 }
 
 type PublisherConfig struct {
@@ -186,6 +189,12 @@ func (c *Config) ApplyDefaults(roots Roots) {
 	if c.Scheduler.PollInterval == "" {
 		c.Scheduler.PollInterval = "1h"
 	}
+	if c.Scheduler.LeaseTTL == "" {
+		c.Scheduler.LeaseTTL = "30m"
+	}
+	if c.Scheduler.HealthAddr == "" {
+		c.Scheduler.HealthAddr = "127.0.0.1:8099"
+	}
 }
 
 func (c *Config) expandPaths(roots Roots) error {
@@ -244,6 +253,9 @@ func (c *Config) Validate() error {
 			if auth.SessionPath == "" {
 				return fmt.Errorf("auth profile %q session_path is required for username_password mode", auth.ID)
 			}
+			if strings.TrimSpace(auth.TOTPSecretEnv) != "" && strings.TrimSpace(auth.TOTPSecretEnv) == strings.TrimSpace(auth.PasswordEnv) {
+				return fmt.Errorf("auth profile %q totp_secret_env must not match password_env", auth.ID)
+			}
 		default:
 			return fmt.Errorf("auth profile %q has unsupported mode %q", auth.ID, auth.Mode)
 		}
@@ -257,6 +269,11 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Scheduler.PollInterval) != "" {
 		if _, err := time.ParseDuration(c.Scheduler.PollInterval); err != nil {
 			return fmt.Errorf("scheduler poll_interval %q is invalid: %w", c.Scheduler.PollInterval, err)
+		}
+	}
+	if strings.TrimSpace(c.Scheduler.LeaseTTL) != "" {
+		if _, err := time.ParseDuration(c.Scheduler.LeaseTTL); err != nil {
+			return fmt.Errorf("scheduler lease_ttl %q is invalid: %w", c.Scheduler.LeaseTTL, err)
 		}
 	}
 	for _, source := range c.Sources {
@@ -418,6 +435,8 @@ support_root = %q
 [scheduler]
 mode = "interval"
 poll_interval = "1h"
+lease_ttl = "30m"
+health_addr = "127.0.0.1:8099"
 
 [[auth_profiles]]
 id = "patreon-default"
@@ -425,6 +444,7 @@ provider = "patreon"
 mode = "username_password"
 username_env = "PATREON_USERNAME"
 password_env = "PATREON_PASSWORD"
+totp_secret_env = "PATREON_TOTP_SECRET"
 session_path = %q
 
 [[publishers]]

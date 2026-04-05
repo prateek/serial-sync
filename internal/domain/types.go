@@ -274,6 +274,21 @@ type PublishResult struct {
 	Items     []PublishItemResult `json:"items"`
 }
 
+type PublishRecordBundle struct {
+	Record   PublishRecord `json:"record"`
+	Artifact Artifact      `json:"artifact"`
+	Release  Release       `json:"release"`
+	Source   Source        `json:"source"`
+	Track    StoryTrack    `json:"track"`
+}
+
+type Lease struct {
+	Key       string    `json:"key"`
+	Holder    string    `json:"holder"`
+	ExpiresAt time.Time `json:"expires_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type ReleaseBundle struct {
 	Source     Source            `json:"source"`
 	Release    Release           `json:"release"`

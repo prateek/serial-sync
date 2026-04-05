@@ -6,10 +6,10 @@ Patreon presented an interactive step the current MVP does not solve automatical
 
 - CAPTCHA / Cloudflare challenge
 - device verification
-- TOTP / SMS / email one-time code
+- SMS / email one-time code
 - passwordless or social-login-only auth flow
 
-The tool stops intentionally in this case. Re-run after completing auth in the dedicated Chromium profile next to your configured `session_path`.
+If the challenge is an authenticator-app code, set `totp_secret_env` in the auth profile and retry. Otherwise the tool stops intentionally. Re-run after completing auth in the dedicated Chromium profile next to your configured `session_path`, or import a fresh session bundle with `serial-sync auth import-session`.
 
 ## `reauth_required`
 
@@ -20,6 +20,16 @@ Check:
 - the saved session file under `session_path` is still valid
 
 If the saved session is stale, remove the session file and its sibling profile directory, then run `serial-sync sync --dry-run` again.
+
+## I already have a Patreon session bundle
+
+Import it directly:
+
+```sh
+serial-sync auth import-session /path/to/patreon-session.json --auth-profile patreon-default
+```
+
+The command copies the bundle into `session_path` and validates it against the matching source configuration.
 
 ## Chrome / Chromium is missing
 
@@ -40,6 +50,8 @@ Check:
 
 - `serial-sync source inspect <source>`
 - `serial-sync runs inspect <run-id>`
+- `serial-sync publish-record list`
+- `serial-sync publish-record inspect <publish-record-id>`
 - the `publish/` directory
 
 If the canonical artifact hash has already been published to the same target, `publish` will skip it by design.

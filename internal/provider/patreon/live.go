@@ -17,6 +17,7 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/pquerna/otp/totp"
 
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
@@ -51,6 +52,17 @@ var submitButtonSelectors = []string{
 	`button[data-tag*="continue"]`,
 	`button[data-testid*="login"]`,
 }
+
+var totpInputSelectors = []string{
+	`input[autocomplete="one-time-code"]`,
+	`input[inputmode="numeric"]`,
+	`input[name*="otp"]`,
+	`input[name*="code"]`,
+	`input[id*="otp"]`,
+	`input[id*="code"]`,
+}
+
+var collectionPostLinkPattern = regexp.MustCompile(`/posts/[^"'?#>]*-([0-9]+)`)
 
 type sessionBundle struct {
 	Provider  string          `json:"provider"`
@@ -133,7 +145,13 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 	if storedSource != nil {
 		cursor = parseLiveSyncCursor(storedSource.SyncCursor)
 	}
-	postIDs, authState, err := c.listPostIDs(ctx, session, source, cursor)
+	var postIDs []string
+	switch detectSourceKind(source.URL) {
+	case sourceKindCollection:
+		postIDs, authState, err = c.listCollectionPostIDs(ctx, session, source, cursor)
+	default:
+		postIDs, authState, err = c.listPostIDs(ctx, session, source, cursor)
+	}
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
 	}
@@ -147,6 +165,7 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 		if err != nil {
 			return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, fmt.Errorf("parse Patreon post %s: %w", postID, err)
 		}
+		norm.SourceType = string(detectSourceKind(source.URL))
 		docs = append(docs, provider.ReleaseDocument{
 			Normalized: norm,
 			RawJSON:    append(json.RawMessage(nil), raw...),
@@ -204,16 +223,19 @@ func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile
 	if err != nil {
 		return nil, authState, err
 	}
-	campaign, authState, err := c.resolveCampaign(ctx, client, source, bundle, user)
-	if err != nil {
-		return nil, authState, err
-	}
-	return &liveSession{
+	session := &liveSession{
 		bundle:        *bundle,
 		client:        client,
 		currentUserID: user.Data.ID,
-		campaign:      campaign,
-	}, domain.AuthStateAuthenticated, nil
+	}
+	if detectSourceKind(source.URL) != sourceKindCollection {
+		campaign, authState, err := c.resolveCampaign(ctx, client, source, bundle, user)
+		if err != nil {
+			return nil, authState, err
+		}
+		session.campaign = campaign
+	}
+	return session, domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) fetchCurrentUser(ctx context.Context, client *http.Client, source config.SourceConfig, bundle *sessionBundle) (*currentUserEnvelope, domain.AuthState, error) {
@@ -299,6 +321,18 @@ func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source c
 		nextURL = resolveRelativeURL(nextURL, page.Links.Next)
 	}
 	return ids, domain.AuthStateAuthenticated, nil
+}
+
+func (c *Client) listCollectionPostIDs(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor) ([]string, domain.AuthState, error) {
+	body, authState, err := c.get(ctx, session.client, source.URL, source.URL, &session.bundle, "text/html")
+	if err != nil {
+		return nil, authState, err
+	}
+	ids := extractCollectionPostIDs(body)
+	if len(ids) == 0 {
+		return nil, domain.AuthStateReauthRequired, fmt.Errorf("could not discover Patreon collection posts for %q", source.ID)
+	}
+	return trimPostIDsWithCursor(ids, cursor), domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) fetchPostDetail(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) ([]byte, domain.AuthState, error) {
@@ -611,6 +645,13 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	}
 	deadline := time.Now().Add(75 * time.Second)
 	for time.Now().Before(deadline) {
+		completedTOTP, err := maybeCompleteTOTPChallenge(loginCtx, auth)
+		if err != nil {
+			return domain.AuthStateChallengeNeeded, err
+		}
+		if completedTOTP {
+			time.Sleep(2 * time.Second)
+		}
 		snapshot := currentPageSnapshot(loginCtx)
 		if !strings.Contains(strings.ToLower(snapshot.URL), "/login") {
 			if err := saveCurrentSession(loginCtx, auth.SessionPath); err == nil {
@@ -633,6 +674,38 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 		return domain.AuthStateAuthenticated, nil
 	}
 	return inferBrowserState(loginCtx, domain.AuthStateChallengeNeeded), fmt.Errorf("Patreon login did not reach an authenticated session for source %q", source.ID)
+}
+
+func maybeCompleteTOTPChallenge(ctx context.Context, auth config.AuthProfile) (bool, error) {
+	if strings.TrimSpace(auth.TOTPSecretEnv) == "" {
+		return false, nil
+	}
+	secret := strings.TrimSpace(os.Getenv(auth.TOTPSecretEnv))
+	if secret == "" {
+		return false, fmt.Errorf("auth profile %q expects TOTP secret in %s", auth.ID, auth.TOTPSecretEnv)
+	}
+	selector, err := waitForSelector(ctx, totpInputSelectors, 2*time.Second)
+	if err != nil || selector == "" {
+		return false, nil
+	}
+	code, err := totp.GenerateCode(secret, time.Now().UTC())
+	if err != nil {
+		return false, fmt.Errorf("generate Patreon TOTP code: %w", err)
+	}
+	if err := chromedp.Run(ctx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.Focus(selector, chromedp.ByQuery),
+		chromedp.SendKeys(selector, code, chromedp.ByQuery),
+	); err != nil {
+		return false, fmt.Errorf("fill Patreon TOTP field: %w", err)
+	}
+	submitSelector, err := waitForSelector(ctx, submitButtonSelectors, 5*time.Second)
+	if err == nil && submitSelector != "" {
+		if clickErr := chromedp.Run(ctx, chromedp.Click(submitSelector, chromedp.ByQuery)); clickErr != nil {
+			return false, fmt.Errorf("submit Patreon TOTP form: %w", clickErr)
+		}
+	}
+	return true, nil
 }
 
 func resolveChromiumBinary() string {
@@ -922,6 +995,54 @@ func selectedAttachmentIndex(attachments []domain.Attachment, selected domain.At
 	return -1
 }
 
+func trimPostIDsWithCursor(ids []string, cursor *liveSyncCursor) []string {
+	if cursor == nil || len(ids) == 0 {
+		return ids
+	}
+	known := map[string]struct{}{}
+	for _, id := range cursor.RecentReleaseIDs {
+		if strings.TrimSpace(id) != "" {
+			known[id] = struct{}{}
+		}
+	}
+	if len(known) == 0 || cursor.Lookback <= 0 {
+		return ids
+	}
+	for idx, id := range ids {
+		if idx+1 < cursor.Lookback {
+			continue
+		}
+		if _, ok := known[id]; ok {
+			return ids[:idx+1]
+		}
+	}
+	return ids
+}
+
+func extractCollectionPostIDs(body []byte) []string {
+	matches := collectionPostLinkPattern.FindAllStringSubmatch(string(body), -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	ids := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		id := strings.TrimSpace(match[1])
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -998,6 +1119,35 @@ func normalizeHandleToken(input string) string {
 
 func normalizeAuthMode(mode string) string {
 	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+type sourceKind string
+
+const (
+	sourceKindCreatorFeed sourceKind = "creator_feed"
+	sourceKindCollection  sourceKind = "collection"
+	sourceKindUnknown     sourceKind = ""
+)
+
+func detectSourceKind(rawURL string) sourceKind {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return sourceKindUnknown
+	}
+	parts := strings.FieldsFunc(parsed.Path, func(r rune) bool { return r == '/' })
+	if len(parts) >= 2 && parts[0] == "collection" {
+		return sourceKindCollection
+	}
+	if len(parts) >= 2 && parts[len(parts)-1] == "posts" {
+		return sourceKindCreatorFeed
+	}
+	if creatorPattern.MatchString(strings.TrimSpace(rawURL)) {
+		return sourceKindCreatorFeed
+	}
+	if collectionPattern.MatchString(strings.TrimSpace(rawURL)) {
+		return sourceKindCollection
+	}
+	return sourceKindUnknown
 }
 
 const defaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
