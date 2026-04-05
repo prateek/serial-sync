@@ -25,11 +25,23 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - observability exists through run/event persistence, but structured log shipping and richer metrics are still future work
 - CUE config validation exists as an optional schema layer, not as the runtime control-plane source of truth
 - daemon mode exists, but source leases, richer health surfaces, and multi-replica coordination are still future work
+- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates), but the operator-facing setup/tutorial layer is still thin
+- the store seam is generic at the repository boundary, but lease-specific store contracts and alternative backends are still future work
 
 ## Remaining
 
-- challenge-provider handling beyond clear `challenge_required` / `reauth_required` failures
-- config wizard and guided rule/auth bootstrap flows
-- session-bundle import
-- optional local HTTP status/health surface for daemon mode
-- richer support-bundle contents, including broader log and payload collection
+High-priority remaining work:
+
+- `wizard` and guided source/rule/auth bootstrap flows
+- session-bundle import as an operator convenience auth path
+- richer challenge-provider handling beyond clear `challenge_required` / `reauth_required` failures
+- daemon hardening: source leases, richer health surfaces, metrics, and the optional local HTTP status endpoint
+- richer support-bundle contents, including broader log capture, payload inclusion, and explicit redaction policy
+
+Secondary PRD gaps:
+
+- anthology-mode publication behavior
+- publish-record inspection surfaces called out by the PRD but not exposed in the CLI yet
+- broader Patreon source shapes beyond creator feeds, especially collection-oriented sources
+- distribution beyond the Docker image, including static binary release packaging
+- a clearer first-source setup tutorial to complement the reference docs
