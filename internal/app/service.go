@@ -120,7 +120,7 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 	if err != nil {
 		return domain.PublishResult{}, err
 	}
-	result := domain.PublishResult{RunID: recorder.RunID()}
+	result := domain.PublishResult{RunID: recorder.RunID(), DryRun: dryRun}
 	defer func() {
 		if err != nil {
 			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
@@ -128,7 +128,7 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 	}()
 	targets := selectPublishers(s.Config.Publishers, targetFilter)
 	if len(targets) == 0 {
-		err = fmt.Errorf("no enabled filesystem publishers match %q", targetFilter)
+		err = fmt.Errorf("no enabled publishers match %q", targetFilter)
 		return result, err
 	}
 	candidates, err := s.Repo.ListPublishCandidates(ctx, sourceFilter)
@@ -137,31 +137,56 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 	}
 	for _, candidate := range candidates {
 		for _, target := range targets {
-			targetPath := filepath.Join(target.Path, candidate.Source.ID, candidate.Track.TrackKey, candidate.Artifact.Filename)
-			publishHash := publish.PublishHash(target.ID, candidate.Artifact.SHA256, targetPath)
+			targetKind, targetRef, publishHashInput, refErr := publishTargetIdentity(target, candidate)
+			if refErr != nil {
+				return result, refErr
+			}
+			publishHash := publish.PublishHash(target.ID, candidate.Artifact.SHA256, publishHashInput)
 			done, err := s.Repo.HasSuccessfulPublish(ctx, candidate.Artifact.ID, target.ID, publishHash)
 			if err != nil {
 				return result, err
 			}
 			if done {
 				result.Skipped++
+				result.Items = append(result.Items, domain.PublishItemResult{
+					ArtifactID: candidate.Artifact.ID,
+					TargetID:   target.ID,
+					TargetKind: targetKind,
+					TargetRef:  targetRef,
+					Action:     "skipped",
+				})
 				continue
 			}
 			if dryRun {
 				result.Published++
 				result.Artifacts = append(result.Artifacts, candidate.Artifact.ID)
-				_ = recorder.Event(ctx, "info", "publish", "planned filesystem publish", "artifact", candidate.Artifact.ID)
+				result.Items = append(result.Items, domain.PublishItemResult{
+					ArtifactID: candidate.Artifact.ID,
+					TargetID:   target.ID,
+					TargetKind: targetKind,
+					TargetRef:  targetRef,
+					Action:     "planned",
+				})
+				_ = recorder.Event(ctx, "info", "publish", "planned "+targetKind+" publish", "artifact", candidate.Artifact.ID)
 				continue
 			}
-			record, pubErr := publish.PublishFilesystem(ctx, publish.FilesystemTarget{ID: target.ID, Path: target.Path}, candidate)
+			record, pubErr := s.publishTarget(ctx, recorder.RunID(), target, candidate)
 			if pubErr != nil {
 				result.Failed++
+				result.Items = append(result.Items, domain.PublishItemResult{
+					ArtifactID: candidate.Artifact.ID,
+					TargetID:   target.ID,
+					TargetKind: targetKind,
+					TargetRef:  targetRef,
+					Action:     "failed",
+					Message:    pubErr.Error(),
+				})
 				_ = s.Repo.UpsertPublishRecord(ctx, domain.PublishRecord{
 					ID:          "pub_" + uuid.NewString(),
 					ArtifactID:  candidate.Artifact.ID,
 					TargetID:    target.ID,
-					TargetKind:  "filesystem",
-					TargetRef:   targetPath,
+					TargetKind:  targetKind,
+					TargetRef:   targetRef,
 					PublishHash: publishHash,
 					PublishedAt: time.Now().UTC(),
 					Status:      domain.PublishStatusFailed,
@@ -175,14 +200,41 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 			}
 			result.Published++
 			result.Artifacts = append(result.Artifacts, candidate.Artifact.ID)
-			_ = recorder.Event(ctx, "info", "publish", "filesystem publish completed", "artifact", candidate.Artifact.ID)
+			result.Items = append(result.Items, domain.PublishItemResult{
+				ArtifactID: candidate.Artifact.ID,
+				TargetID:   target.ID,
+				TargetKind: record.TargetKind,
+				TargetRef:  record.TargetRef,
+				Action:     "published",
+				Message:    record.Message,
+			})
+			_ = recorder.Event(ctx, "info", "publish", record.TargetKind+" publish completed", "artifact", candidate.Artifact.ID)
 		}
 	}
-	summary := fmt.Sprintf("published=%d skipped=%d failed=%d", result.Published, result.Skipped, result.Failed)
+	summaryVerb := "published"
+	if dryRun {
+		summaryVerb = "planned"
+	}
+	summary := fmt.Sprintf("%s=%d skipped=%d failed=%d", summaryVerb, result.Published, result.Skipped, result.Failed)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
 	}
 	return result, nil
+}
+
+func (s *Service) publishTarget(ctx context.Context, runID string, target config.PublisherConfig, candidate domain.PublishCandidate) (domain.PublishRecord, error) {
+	switch normalizedPublisherKind(target.Kind) {
+	case "filesystem":
+		return publish.PublishFilesystem(ctx, publish.FilesystemTarget{ID: target.ID, Path: target.Path}, candidate)
+	case "exec":
+		return publish.PublishExec(ctx, publish.ExecTarget{
+			ID:      target.ID,
+			Command: target.Command,
+			RunID:   runID,
+		}, candidate)
+	default:
+		return domain.PublishRecord{}, fmt.Errorf("unsupported publisher kind %q", target.Kind)
+	}
 }
 
 func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder, sourceCfg config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision, dryRun bool) (domain.SyncItemPlan, bool, bool, error) {
@@ -473,7 +525,7 @@ func selectSources(all []config.SourceConfig, sourceFilter string) []config.Sour
 func selectPublishers(all []config.PublisherConfig, targetFilter string) []config.PublisherConfig {
 	var out []config.PublisherConfig
 	for _, publisher := range all {
-		if !publisher.Enabled || publisher.Kind != "filesystem" {
+		if !publisher.Enabled {
 			continue
 		}
 		if targetFilter != "" && publisher.ID != targetFilter {
@@ -516,5 +568,41 @@ func FormatSyncResult(result domain.SyncResult) string {
 }
 
 func FormatPublishResult(result domain.PublishResult) string {
-	return fmt.Sprintf("run_id: %s\npublished=%d skipped=%d failed=%d", result.RunID, result.Published, result.Skipped, result.Failed)
+	verb := "published"
+	if result.DryRun {
+		verb = "planned"
+	}
+	lines := []string{
+		fmt.Sprintf("run_id: %s", result.RunID),
+		fmt.Sprintf("%s=%d skipped=%d failed=%d", verb, result.Published, result.Skipped, result.Failed),
+	}
+	for _, item := range result.Items {
+		line := fmt.Sprintf("- [%s] %s -> %s (%s, %s)", item.Action, item.ArtifactID, item.TargetID, item.TargetKind, item.TargetRef)
+		if strings.TrimSpace(item.Message) != "" {
+			line += " :: " + item.Message
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func publishTargetIdentity(target config.PublisherConfig, candidate domain.PublishCandidate) (targetKind, targetRef, publishHashInput string, err error) {
+	switch normalizedPublisherKind(target.Kind) {
+	case "filesystem":
+		targetPath := filepath.Join(target.Path, candidate.Source.ID, candidate.Track.TrackKey, candidate.Artifact.Filename)
+		return "filesystem", targetPath, targetPath, nil
+	case "exec":
+		return "exec", publish.ExecTargetRef(target.Command), publish.ExecTargetSignature(target.Command), nil
+	default:
+		return "", "", "", fmt.Errorf("unsupported publisher kind %q", target.Kind)
+	}
+}
+
+func normalizedPublisherKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "command", "exec":
+		return "exec"
+	default:
+		return strings.ToLower(strings.TrimSpace(kind))
+	}
 }

@@ -22,15 +22,15 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml publish --dry-run
 - syncs releases from provider-backed sources
 - classifies them into story tracks
 - materializes canonical artifacts on disk
-- publishes those artifacts to filesystem targets
+- publishes those artifacts to filesystem or exec-hook targets
 - records runs, events, and publish history in SQLite
 
 ## Current Scope
 
 - Patreon is the first provider
 - the MVP currently uses fixture-backed Patreon payloads
-- `filesystem` publishing is implemented
-- live auth, `exec`, `wizard`, and `daemon` are future work
+- `filesystem` and `exec` publishing are implemented
+- live auth, `wizard`, and `daemon` are future work
 
 ## More
 
@@ -38,6 +38,7 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml publish --dry-run
 - [Config reference](docs/config.md)
 - [Docker quickstart](docs/docker-quickstart.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [PRD status](docs/prd-status.md)
 - [Patreon notes](docs/patreon.md)
 - [Product PRD](serial-sync-prd.md)
 

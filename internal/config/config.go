@@ -185,6 +185,9 @@ func (c *Config) expandPaths(roots Roots) error {
 	}
 	for idx := range c.Publishers {
 		c.Publishers[idx].Path = expand(c.Publishers[idx].Path)
+		for argIdx := range c.Publishers[idx].Command {
+			c.Publishers[idx].Command[argIdx] = expand(c.Publishers[idx].Command[argIdx])
+		}
 	}
 	for idx := range c.Sources {
 		c.Sources[idx].FixtureDir = expand(c.Sources[idx].FixtureDir)
@@ -233,6 +236,18 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate publisher id %q", publisher.ID)
 		}
 		publisherIDs[publisher.ID] = struct{}{}
+		switch normalizePublisherKind(publisher.Kind) {
+		case "filesystem":
+			if publisher.Path == "" {
+				return fmt.Errorf("publisher %q path is required for filesystem targets", publisher.ID)
+			}
+		case "exec":
+			if len(publisher.Command) == 0 {
+				return fmt.Errorf("publisher %q command is required for exec targets", publisher.ID)
+			}
+		default:
+			return fmt.Errorf("publisher %q has unsupported kind %q", publisher.ID, publisher.Kind)
+		}
 	}
 	for _, rule := range c.Rules {
 		if rule.Source == "" {
@@ -301,7 +316,7 @@ func EnsureDirs(roots Roots, cfg *Config) error {
 		}
 	}
 	for _, publisher := range cfg.Publishers {
-		if publisher.Kind == "filesystem" && publisher.Path != "" {
+		if normalizePublisherKind(publisher.Kind) == "filesystem" && publisher.Path != "" {
 			dirs = append(dirs, publisher.Path)
 		}
 	}
@@ -364,4 +379,13 @@ func getenvDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func normalizePublisherKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "exec", "command":
+		return "exec"
+	default:
+		return strings.ToLower(strings.TrimSpace(kind))
+	}
 }

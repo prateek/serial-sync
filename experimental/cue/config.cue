@@ -29,7 +29,7 @@ package serialsync
 
 	publishers: *[] | [...{
 		id:      #ID
-		kind:    "filesystem" | "command"
+		kind:    "filesystem" | "exec" | "command"
 		enabled: *true | false
 		path?:   #NonEmpty
 		command?: [...#NonEmpty]
@@ -37,7 +37,7 @@ package serialsync
 		if kind == "filesystem" {
 			path: #NonEmpty
 		}
-		if kind == "command" {
+		if kind == "command" || kind == "exec" {
 			command: [...#NonEmpty] & [_, ...]
 		}
 	}]

@@ -14,7 +14,7 @@ The current MVP supports:
 
 - provider: `patreon`
 - auth mode: `fixture`
-- publisher kind: `filesystem`
+- publisher kinds: `filesystem`, `exec`
 - rule match types: `tag`, `collection`, `title_regex`, `attachment_filename_regex`, `fallback`
 
 Example:
@@ -34,6 +34,12 @@ id = "local-files"
 kind = "filesystem"
 path = "./publish"
 enabled = true
+
+[[publishers]]
+id = "post-publish-hook"
+kind = "exec"
+command = ["./examples/hooks/log-publish.sh"]
+enabled = false
 ```
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).

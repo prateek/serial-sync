@@ -17,6 +17,5 @@ The first runtime slice is:
 The seams are already generic enough for future work:
 
 - live Patreon auth/bootstrap
-- exec publisher
 - daemon scheduling
 - additional providers

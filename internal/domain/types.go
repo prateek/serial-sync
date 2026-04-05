@@ -255,12 +255,23 @@ type PublishCandidate struct {
 	Artifact   Artifact          `json:"artifact"`
 }
 
+type PublishItemResult struct {
+	ArtifactID string `json:"artifact_id"`
+	TargetID   string `json:"target_id"`
+	TargetKind string `json:"target_kind"`
+	TargetRef  string `json:"target_ref"`
+	Action     string `json:"action"`
+	Message    string `json:"message,omitempty"`
+}
+
 type PublishResult struct {
-	RunID     string   `json:"run_id"`
-	Published int      `json:"published"`
-	Skipped   int      `json:"skipped"`
-	Failed    int      `json:"failed"`
-	Artifacts []string `json:"artifacts"`
+	RunID     string              `json:"run_id"`
+	Published int                 `json:"published"`
+	Skipped   int                 `json:"skipped"`
+	Failed    int                 `json:"failed"`
+	DryRun    bool                `json:"dry_run"`
+	Artifacts []string            `json:"artifacts"`
+	Items     []PublishItemResult `json:"items"`
 }
 
 type ReleaseBundle struct {

@@ -36,14 +36,15 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 ## Current Scope
 
 - Patreon is fixture-backed in the MVP.
-- `filesystem` publishing is implemented.
-- `exec`, `daemon`, and richer auth paths remain future work.
+- `filesystem` and `exec` publishing are implemented.
+- `daemon` and richer auth paths remain future work.
 
 ## Docs
 
 - [Config reference](docs/config.md)
 - [Architecture](docs/architecture.md)
 - [Control plane notes](docs/control-plane.md)
+- [PRD status](docs/prd-status.md)
 - [Provider notes](docs/patreon.md)
 - [Provider contribution guide](docs/provider-contributing.md)
 - [Hook tutorial](docs/hooks.md)
