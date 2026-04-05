@@ -23,7 +23,7 @@ If the saved session is stale, remove the session file and its sibling profile d
 
 ## Chrome / Chromium is missing
 
-Live Patreon bootstrap uses a dedicated headless Chromium profile. Install Chrome or Chromium on the machine, then rerun the sync.
+Live Patreon bootstrap uses a dedicated Chromium profile in a visible browser window. Install Chrome or Chromium on the machine, then rerun the sync.
 
 ## I want a fully offline demo
 

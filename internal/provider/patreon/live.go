@@ -465,6 +465,7 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	allocOptions := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	allocOptions = append(allocOptions,
 		chromedp.UserDataDir(profileDir),
+		chromedp.Flag("headless", false),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 	)
@@ -475,7 +476,7 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	loginCtx, loginCancel := context.WithTimeout(browserCtx, 2*time.Minute)
 	defer loginCancel()
 	if err := chromedp.Run(loginCtx, network.Enable()); err != nil {
-		return domain.AuthStateReauthRequired, fmt.Errorf("start headless Chromium for Patreon auth: %w", err)
+		return domain.AuthStateReauthRequired, fmt.Errorf("start Chromium for Patreon auth: %w", err)
 	}
 	if err := chromedp.Run(loginCtx, chromedp.Navigate("https://www.patreon.com/login")); err != nil {
 		return domain.AuthStateReauthRequired, fmt.Errorf("open Patreon login page: %w", err)
@@ -486,7 +487,7 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	}
 	if err := chromedp.Run(loginCtx,
 		chromedp.WaitVisible(emailSelector, chromedp.ByQuery),
-		chromedp.SetValue(emailSelector, "", chromedp.ByQuery),
+		chromedp.Focus(emailSelector, chromedp.ByQuery),
 		chromedp.SendKeys(emailSelector, username, chromedp.ByQuery),
 	); err != nil {
 		return domain.AuthStateReauthRequired, fmt.Errorf("fill Patreon email field: %w", err)
@@ -504,7 +505,7 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	}
 	if err := chromedp.Run(loginCtx,
 		chromedp.WaitVisible(passwordSelector, chromedp.ByQuery),
-		chromedp.SetValue(passwordSelector, "", chromedp.ByQuery),
+		chromedp.Focus(passwordSelector, chromedp.ByQuery),
 		chromedp.SendKeys(passwordSelector, password, chromedp.ByQuery),
 	); err != nil {
 		return domain.AuthStateReauthRequired, fmt.Errorf("fill Patreon password field: %w", err)
@@ -584,7 +585,14 @@ func firstVisibleSelector(ctx context.Context, selectors []string) (string, erro
 }
 
 func saveCurrentSession(ctx context.Context, sessionPath string) error {
-	cookies, err := network.GetCookies().WithURLs([]string{"https://www.patreon.com"}).Do(ctx)
+	var cookies []*network.Cookie
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(actionCtx context.Context) error {
+		var err error
+		cookies, err = network.GetCookies().
+			WithURLs([]string{"https://www.patreon.com", "https://www.patreon.com/home"}).
+			Do(actionCtx)
+		return err
+	}))
 	if err != nil {
 		return err
 	}

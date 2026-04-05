@@ -6,7 +6,7 @@ Implemented:
 
 - creator-feed URL validation
 - persisted Patreon session reuse from `session_path`
-- headless Chromium bootstrap for the non-challenge login case
+- isolated Chromium bootstrap in a visible browser window for the non-challenge login case
 - creator-feed discovery through Patreon’s web JSON endpoints
 - normalization of title, post type, visibility, tags, collections, attachments, and text content
 - attachment caching for live download URLs
