@@ -44,6 +44,28 @@ type TrackInspect struct {
 	Releases []domain.Release  `json:"releases"`
 }
 
+type AuthBootstrapItem struct {
+	SourceID      string           `json:"source_id"`
+	Provider      string           `json:"provider"`
+	AuthProfileID string           `json:"auth_profile_id"`
+	AuthState     domain.AuthState `json:"auth_state"`
+	Action        string           `json:"action"`
+	Message       string           `json:"message,omitempty"`
+}
+
+type AuthBootstrapResult struct {
+	RunID        string              `json:"run_id"`
+	Verified     int                 `json:"verified"`
+	Bootstrapped int                 `json:"bootstrapped"`
+	Failed       int                 `json:"failed"`
+	Items        []AuthBootstrapItem `json:"items"`
+}
+
+type RunOnceResult struct {
+	Sync    domain.SyncResult    `json:"sync"`
+	Publish domain.PublishResult `json:"publish"`
+}
+
 func New(cfg *config.Config, roots config.Roots, configPath string, repo store.Repository, providers *provider.Registry) *Service {
 	return &Service{
 		Config:     cfg,
@@ -111,6 +133,104 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 	summary := fmt.Sprintf("discovered=%d changed=%d unchanged=%d materialized=%d", result.Discovered, result.Changed, result.Unchanged, result.MaterializedArtifacts)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
+	}
+	return result, nil
+}
+
+func (s *Service) BootstrapAuth(ctx context.Context, sourceFilter, authFilter string, force bool, command string) (AuthBootstrapResult, error) {
+	scope := strings.TrimSpace(sourceFilter)
+	if strings.TrimSpace(authFilter) != "" {
+		scope = strings.TrimSpace(authFilter)
+	}
+	recorder, err := observe.Start(ctx, s.Repo, command, scope, false)
+	if err != nil {
+		return AuthBootstrapResult{}, err
+	}
+	result := AuthBootstrapResult{RunID: recorder.RunID()}
+	var failures []string
+	sources := selectSources(s.Config.Sources, sourceFilter)
+	if authFilter != "" {
+		filtered := make([]config.SourceConfig, 0, len(sources))
+		for _, source := range sources {
+			if source.AuthProfile == authFilter {
+				filtered = append(filtered, source)
+			}
+		}
+		sources = filtered
+	}
+	if len(sources) == 0 {
+		err = fmt.Errorf("no enabled sources match source=%q auth_profile=%q", sourceFilter, authFilter)
+		_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
+		return result, err
+	}
+	for _, sourceCfg := range sources {
+		client, ok := s.Providers.Get(sourceCfg.Provider)
+		if !ok {
+			err = fmt.Errorf("no provider registered for %q", sourceCfg.Provider)
+			failures = append(failures, err.Error())
+			result.Failed++
+			result.Items = append(result.Items, AuthBootstrapItem{
+				SourceID:      sourceCfg.ID,
+				Provider:      sourceCfg.Provider,
+				AuthProfileID: sourceCfg.AuthProfile,
+				AuthState:     domain.AuthStateReauthRequired,
+				Action:        "failed",
+				Message:       err.Error(),
+			})
+			_ = recorder.Event(ctx, "error", "auth", err.Error(), "source", sourceCfg.ID)
+			continue
+		}
+		auth, ok := s.Config.AuthProfileByID(sourceCfg.AuthProfile)
+		if !ok {
+			err = fmt.Errorf("source %q references missing auth profile %q", sourceCfg.ID, sourceCfg.AuthProfile)
+			failures = append(failures, err.Error())
+			result.Failed++
+			result.Items = append(result.Items, AuthBootstrapItem{
+				SourceID:      sourceCfg.ID,
+				Provider:      sourceCfg.Provider,
+				AuthProfileID: sourceCfg.AuthProfile,
+				AuthState:     domain.AuthStateReauthRequired,
+				Action:        "failed",
+				Message:       err.Error(),
+			})
+			_ = recorder.Event(ctx, "error", "auth", err.Error(), "source", sourceCfg.ID)
+			continue
+		}
+		boot, bootErr := client.BootstrapAuth(ctx, auth, sourceCfg, force)
+		item := AuthBootstrapItem{
+			SourceID:      sourceCfg.ID,
+			Provider:      sourceCfg.Provider,
+			AuthProfileID: auth.ID,
+			AuthState:     boot.State,
+			Action:        firstNonEmptyAction(boot.Action, "verified"),
+		}
+		if bootErr != nil {
+			item.Message = bootErr.Error()
+			item.Action = "failed"
+			result.Failed++
+			failures = append(failures, fmt.Sprintf("%s: %s", sourceCfg.ID, bootErr.Error()))
+			_ = recorder.Event(ctx, "error", "auth", bootErr.Error(), "source", sourceCfg.ID)
+		} else {
+			switch item.Action {
+			case "bootstrapped":
+				result.Bootstrapped++
+			default:
+				result.Verified++
+			}
+			_ = recorder.Event(ctx, "info", "auth", item.Action+" auth session", "source", sourceCfg.ID)
+		}
+		result.Items = append(result.Items, item)
+	}
+	status := domain.RunStatusSucceeded
+	summary := fmt.Sprintf("verified=%d bootstrapped=%d failed=%d", result.Verified, result.Bootstrapped, result.Failed)
+	if len(failures) > 0 {
+		status = domain.RunStatusFailed
+	}
+	if finishErr := recorder.Finish(ctx, status, summary); finishErr != nil {
+		return result, finishErr
+	}
+	if len(failures) > 0 {
+		return result, fmt.Errorf("auth bootstrap failed for %d source(s): %s", len(failures), strings.Join(failures, "; "))
 	}
 	return result, nil
 }
@@ -219,6 +339,21 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
 	}
+	return result, nil
+}
+
+func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, command string) (RunOnceResult, error) {
+	result := RunOnceResult{}
+	syncResult, err := s.Sync(ctx, sourceFilter, false, command+" sync")
+	if err != nil {
+		return result, err
+	}
+	publishResult, err := s.Publish(ctx, sourceFilter, targetFilter, false, command+" publish")
+	if err != nil {
+		return result, err
+	}
+	result.Sync = syncResult
+	result.Publish = publishResult
 	return result, nil
 }
 
@@ -604,6 +739,31 @@ func FormatPublishResult(result domain.PublishResult) string {
 	return strings.Join(lines, "\n")
 }
 
+func FormatAuthBootstrapResult(result AuthBootstrapResult) string {
+	lines := []string{
+		fmt.Sprintf("run_id: %s", result.RunID),
+		fmt.Sprintf("verified=%d bootstrapped=%d failed=%d", result.Verified, result.Bootstrapped, result.Failed),
+	}
+	for _, item := range result.Items {
+		line := fmt.Sprintf("- [%s] %s -> %s (%s)", item.Action, item.SourceID, item.AuthProfileID, item.AuthState)
+		if strings.TrimSpace(item.Message) != "" {
+			line += " :: " + item.Message
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func FormatRunOnceResult(result RunOnceResult) string {
+	return strings.Join([]string{
+		"sync:",
+		indentBlock(FormatSyncResult(result.Sync), "  "),
+		"",
+		"publish:",
+		indentBlock(FormatPublishResult(result.Publish), "  "),
+	}, "\n")
+}
+
 func publishTargetIdentity(target config.PublisherConfig, candidate domain.PublishCandidate) (targetKind, targetRef, publishHashInput string, err error) {
 	switch normalizedPublisherKind(target.Kind) {
 	case "filesystem":
@@ -623,4 +783,21 @@ func normalizedPublisherKind(kind string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(kind))
 	}
+}
+
+func indentBlock(value, prefix string) string {
+	lines := strings.Split(value, "\n")
+	for idx := range lines {
+		lines[idx] = prefix + lines[idx]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func firstNonEmptyAction(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

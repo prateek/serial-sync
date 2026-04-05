@@ -5,6 +5,7 @@
 Core sections:
 
 - `[runtime]`: store and artifact roots
+- `[scheduler]`: daemon interval settings
 - `[[auth_profiles]]`: auth bootstrap and session persistence references
 - `[[publishers]]`: downstream targets
 - `[[sources]]`: upstream sources
@@ -21,8 +22,12 @@ Live auth example:
 
 ```toml
 [runtime]
-store_dsn = "./state/state.db"
-artifact_root = "./state/artifacts"
+store_dsn = "/state/state.db"
+artifact_root = "/state/artifacts"
+
+[scheduler]
+mode = "interval"
+poll_interval = "1h"
 
 [[auth_profiles]]
 id = "patreon-default"
@@ -30,7 +35,7 @@ provider = "patreon"
 mode = "username_password"
 username_env = "PATREON_USERNAME"
 password_env = "PATREON_PASSWORD"
-session_path = "./state/sessions/patreon-default.json"
+session_path = "/state/sessions/patreon-default.json"
 
 [[sources]]
 id = "example-creator"
@@ -74,6 +79,7 @@ Notes:
 
 - `session_path` stores the persisted Patreon cookie bundle.
 - live bootstrap also keeps a dedicated Chromium profile beside that session file for reauth and challenge retries.
+- in the Docker image, `/config/config.toml` and `/state` are the default roots.
 - later runs reuse the saved session over plain HTTP unless Patreon forces a reauth.
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).

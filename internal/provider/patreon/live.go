@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
+	"github.com/prateek/serial-sync/internal/runtime/display"
 )
 
 var campaignIDPatterns = []*regexp.Regexp{
@@ -462,13 +464,31 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		return domain.AuthStateReauthRequired, err
 	}
+	displaySession, err := display.Ensure(ctx)
+	if err != nil {
+		return domain.AuthStateReauthRequired, fmt.Errorf("prepare headed browser environment: %w", err)
+	}
+	defer func() {
+		_ = displaySession.Close()
+	}()
 	allocOptions := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	allocOptions = append(allocOptions,
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("headless", false),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.WindowSize(1366, 768),
 	)
+	if chromePath := resolveChromiumBinary(); chromePath != "" {
+		allocOptions = append(allocOptions, chromedp.ExecPath(chromePath))
+	}
+	if env := displaySession.ChromeEnv(); len(env) > 0 {
+		allocOptions = append(allocOptions, chromedp.Env(env...))
+	}
+	if os.Geteuid() == 0 {
+		allocOptions = append(allocOptions, chromedp.Flag("no-sandbox", true))
+	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, allocOptions...)
 	defer allocCancel()
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
@@ -541,6 +561,16 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 		return domain.AuthStateAuthenticated, nil
 	}
 	return inferBrowserState(loginCtx, domain.AuthStateChallengeNeeded), fmt.Errorf("Patreon login did not reach an authenticated session for source %q", source.ID)
+}
+
+func resolveChromiumBinary() string {
+	for _, candidate := range []string{"google-chrome", "chromium", "chromium-browser", "chrome"} {
+		path, err := exec.LookPath(candidate)
+		if err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func waitForSelector(ctx context.Context, selectors []string, timeout time.Duration) (string, error) {

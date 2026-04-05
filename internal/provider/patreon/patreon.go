@@ -45,6 +45,41 @@ func (c *Client) ValidateSource(source config.SourceConfig) error {
 	return nil
 }
 
+func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (provider.AuthBootstrapResult, error) {
+	if err := c.ValidateSource(source); err != nil {
+		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, err
+	}
+	if source.FixtureDir != "" || normalizeAuthMode(auth.Mode) == "fixture" {
+		return provider.AuthBootstrapResult{State: domain.AuthStateAuthenticated, Action: "fixture"}, nil
+	}
+	if normalizeAuthMode(auth.Mode) != "username_password" {
+		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("patreon auth profile %q must use username_password mode for live bootstrap", auth.ID)
+	}
+	if auth.SessionPath == "" {
+		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("patreon auth profile %q must define session_path", auth.ID)
+	}
+	if force {
+		if err := os.Remove(auth.SessionPath); err != nil && !os.IsNotExist(err) {
+			return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("remove existing Patreon session: %w", err)
+		}
+	} else if _, authState, err := c.resolveLiveSession(ctx, auth, source); err == nil {
+		return provider.AuthBootstrapResult{State: authState, Action: "reused"}, nil
+	} else if authState == domain.AuthStateChallengeNeeded {
+		return provider.AuthBootstrapResult{State: authState, Action: "failed"}, err
+	}
+	if c.bootstrap == nil {
+		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("no Patreon bootstrapper configured")
+	}
+	authState, err := c.bootstrap(ctx, auth, source, sessionProfileDir(auth.SessionPath))
+	if err != nil {
+		return provider.AuthBootstrapResult{State: authState, Action: "bootstrapped"}, err
+	}
+	if _, authState, err := c.resolveLiveSession(ctx, auth, source); err != nil {
+		return provider.AuthBootstrapResult{State: authState, Action: "bootstrapped"}, err
+	}
+	return provider.AuthBootstrapResult{State: domain.AuthStateAuthenticated, Action: "bootstrapped"}, nil
+}
+
 func (c *Client) ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) ([]provider.ReleaseDocument, domain.AuthState, error) {
 	if err := c.ValidateSource(source); err != nil {
 		return nil, domain.AuthStateReauthRequired, err

@@ -6,12 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
 
 const (
-	DefaultConfigEnv = "SERIAL_SYNC_CONFIG"
+	DefaultConfigEnv    = "SERIAL_SYNC_CONFIG"
+	ContainerModeEnv    = "SERIAL_SYNC_CONTAINER"
+	containerConfigDir  = "/config"
+	containerStateDir   = "/state"
+	containerCacheDir   = "/state/cache"
+	containerRuntimeDir = "/tmp/serial-sync-runtime"
 )
 
 type Config struct {
@@ -78,13 +84,23 @@ type RuleConfig struct {
 }
 
 type Roots struct {
-	ConfigDir  string
-	StateDir   string
-	CacheDir   string
-	RuntimeDir string
+	ConfigDir     string
+	StateDir      string
+	CacheDir      string
+	RuntimeDir    string
+	Containerized bool
 }
 
 func DefaultRoots() (Roots, error) {
+	if shouldUseContainerRoots() {
+		return Roots{
+			ConfigDir:     containerConfigDir,
+			StateDir:      containerStateDir,
+			CacheDir:      containerCacheDir,
+			RuntimeDir:    getenvDefault("SERIAL_SYNC_RUNTIME_DIR", containerRuntimeDir),
+			Containerized: true,
+		}, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Roots{}, err
@@ -97,10 +113,11 @@ func DefaultRoots() (Roots, error) {
 		runtimeHome = filepath.Join(os.TempDir(), "serial-sync-runtime")
 	}
 	return Roots{
-		ConfigDir:  filepath.Join(configHome, "serial-sync"),
-		StateDir:   filepath.Join(stateHome, "serial-sync"),
-		CacheDir:   filepath.Join(cacheHome, "serial-sync"),
-		RuntimeDir: filepath.Join(runtimeHome, "serial-sync"),
+		ConfigDir:     filepath.Join(configHome, "serial-sync"),
+		StateDir:      filepath.Join(stateHome, "serial-sync"),
+		CacheDir:      filepath.Join(cacheHome, "serial-sync"),
+		RuntimeDir:    filepath.Join(runtimeHome, "serial-sync"),
+		Containerized: false,
 	}, nil
 }
 
@@ -162,6 +179,12 @@ func (c *Config) ApplyDefaults(roots Roots) {
 	}
 	if c.Runtime.SupportRoot == "" {
 		c.Runtime.SupportRoot = filepath.Join(roots.StateDir, "support")
+	}
+	if normalizeSchedulerMode(c.Scheduler.Mode) == "" {
+		c.Scheduler.Mode = "interval"
+	}
+	if c.Scheduler.PollInterval == "" {
+		c.Scheduler.PollInterval = "1h"
 	}
 }
 
@@ -225,6 +248,16 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("auth profile %q has unsupported mode %q", auth.ID, auth.Mode)
 		}
 		authIDs[auth.ID] = struct{}{}
+	}
+	switch normalizeSchedulerMode(c.Scheduler.Mode) {
+	case "", "interval", "disabled":
+	default:
+		return fmt.Errorf("scheduler mode %q is unsupported", c.Scheduler.Mode)
+	}
+	if strings.TrimSpace(c.Scheduler.PollInterval) != "" {
+		if _, err := time.ParseDuration(c.Scheduler.PollInterval); err != nil {
+			return fmt.Errorf("scheduler poll_interval %q is invalid: %w", c.Scheduler.PollInterval, err)
+		}
 	}
 	for _, source := range c.Sources {
 		if source.ID == "" {
@@ -324,7 +357,6 @@ func (c *Config) PublisherByID(id string) (PublisherConfig, bool) {
 
 func EnsureDirs(roots Roots, cfg *Config) error {
 	dirs := []string{
-		roots.ConfigDir,
 		roots.StateDir,
 		roots.CacheDir,
 		roots.RuntimeDir,
@@ -354,13 +386,38 @@ func EnsureDirs(roots Roots, cfg *Config) error {
 }
 
 func ExampleConfig() string {
-	return `[runtime]
+	roots, err := DefaultRoots()
+	if err != nil {
+		roots = Roots{
+			ConfigDir:  "${XDG_CONFIG_HOME}/serial-sync",
+			StateDir:   "${XDG_STATE_HOME}/serial-sync",
+			CacheDir:   "${XDG_CACHE_HOME}/serial-sync",
+			RuntimeDir: "${XDG_RUNTIME_DIR}/serial-sync",
+		}
+	}
+	storeDSN := "${XDG_STATE_HOME}/serial-sync/state.db"
+	artifactRoot := "${XDG_STATE_HOME}/serial-sync/artifacts"
+	supportRoot := "${XDG_STATE_HOME}/serial-sync/support"
+	sessionPath := "${XDG_STATE_HOME}/serial-sync/sessions/patreon-default.json"
+	publishPath := "${XDG_STATE_HOME}/serial-sync/published"
+	if roots.Containerized {
+		storeDSN = filepath.Join(roots.StateDir, "state.db")
+		artifactRoot = filepath.Join(roots.StateDir, "artifacts")
+		supportRoot = filepath.Join(roots.StateDir, "support")
+		sessionPath = filepath.Join(roots.StateDir, "sessions", "patreon-default.json")
+		publishPath = filepath.Join(roots.StateDir, "published")
+	}
+	return fmt.Sprintf(`[runtime]
 log_level = "info"
 log_format = "text"
 store_driver = "sqlite"
-store_dsn = "${XDG_STATE_HOME}/serial-sync/state.db"
-artifact_root = "${XDG_STATE_HOME}/serial-sync/artifacts"
-support_root = "${XDG_STATE_HOME}/serial-sync/support"
+store_dsn = %q
+artifact_root = %q
+support_root = %q
+
+[scheduler]
+mode = "interval"
+poll_interval = "1h"
 
 [[auth_profiles]]
 id = "patreon-default"
@@ -368,12 +425,12 @@ provider = "patreon"
 mode = "username_password"
 username_env = "PATREON_USERNAME"
 password_env = "PATREON_PASSWORD"
-session_path = "${XDG_STATE_HOME}/serial-sync/sessions/patreon-default.json"
+session_path = %q
 
 [[publishers]]
 id = "local-files"
 kind = "filesystem"
-path = "${XDG_STATE_HOME}/serial-sync/published"
+path = %q
 enabled = true
 
 [[sources]]
@@ -394,7 +451,7 @@ release_role = "chapter"
 content_strategy = "attachment_preferred"
 attachment_glob = ["*.epub", "*.pdf"]
 attachment_priority = ["epub", "pdf"]
-`
+`, storeDSN, artifactRoot, supportRoot, sessionPath, publishPath)
 }
 
 func getenvDefault(key, fallback string) string {
@@ -415,4 +472,18 @@ func normalizePublisherKind(kind string) string {
 
 func normalizeAuthMode(mode string) string {
 	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func normalizeSchedulerMode(mode string) string {
+	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func shouldUseContainerRoots() bool {
+	if value := strings.ToLower(strings.TrimSpace(os.Getenv(ContainerModeEnv))); value != "" {
+		return value == "1" || value == "true" || value == "yes"
+	}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	return false
 }

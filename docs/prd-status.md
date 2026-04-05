@@ -4,8 +4,9 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 
 ## Implemented
 
-- one-shot CLI commands for `init`, config validation, inspect flows, `plan sync`, `sync`, `publish`, and support-bundle export
-- XDG-aware config loading, defaults, and state directories
+- one-shot CLI commands for `init`, config validation, inspect flows, `plan sync`, `sync`, `publish`, `auth bootstrap`, `run once`, and support-bundle export
+- a single-process `daemon` that reuses the same sync/publish pipeline on an interval
+- XDG-aware config loading, defaults, and container-first `/config` + `/state` roots
 - live Patreon username/password bootstrap for the non-challenge case
 - persisted Patreon session reuse and explicit live auth state reporting
 - live Patreon release discovery and normalization
@@ -15,6 +16,7 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - idempotent SQLite-backed state, run records, event records, and publish records
 - `filesystem` publisher
 - `exec` publisher with stable environment variables and idempotent replay behavior
+- Docker packaging with Chromium, Xvfb, and `tini` for first-run auth bootstrap inside the image
 - Docker quickstart, config docs, troubleshooting docs, hook docs, and developer docs
 
 ## Partial
@@ -22,11 +24,11 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - support bundle export exists, but richer packing and redaction policy can still improve
 - observability exists through run/event persistence, but structured log shipping and richer metrics are still future work
 - CUE config validation exists as an optional schema layer, not as the runtime control-plane source of truth
+- daemon mode exists, but source leases, richer health surfaces, and multi-replica coordination are still future work
 
 ## Remaining
 
 - challenge-provider handling beyond clear `challenge_required` / `reauth_required` failures
-- daemon mode and the broader `internal/runtime` scheduler/lease layer
 - config wizard and guided rule/auth bootstrap flows
 - session-bundle import
 - optional local HTTP status/health surface for daemon mode

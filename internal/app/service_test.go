@@ -120,36 +120,26 @@ content_strategy = "text_post"
 		t.Fatalf("unexpected dry-run summary: %#v", plan)
 	}
 
-	firstSync, err := service.Sync(context.Background(), "", false, "sync")
+	firstRunOnce, err := service.RunOnce(context.Background(), "", "", "run once")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstSync.Changed != 6 || firstSync.MaterializedArtifacts != 4 {
-		t.Fatalf("unexpected sync summary: %#v", firstSync)
+	if firstRunOnce.Sync.Changed != 6 || firstRunOnce.Sync.MaterializedArtifacts != 4 {
+		t.Fatalf("unexpected run-once sync summary: %#v", firstRunOnce.Sync)
+	}
+	if firstRunOnce.Publish.Published != 4 || firstRunOnce.Publish.Failed != 0 {
+		t.Fatalf("unexpected run-once publish summary: %#v", firstRunOnce.Publish)
 	}
 
-	secondSync, err := service.Sync(context.Background(), "", false, "sync")
+	secondRunOnce, err := service.RunOnce(context.Background(), "", "", "run once")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondSync.Changed != 0 || secondSync.Unchanged != 6 {
-		t.Fatalf("expected a no-op second sync, got %#v", secondSync)
+	if secondRunOnce.Sync.Changed != 0 || secondRunOnce.Sync.Unchanged != 6 {
+		t.Fatalf("expected a no-op second run-once sync, got %#v", secondRunOnce.Sync)
 	}
-
-	firstPublish, err := service.Publish(context.Background(), "", "", false, "publish")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstPublish.Published != 4 || firstPublish.Failed != 0 {
-		t.Fatalf("unexpected first publish result: %#v", firstPublish)
-	}
-
-	secondPublish, err := service.Publish(context.Background(), "", "", false, "publish")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if secondPublish.Published != 0 || secondPublish.Skipped != 4 {
-		t.Fatalf("unexpected second publish result: %#v", secondPublish)
+	if secondRunOnce.Publish.Published != 0 || secondRunOnce.Publish.Skipped != 4 {
+		t.Fatalf("unexpected second run-once publish result: %#v", secondRunOnce.Publish)
 	}
 }
 

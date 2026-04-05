@@ -23,7 +23,7 @@ If the saved session is stale, remove the session file and its sibling profile d
 
 ## Chrome / Chromium is missing
 
-Live Patreon bootstrap uses a dedicated Chromium profile in a visible browser window. Install Chrome or Chromium on the machine, then rerun the sync.
+Live Patreon bootstrap uses a dedicated Chromium profile in a headed browser session. In Docker on Linux, `serial-sync` starts Xvfb automatically when no display is available. If you are not using the bundled image, install Chrome or Chromium and `Xvfb`, then rerun the auth bootstrap or sync.
 
 ## I want a fully offline demo
 
@@ -39,7 +39,7 @@ Use the bundled fixtures under `testdata/fixtures` or `examples/config.demo.toml
 Check:
 
 - `serial-sync source inspect <source>`
-- `serial-sync run inspect <run-id>`
+- `serial-sync runs inspect <run-id>`
 - the `publish/` directory
 
 If the canonical artifact hash has already been published to the same target, `publish` will skip it by design.

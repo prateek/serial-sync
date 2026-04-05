@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/alecthomas/kong"
 
@@ -22,13 +25,15 @@ type CLI struct {
 
 	Init     InitCmd     `cmd:"" help:"Write an example config file."`
 	Config   ConfigCmd   `cmd:"" help:"Validate configuration."`
+	Auth     AuthCmd     `cmd:"" help:"Auth bootstrap and session helpers."`
 	Source   SourceCmd   `cmd:"" help:"Inspect configured sources."`
 	Track    TrackCmd    `cmd:"" help:"Inspect a track."`
 	Release  ReleaseCmd  `cmd:"" help:"Inspect a release."`
 	Artifact ArtifactCmd `cmd:"" help:"Inspect an artifact."`
-	Run      RunCmd      `cmd:"" help:"Inspect a prior run."`
+	Runs     RunsCmd     `cmd:"" name:"runs" help:"Inspect a prior run."`
 	Support  SupportCmd  `cmd:"" help:"Support bundle helpers."`
 	Plan     PlanCmd     `cmd:"" help:"Show planned sync work."`
+	Run      RunCmd      `cmd:"" help:"Run end-to-end workflows."`
 	Sync     SyncCmd     `cmd:"" help:"Run a sync."`
 	Publish  PublishCmd  `cmd:"" help:"Publish canonical artifacts."`
 	Wizard   WizardCmd   `cmd:"" help:"Interactive setup wizard."`
@@ -42,6 +47,10 @@ type InitCmd struct {
 
 type ConfigCmd struct {
 	Validate ConfigValidateCmd `cmd:"" help:"Validate config and print the loaded counts."`
+}
+
+type AuthCmd struct {
+	Bootstrap AuthBootstrapCmd `cmd:"" help:"Create or verify provider session state."`
 }
 
 type SourceCmd struct {
@@ -61,8 +70,12 @@ type ArtifactCmd struct {
 	Inspect ArtifactInspectCmd `cmd:"" help:"Inspect an artifact."`
 }
 
-type RunCmd struct {
+type RunsCmd struct {
 	Inspect RunInspectCmd `cmd:"" help:"Inspect a prior run."`
+}
+
+type RunCmd struct {
+	Once RunOnceCmd `cmd:"" help:"Run sync and publish back-to-back."`
 }
 
 type SupportCmd struct {
@@ -74,6 +87,12 @@ type PlanCmd struct {
 }
 
 type ConfigValidateCmd struct{}
+
+type AuthBootstrapCmd struct {
+	SourceID      string `name:"source" help:"Limit auth bootstrap to one source."`
+	AuthProfileID string `name:"auth-profile" help:"Limit auth bootstrap to one auth profile."`
+	Force         bool   `name:"force" help:"Discard any existing session and log in again."`
+}
 
 type SourceListCmd struct{}
 
@@ -101,6 +120,11 @@ type SupportBundleCmd struct {
 	RunID string `arg:"" name:"run-id" help:"Run ID to export."`
 }
 
+type RunOnceCmd struct {
+	SourceID string `name:"source" help:"Limit the run to one source."`
+	TargetID string `name:"target" help:"Limit publish to one target."`
+}
+
 type PlanSyncCmd struct {
 	SourceID string `name:"source" help:"Limit planning to one source."`
 }
@@ -118,7 +142,11 @@ type PublishCmd struct {
 
 type WizardCmd struct{}
 
-type DaemonCmd struct{}
+type DaemonCmd struct {
+	SourceID     string `name:"source" help:"Limit daemon runs to one source."`
+	TargetID     string `name:"target" help:"Limit daemon publishes to one target."`
+	PollInterval string `name:"poll-interval" help:"Override scheduler poll interval for daemon mode."`
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -182,6 +210,14 @@ func (cmd *ConfigValidateCmd) Run(cli *CLI) error {
 			len(service.Config.Publishers),
 		)
 		return nil
+	})
+}
+
+func (cmd *AuthBootstrapCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.BootstrapAuth(ctx, cmd.SourceID, cmd.AuthProfileID, cmd.Force, "auth bootstrap")
+		fmt.Println(app.FormatAuthBootstrapResult(result))
+		return err
 	})
 }
 
@@ -259,6 +295,17 @@ func (cmd *SupportBundleCmd) Run(cli *CLI) error {
 	})
 }
 
+func (cmd *RunOnceCmd) Run(cli *CLI) error {
+	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		result, err := service.RunOnce(ctx, cmd.SourceID, cmd.TargetID, "run once")
+		if err != nil {
+			return err
+		}
+		fmt.Println(app.FormatRunOnceResult(result))
+		return nil
+	})
+}
+
 func (cmd *PlanSyncCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		result, err := service.Sync(ctx, cmd.SourceID, true, "plan sync")
@@ -296,8 +343,40 @@ func (cmd *WizardCmd) Run() error {
 	return app.NotImplemented("wizard")
 }
 
-func (cmd *DaemonCmd) Run() error {
-	return app.NotImplemented("daemon")
+func (cmd *DaemonCmd) Run(cli *CLI) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return withServiceContext(ctx, cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
+		interval := service.Config.Scheduler.PollInterval
+		if cmd.PollInterval != "" {
+			interval = cmd.PollInterval
+		}
+		if interval == "" {
+			interval = "1h"
+		}
+		duration, err := time.ParseDuration(interval)
+		if err != nil {
+			return fmt.Errorf("invalid daemon poll interval %q: %w", interval, err)
+		}
+		if duration <= 0 {
+			return fmt.Errorf("daemon poll interval must be positive")
+		}
+		for {
+			result, err := service.RunOnce(ctx, cmd.SourceID, cmd.TargetID, "daemon")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "daemon cycle failed: %v\n", err)
+			} else {
+				fmt.Println(app.FormatRunOnceResult(result))
+			}
+			timer := time.NewTimer(duration)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
+		}
+	})
 }
 
 func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, error) {
@@ -314,12 +393,16 @@ func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, 
 }
 
 func withService(configPath string, fn func(context.Context, *app.Service) error) error {
+	return withServiceContext(context.Background(), configPath, fn)
+}
+
+func withServiceContext(ctx context.Context, configPath string, fn func(context.Context, *app.Service) error) error {
 	service, cleanup, err := bootstrap(configPath)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	return fn(context.Background(), service)
+	return fn(ctx, service)
 }
 
 func bootstrap(configPath string) (*app.Service, func(), error) {

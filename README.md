@@ -5,15 +5,13 @@
 ## Quickstart
 
 ```sh
-export PATREON_USERNAME="you@example.com"
-export PATREON_PASSWORD="your-password"
-go run ./cmd/serial-sync init
-```
-
-Edit the generated config with your Patreon creator URL and rules, then start with:
-
-```sh
-go run ./cmd/serial-sync sync --dry-run
+docker build -t serial-sync .
+printf 'PATREON_USERNAME=%s\nPATREON_PASSWORD=%s\n' "you@example.com" "your-password" > patreon.env
+docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync run once
 ```
 
 ## What It Does
@@ -28,9 +26,11 @@ go run ./cmd/serial-sync sync --dry-run
 
 - Patreon is the first provider
 - live Patreon `username_password` bootstrap and persisted session reuse are implemented
+- `run once`, `auth bootstrap`, and a single-process `daemon` are implemented
+- the Docker image includes Chromium and Xvfb for first-run Patreon bootstrap inside the container
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- `wizard`, `daemon`, and session-bundle import are still future work
+- `wizard`, session-bundle import, richer challenge handling, and richer daemon coordination remain future work
 
 ## More
 

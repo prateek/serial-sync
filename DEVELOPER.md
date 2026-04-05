@@ -15,8 +15,8 @@ This repo is a standalone Go sync utility with a generic core and a Patreon-firs
 ```sh
 go test ./...
 go run ./cmd/serial-sync --config ./examples/config.demo.toml plan sync
-go run ./cmd/serial-sync --config ./examples/config.demo.toml sync
-go run ./cmd/serial-sync --config ./examples/config.demo.toml publish
+go run ./cmd/serial-sync --config ./examples/config.demo.toml run once
+go run ./cmd/serial-sync --config ./examples/config.demo.toml auth bootstrap
 ```
 
 ## Generated Assets
@@ -37,7 +37,8 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 
 - Patreon supports both live auth and the fixture demo flow.
 - `filesystem` and `exec` publishing are implemented.
-- `daemon`, session-bundle import, and richer challenge handling remain future work.
+- `run once`, `auth bootstrap`, and the single-process `daemon` are implemented.
+- session-bundle import, richer challenge handling, and richer daemon coordination remain future work.
 
 ## Docs
 

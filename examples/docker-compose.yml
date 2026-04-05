@@ -1,0 +1,14 @@
+services:
+  serial-sync:
+    build:
+      context: ..
+    command: ["daemon"]
+    restart: unless-stopped
+    env_file:
+      - ./patreon.env
+    volumes:
+      - serial-sync-state:/state
+      - ./config.toml:/config/config.toml:ro
+
+volumes:
+  serial-sync-state:

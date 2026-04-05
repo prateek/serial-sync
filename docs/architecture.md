@@ -9,6 +9,7 @@ The implementation follows the PRD’s ports-and-adapters shape:
 - `internal/artifact`: canonical artifact planning and storage
 - `internal/publish`: replayable downstream publishers
 - `internal/app`: orchestration shared by CLI commands
+- `internal/runtime/display`: hidden-display helpers for containerized headed browser bootstrap
 
 The first runtime slice is:
 
@@ -16,6 +17,5 @@ The first runtime slice is:
 
 The seams are already generic enough for future work:
 
-- live Patreon auth/bootstrap
-- daemon scheduling
+- broader daemon coordination and leases
 - additional providers

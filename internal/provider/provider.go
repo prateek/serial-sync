@@ -14,9 +14,15 @@ type ReleaseDocument struct {
 	RawJSON    json.RawMessage
 }
 
+type AuthBootstrapResult struct {
+	State  domain.AuthState
+	Action string
+}
+
 type Client interface {
 	Name() string
 	ValidateSource(source config.SourceConfig) error
+	BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (AuthBootstrapResult, error)
 	ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) ([]ReleaseDocument, domain.AuthState, error)
 }
 

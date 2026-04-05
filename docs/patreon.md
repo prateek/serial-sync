@@ -6,7 +6,7 @@ Implemented:
 
 - creator-feed URL validation
 - persisted Patreon session reuse from `session_path`
-- isolated Chromium bootstrap in a visible browser window for the non-challenge login case
+- isolated Chromium bootstrap in a headed browser session for the non-challenge login case
 - creator-feed discovery through Patreon’s web JSON endpoints
 - normalization of title, post type, visibility, tags, collections, attachments, and text content
 - attachment caching for live download URLs
@@ -15,6 +15,7 @@ Implemented:
 Operational notes:
 
 - live bootstrap uses a dedicated Chromium profile beside the configured `session_path`
+- on Linux with no display, the runtime starts Xvfb automatically so containerized bootstrap still uses headed Chrome
 - later runs reuse the saved session over plain HTTP until Patreon expires it
 - the sync content hash ignores attachment `download_url` and `local_path`, so signed URLs do not force pointless updates
 
@@ -22,4 +23,4 @@ Deferred:
 
 - session-bundle import
 - richer challenge providers beyond clear `challenge_required` failures
-- daemon-specific auth refresh helpers
+- richer daemon-specific auth refresh and health helpers
