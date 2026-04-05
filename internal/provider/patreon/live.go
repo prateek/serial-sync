@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -177,15 +176,15 @@ func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile
 		}
 		return nil, domain.AuthStateReauthRequired, fmt.Errorf("load Patreon session: %w", err)
 	}
-	client, err := httpClientFromSession(*bundle)
+	client, err := httpClientFromSession()
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, err
 	}
-	user, authState, err := c.fetchCurrentUser(ctx, client, source, bundle.UserAgent)
+	user, authState, err := c.fetchCurrentUser(ctx, client, source, bundle)
 	if err != nil {
 		return nil, authState, err
 	}
-	campaign, authState, err := c.resolveCampaign(ctx, client, source, bundle.UserAgent, user)
+	campaign, authState, err := c.resolveCampaign(ctx, client, source, bundle, user)
 	if err != nil {
 		return nil, authState, err
 	}
@@ -197,9 +196,9 @@ func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile
 	}, domain.AuthStateAuthenticated, nil
 }
 
-func (c *Client) fetchCurrentUser(ctx context.Context, client *http.Client, source config.SourceConfig, userAgent string) (*currentUserEnvelope, domain.AuthState, error) {
+func (c *Client) fetchCurrentUser(ctx context.Context, client *http.Client, source config.SourceConfig, bundle *sessionBundle) (*currentUserEnvelope, domain.AuthState, error) {
 	requestURL := c.currentUserAPIURL()
-	body, authState, err := c.get(ctx, client, requestURL, source.URL, userAgent, "application/json")
+	body, authState, err := c.get(ctx, client, requestURL, source.URL, bundle, "application/json")
 	if err != nil {
 		return nil, authState, err
 	}
@@ -213,7 +212,7 @@ func (c *Client) fetchCurrentUser(ctx context.Context, client *http.Client, sour
 	return &payload, domain.AuthStateAuthenticated, nil
 }
 
-func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, source config.SourceConfig, userAgent string, user *currentUserEnvelope) (campaignInfo, domain.AuthState, error) {
+func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, source config.SourceConfig, bundle *sessionBundle, user *currentUserEnvelope) (campaignInfo, domain.AuthState, error) {
 	handle, err := sourceHandle(source.URL)
 	if err != nil {
 		return campaignInfo{}, domain.AuthStateReauthRequired, err
@@ -226,7 +225,7 @@ func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, sourc
 			return campaignInfo{ID: item.ID, Name: item.Attributes.Name}, domain.AuthStateAuthenticated, nil
 		}
 	}
-	body, authState, err := c.get(ctx, client, source.URL, source.URL, userAgent, "text/html")
+	body, authState, err := c.get(ctx, client, source.URL, source.URL, bundle, "text/html")
 	if err != nil {
 		return campaignInfo{}, authState, err
 	}
@@ -244,7 +243,7 @@ func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source c
 	seen := map[string]struct{}{}
 	ids := make([]string, 0, 32)
 	for nextURL != "" {
-		body, authState, err := c.get(ctx, session.client, nextURL, source.URL, session.bundle.UserAgent, "application/json")
+		body, authState, err := c.get(ctx, session.client, nextURL, source.URL, &session.bundle, "application/json")
 		if err != nil {
 			return nil, authState, err
 		}
@@ -269,7 +268,7 @@ func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source c
 
 func (c *Client) fetchPostDetail(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) ([]byte, domain.AuthState, error) {
 	requestURL := c.postDetailAPIURL(postID)
-	return c.get(ctx, session.client, requestURL, source.URL, session.bundle.UserAgent, "application/json")
+	return c.get(ctx, session.client, requestURL, source.URL, &session.bundle, "application/json")
 }
 
 func (c *Client) downloadLiveAttachments(ctx context.Context, session *liveSession, auth config.AuthProfile, source config.SourceConfig, release *domain.NormalizedRelease) error {
@@ -287,7 +286,7 @@ func (c *Client) downloadLiveAttachments(ctx context.Context, session *liveSessi
 			attachment.LocalPath = targetPath
 			continue
 		}
-		body, authState, err := c.get(ctx, session.client, attachment.DownloadURL, source.URL, session.bundle.UserAgent, "*/*")
+		body, authState, err := c.get(ctx, session.client, attachment.DownloadURL, source.URL, &session.bundle, "*/*")
 		if err != nil {
 			return fmt.Errorf("download Patreon attachment %q (%s): %s: %w", attachment.FileName, attachment.DownloadURL, authState, err)
 		}
@@ -299,16 +298,19 @@ func (c *Client) downloadLiveAttachments(ctx context.Context, session *liveSessi
 	return nil
 }
 
-func (c *Client) get(ctx context.Context, client *http.Client, requestURL, referer, userAgent, accept string) ([]byte, domain.AuthState, error) {
+func (c *Client) get(ctx context.Context, client *http.Client, requestURL, referer string, bundle *sessionBundle, accept string) ([]byte, domain.AuthState, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, err
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("User-Agent", firstNonEmpty(userAgent, defaultUserAgent))
+	req.Header.Set("User-Agent", firstNonEmpty(bundleUserAgent(bundle), defaultUserAgent))
 	if referer != "" {
 		req.Header.Set("Referer", referer)
+	}
+	if cookieHeader := cookieHeaderForURL(bundle, requestURL); cookieHeader != "" {
+		req.Header.Set("Cookie", cookieHeader)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -330,13 +332,14 @@ func (c *Client) get(ctx context.Context, client *http.Client, requestURL, refer
 
 func classifyHTTPAuthFailure(resp *http.Response, body []byte) (domain.AuthState, error) {
 	bodyText := strings.ToLower(string(body))
+	isHTML := responseLooksLikeHTML(resp, bodyText)
 	if location := resp.Header.Get("Location"); location != "" && strings.Contains(strings.ToLower(location), "/login") {
 		return domain.AuthStateExpired, fmt.Errorf("Patreon redirected to login")
 	}
-	if strings.Contains(bodyText, "just a moment") || strings.Contains(bodyText, "cf-chl") || strings.Contains(bodyText, "captcha") {
+	if isHTML && (strings.Contains(bodyText, "just a moment") || strings.Contains(bodyText, "cf-chl") || strings.Contains(bodyText, "captcha")) {
 		return domain.AuthStateChallengeNeeded, errors.New("Patreon presented a challenge page")
 	}
-	if strings.Contains(bodyText, "two-factor") || strings.Contains(bodyText, "two factor") || strings.Contains(bodyText, "one-time code") || strings.Contains(bodyText, "verify it") {
+	if isHTML && (strings.Contains(bodyText, "two-factor") || strings.Contains(bodyText, "two factor") || strings.Contains(bodyText, "one-time code") || strings.Contains(bodyText, "verify it")) {
 		return domain.AuthStateChallengeNeeded, errors.New("Patreon requires an interactive verification step")
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -348,39 +351,77 @@ func classifyHTTPAuthFailure(resp *http.Response, body []byte) (domain.AuthState
 	return "", nil
 }
 
-func httpClientFromSession(bundle sessionBundle) (*http.Client, error) {
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, err
+func responseLooksLikeHTML(resp *http.Response, bodyText string) bool {
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/html") {
+		return true
 	}
-	grouped := map[string][]*http.Cookie{}
-	for _, item := range bundle.Cookies {
-		domainHost := strings.TrimPrefix(item.Domain, ".")
-		if domainHost == "" {
-			continue
-		}
-		cookie := &http.Cookie{
-			Name:     item.Name,
-			Value:    item.Value,
-			Domain:   item.Domain,
-			Path:     firstNonEmpty(item.Path, "/"),
-			HttpOnly: item.HTTPOnly,
-			Secure:   item.Secure,
-		}
-		if item.Expires > 0 {
-			cookie.Expires = time.Unix(int64(item.Expires), 0).UTC()
-		}
-		grouped[domainHost] = append(grouped[domainHost], cookie)
-	}
-	for host, cookies := range grouped {
-		u := &url.URL{Scheme: "https", Host: host, Path: "/"}
-		jar.SetCookies(u, cookies)
-	}
+	trimmed := strings.TrimSpace(bodyText)
+	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
+}
+
+func httpClientFromSession() (*http.Client, error) {
 	return &http.Client{
-		Jar:           jar,
 		Timeout:       45 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}, nil
+}
+
+func bundleUserAgent(bundle *sessionBundle) string {
+	if bundle == nil {
+		return ""
+	}
+	return bundle.UserAgent
+}
+
+func cookieHeaderForURL(bundle *sessionBundle, rawURL string) string {
+	if bundle == nil || len(bundle.Cookies) == 0 {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	path := firstNonEmpty(u.EscapedPath(), "/")
+	now := time.Now()
+	parts := make([]string, 0, len(bundle.Cookies))
+	for _, item := range bundle.Cookies {
+		if item.Name == "" || item.Value == "" {
+			continue
+		}
+		if item.Expires > 0 && now.After(time.Unix(int64(item.Expires), 0).UTC()) {
+			continue
+		}
+		if item.Secure && u.Scheme != "https" {
+			continue
+		}
+		if !cookieDomainMatches(host, item.Domain) {
+			continue
+		}
+		if !cookiePathMatches(path, item.Path) {
+			continue
+		}
+		parts = append(parts, item.Name+"="+item.Value)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func cookieDomainMatches(host, domain string) bool {
+	normalizedDomain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(domain), "."))
+	if normalizedDomain == "" || host == "" {
+		return false
+	}
+	return host == normalizedDomain || strings.HasSuffix(host, "."+normalizedDomain)
+}
+
+func cookiePathMatches(requestPath, cookiePath string) bool {
+	normalizedCookiePath := firstNonEmpty(cookiePath, "/")
+	normalizedRequestPath := firstNonEmpty(requestPath, "/")
+	if normalizedCookiePath == "/" {
+		return true
+	}
+	return strings.HasPrefix(normalizedRequestPath, normalizedCookiePath)
 }
 
 func loadSessionBundle(path string) (*sessionBundle, error) {
@@ -682,11 +723,11 @@ func sourceHandle(rawURL string) (string, error) {
 }
 
 func campaignMatchesHandle(vanity, campaignURL, handle string) bool {
-	handle = strings.ToLower(strings.TrimSpace(handle))
+	handle = normalizeHandleToken(handle)
 	if handle == "" {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(vanity), handle) {
+	if normalizeHandleToken(vanity) == handle {
 		return true
 	}
 	if campaignURL == "" {
@@ -700,7 +741,7 @@ func campaignMatchesHandle(vanity, campaignURL, handle string) bool {
 	if len(parts) == 0 {
 		return false
 	}
-	return strings.EqualFold(parts[len(parts)-1], handle)
+	return normalizeHandleToken(parts[len(parts)-1]) == handle
 }
 
 func resolveRelativeURL(currentURL, nextURL string) string {
@@ -735,6 +776,17 @@ func sessionCacheRoot(sessionPath string) string {
 func sanitizeAttachmentFileName(input string) string {
 	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "\n", " ", "\r", " ")
 	return replacer.Replace(strings.TrimSpace(input))
+}
+
+func normalizeHandleToken(input string) string {
+	input = strings.ToLower(strings.TrimSpace(input))
+	var builder strings.Builder
+	for _, r := range input {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }
 
 func normalizeAuthMode(mode string) string {

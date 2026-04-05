@@ -141,6 +141,70 @@ func TestListReleasesReturnsChallengeRequiredWhenBootstrapFails(t *testing.T) {
 	}
 }
 
+func TestCampaignMatchesHandleNormalizesVanityVariants(t *testing.T) {
+	t.Parallel()
+
+	if !campaignMatchesHandle("plum_parrot", "https://www.patreon.com/plum_parrot", "PlumParrot") {
+		t.Fatal("expected PlumParrot to match plum_parrot vanity")
+	}
+}
+
+func TestCookieHeaderForURLMatchesPatreonSessionCookies(t *testing.T) {
+	t.Parallel()
+
+	bundle := &sessionBundle{
+		UserAgent: "serial-sync-test",
+		Cookies: []sessionCookie{
+			{Name: "session_id", Value: "abc", Domain: ".patreon.com", Path: "/", Secure: true},
+			{Name: "stream_user_token", Value: "def", Domain: "www.patreon.com", Path: "/api", Secure: true},
+			{Name: "skip_me", Value: "ghi", Domain: "example.com", Path: "/", Secure: true},
+		},
+	}
+
+	got := cookieHeaderForURL(bundle, "https://www.patreon.com/api/current_user")
+	if !strings.Contains(got, "session_id=abc") {
+		t.Fatalf("cookieHeaderForURL() = %q, want session cookie", got)
+	}
+	if !strings.Contains(got, "stream_user_token=def") {
+		t.Fatalf("cookieHeaderForURL() = %q, want API-scoped cookie", got)
+	}
+	if strings.Contains(got, "skip_me=ghi") {
+		t.Fatalf("cookieHeaderForURL() = %q, did not expect unrelated domain cookie", got)
+	}
+}
+
+func TestClassifyHTTPAuthFailureIgnoresChallengeWordsInJSON(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.api+json"}},
+	}
+	authState, err := classifyHTTPAuthFailure(resp, []byte(`{"content":"just a moment later the chapter begins"}`))
+	if err != nil {
+		t.Fatalf("classifyHTTPAuthFailure() error = %v", err)
+	}
+	if authState != "" {
+		t.Fatalf("authState = %q, want empty", authState)
+	}
+}
+
+func TestClassifyHTTPAuthFailureFlagsHTMLChallengePage(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+	}
+	authState, err := classifyHTTPAuthFailure(resp, []byte("<html><title>Just a moment...</title></html>"))
+	if err == nil {
+		t.Fatal("expected challenge page error")
+	}
+	if authState != domain.AuthStateChallengeNeeded {
+		t.Fatalf("authState = %q, want %q", authState, domain.AuthStateChallengeNeeded)
+	}
+}
+
 func newPatreonAPITestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
