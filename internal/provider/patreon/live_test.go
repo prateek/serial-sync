@@ -2,12 +2,15 @@ package patreon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/prateek/serial-sync/internal/config"
@@ -29,7 +32,7 @@ func TestListReleasesLiveSessionReuse(t *testing.T) {
 	sessionPath := filepath.Join(tmp, "patreon.json")
 	writeTestSessionBundle(t, sessionPath, server.URL)
 
-	docs, authState, err := client.ListReleases(context.Background(), config.AuthProfile{
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
 		ID:          "patreon-default",
 		Provider:    "patreon",
 		Mode:        "username_password",
@@ -40,25 +43,24 @@ func TestListReleasesLiveSessionReuse(t *testing.T) {
 		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
 		AuthProfile: "patreon-default",
 		Enabled:     true,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("ListReleases() error = %v", err)
 	}
-	if authState != domain.AuthStateAuthenticated {
-		t.Fatalf("authState = %q, want %q", authState, domain.AuthStateAuthenticated)
+	if result.AuthState != domain.AuthStateAuthenticated {
+		t.Fatalf("authState = %q, want %q", result.AuthState, domain.AuthStateAuthenticated)
 	}
-	if len(docs) != 1 {
-		t.Fatalf("len(docs) = %d, want 1", len(docs))
+	if len(result.Documents) != 1 {
+		t.Fatalf("len(docs) = %d, want 1", len(result.Documents))
 	}
-	if got, want := docs[0].Normalized.ProviderReleaseID, "123"; got != want {
+	if got, want := result.Documents[0].Normalized.ProviderReleaseID, "123"; got != want {
 		t.Fatalf("ProviderReleaseID = %q, want %q", got, want)
 	}
-	if len(docs[0].Normalized.Attachments) != 1 {
-		t.Fatalf("len(attachments) = %d, want 1", len(docs[0].Normalized.Attachments))
+	if len(result.Documents[0].Normalized.Attachments) != 1 {
+		t.Fatalf("len(attachments) = %d, want 1", len(result.Documents[0].Normalized.Attachments))
 	}
-	localPath := docs[0].Normalized.Attachments[0].LocalPath
-	if localPath == "" {
-		t.Fatalf("expected downloaded attachment local path")
+	if got := result.Documents[0].Normalized.Attachments[0].LocalPath; got != "" {
+		t.Fatalf("expected attachment to remain remote until prepare, got %q", got)
 	}
 }
 
@@ -82,7 +84,7 @@ func TestListReleasesBootstrapsWhenSessionMissing(t *testing.T) {
 	t.Setenv("PATREON_USERNAME", "user@example.com")
 	t.Setenv("PATREON_PASSWORD", "not-used-in-test")
 
-	docs, authState, err := client.ListReleases(context.Background(), config.AuthProfile{
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
 		ID:          "patreon-default",
 		Provider:    "patreon",
 		Mode:        "username_password",
@@ -95,18 +97,18 @@ func TestListReleasesBootstrapsWhenSessionMissing(t *testing.T) {
 		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
 		AuthProfile: "patreon-default",
 		Enabled:     true,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("ListReleases() error = %v", err)
 	}
 	if !bootstrapped {
 		t.Fatalf("expected bootstrap to run")
 	}
-	if authState != domain.AuthStateAuthenticated {
-		t.Fatalf("authState = %q, want %q", authState, domain.AuthStateAuthenticated)
+	if result.AuthState != domain.AuthStateAuthenticated {
+		t.Fatalf("authState = %q, want %q", result.AuthState, domain.AuthStateAuthenticated)
 	}
-	if len(docs) != 1 {
-		t.Fatalf("len(docs) = %d, want 1", len(docs))
+	if len(result.Documents) != 1 {
+		t.Fatalf("len(docs) = %d, want 1", len(result.Documents))
 	}
 }
 
@@ -119,7 +121,7 @@ func TestListReleasesReturnsChallengeRequiredWhenBootstrapFails(t *testing.T) {
 	t.Setenv("PATREON_USERNAME", "user@example.com")
 	t.Setenv("PATREON_PASSWORD", "not-used-in-test")
 
-	_, authState, err := client.ListReleases(context.Background(), config.AuthProfile{
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
 		ID:          "patreon-default",
 		Provider:    "patreon",
 		Mode:        "username_password",
@@ -132,12 +134,119 @@ func TestListReleasesReturnsChallengeRequiredWhenBootstrapFails(t *testing.T) {
 		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
 		AuthProfile: "patreon-default",
 		Enabled:     true,
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected bootstrap failure")
 	}
-	if authState != domain.AuthStateChallengeNeeded {
-		t.Fatalf("authState = %q, want %q", authState, domain.AuthStateChallengeNeeded)
+	if result.AuthState != domain.AuthStateChallengeNeeded {
+		t.Fatalf("authState = %q, want %q", result.AuthState, domain.AuthStateChallengeNeeded)
+	}
+}
+
+func TestPrepareReleaseDownloadsSelectedAttachment(t *testing.T) {
+	t.Parallel()
+
+	server := newPatreonAPITestServer(t)
+	client := New()
+	client.apiBaseURL = server.URL
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ListReleases() error = %v", err)
+	}
+	prepared, authState, err := client.PrepareRelease(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, result.Documents[0], domain.TrackDecision{
+		ContentStrategy:    domain.ContentStrategyAttachmentPreferred,
+		AttachmentGlob:     []string{"*.epub", "*.pdf"},
+		AttachmentPriority: []string{"epub", "pdf"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareRelease() error = %v", err)
+	}
+	if authState != domain.AuthStateAuthenticated {
+		t.Fatalf("authState = %q, want %q", authState, domain.AuthStateAuthenticated)
+	}
+	localPath := prepared.Normalized.Attachments[0].LocalPath
+	if localPath == "" {
+		t.Fatal("expected prepared release to cache the selected attachment")
+	}
+	if _, err := os.Stat(localPath); err != nil {
+		t.Fatalf("cached attachment missing: %v", err)
+	}
+}
+
+func TestListReleasesUsesStoredCursorLookback(t *testing.T) {
+	t.Parallel()
+
+	postIDs := make([]string, 0, 40)
+	for idx := 40; idx >= 1; idx-- {
+		postIDs = append(postIDs, fmt.Sprintf("%d", idx))
+	}
+	server, detailRequests := newPatreonPagedTestServer(t, postIDs)
+	client := New()
+	client.apiBaseURL = server.URL
+	client.bootstrap = func(context.Context, config.AuthProfile, config.SourceConfig, string) (domain.AuthState, error) {
+		t.Fatalf("bootstrap should not run when a persisted session is available")
+		return domain.AuthStateReauthRequired, nil
+	}
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+	cursorJSON, err := json.Marshal(liveSyncCursor{
+		Version:          liveSyncCursorVersion,
+		Lookback:         5,
+		RecentReleaseIDs: postIDs,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, &domain.Source{ID: "example-creator", SyncCursor: string(cursorJSON)})
+	if err != nil {
+		t.Fatalf("ListReleases() error = %v", err)
+	}
+	if got, want := len(result.Documents), 5; got != want {
+		t.Fatalf("len(docs) = %d, want %d", got, want)
+	}
+	if got := atomic.LoadInt32(detailRequests); got != 5 {
+		t.Fatalf("detail requests = %d, want 5", got)
 	}
 }
 
@@ -286,6 +395,102 @@ func newPatreonAPITestServer(t *testing.T) *httptest.Server {
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server
+}
+
+func newPatreonPagedTestServer(t *testing.T, postIDs []string) (*httptest.Server, *int32) {
+	t.Helper()
+
+	var detailRequests int32
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.Header.Get("Cookie"), "session_id=patreon-test-session") {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("/api/current_user", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":{"id":"user-1"},"included":[{"id":"campaign-1","type":"campaign","attributes":{"name":"Example Creator","url":"https://www.patreon.com/ExampleCreator","vanity":"ExampleCreator"}}]}`)
+	}))
+	mux.HandleFunc("/api/posts", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		const pageSize = 10
+		page := 1
+		if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+			fmt.Sscanf(raw, "%d", &page)
+			if page < 1 {
+				page = 1
+			}
+		}
+		start := (page - 1) * pageSize
+		if start > len(postIDs) {
+			start = len(postIDs)
+		}
+		end := start + pageSize
+		if end > len(postIDs) {
+			end = len(postIDs)
+		}
+		var items []string
+		for _, id := range postIDs[start:end] {
+			items = append(items, fmt.Sprintf(`{"id":"%s"}`, id))
+		}
+		next := ""
+		if end < len(postIDs) {
+			next = fmt.Sprintf(`/api/posts?page=%d`, page+1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":[%s],"links":{"next":%q}}`, strings.Join(items, ","), next)
+	}))
+	mux.HandleFunc("/api/posts/", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		postID := strings.TrimPrefix(r.URL.Path, "/api/posts/")
+		atomic.AddInt32(&detailRequests, 1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+  "data": {
+    "id": %q,
+    "type": "post",
+    "attributes": {
+      "title": "Chapter %s",
+      "post_type": "text",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/chapter-%s-%s",
+      "content": "<p>Hello %s</p>",
+      "content_json_string": "",
+      "published_at": "2026-04-01T00:00:00Z",
+      "edited_at": "2026-04-01T00:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "campaign-1" } },
+      "user": { "data": { "id": "creator-user-1" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "campaign-1",
+      "type": "campaign",
+      "attributes": { "name": "Example Creator" },
+      "relationships": { "creator": { "data": { "id": "creator-user-1" } } }
+    },
+    {
+      "id": "creator-user-1",
+      "type": "user",
+      "attributes": { "full_name": "Example Creator", "vanity": "ExampleCreator" },
+      "relationships": {}
+    }
+  ]
+}`, postID, postID, postID, postID, postID)
+	}))
+
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server, &detailRequests
 }
 
 func writeTestSessionBundle(t *testing.T, path string, baseURL string) {

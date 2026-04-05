@@ -100,17 +100,35 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 			return result, err
 		}
 		if auth, ok := s.Config.AuthProfileByID(sourceCfg.AuthProfile); ok {
-			docs, authState, listErr := client.ListReleases(ctx, auth, sourceCfg)
-			_ = recorder.Event(ctx, "info", "provider", "auth state "+string(authState), "source", sourceCfg.ID)
+			storedSource, getErr := s.Repo.GetSource(ctx, sourceCfg.ID)
+			if getErr != nil {
+				err = getErr
+				return result, err
+			}
+			listResult, listErr := client.ListReleases(ctx, auth, sourceCfg, storedSource)
+			_ = recorder.Event(ctx, "info", "provider", "auth state "+string(listResult.AuthState), "source", sourceCfg.ID)
 			if listErr != nil {
 				err = listErr
 				_ = recorder.Event(ctx, "error", "provider", listErr.Error(), "source", sourceCfg.ID)
 				return result, err
 			}
-			for _, doc := range docs {
+			_ = recorder.Event(ctx, "info", "provider", fmt.Sprintf("fetched %d releases", len(listResult.Documents)), "source", sourceCfg.ID)
+			for _, doc := range listResult.Documents {
 				result.Discovered++
 				decision := classify.Decide(sourceCfg.ID, doc.Normalized, s.Config.RulesForSource(sourceCfg.ID))
-				action, changed, materialized, handleErr := s.handleRelease(ctx, recorder, sourceCfg, doc, decision, dryRun)
+				preparedDoc := doc
+				if classify.CanMaterialize(doc.Normalized, decision) {
+					var authState domain.AuthState
+					var prepErr error
+					preparedDoc, authState, prepErr = client.PrepareRelease(ctx, auth, sourceCfg, doc, decision)
+					_ = recorder.Event(ctx, "info", "provider", "auth state "+string(authState), "source", sourceCfg.ID)
+					if prepErr != nil {
+						err = prepErr
+						_ = recorder.Event(ctx, "error", "provider", prepErr.Error(), "source", sourceCfg.ID)
+						return result, err
+					}
+				}
+				action, changed, materialized, handleErr := s.handleRelease(ctx, recorder, sourceCfg, preparedDoc, decision, dryRun)
 				if handleErr != nil {
 					err = handleErr
 					return result, err
@@ -123,6 +141,15 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 				}
 				if materialized {
 					result.MaterializedArtifacts++
+				}
+			}
+			if !dryRun {
+				sourceState := mergeSourceSyncState(sourceCfg, storedSource, listResult.Documents, listResult.SyncCursor)
+				if sourceState != nil {
+					if upsertErr := s.Repo.UpsertSource(ctx, *sourceState); upsertErr != nil {
+						err = upsertErr
+						return result, err
+					}
 				}
 			}
 			continue
@@ -704,6 +731,41 @@ func prettyJSON(input []byte) []byte {
 		return input
 	}
 	return pretty
+}
+
+func mergeSourceSyncState(sourceCfg config.SourceConfig, stored *domain.Source, docs []provider.ReleaseDocument, syncCursor string) *domain.Source {
+	if stored == nil && len(docs) == 0 {
+		return nil
+	}
+	merged := domain.Source{
+		ID:            sourceCfg.ID,
+		Provider:      sourceCfg.Provider,
+		SourceURL:     sourceCfg.URL,
+		AuthProfileID: sourceCfg.AuthProfile,
+		Enabled:       sourceCfg.Enabled,
+	}
+	if stored != nil {
+		merged = *stored
+		merged.Provider = sourceCfg.Provider
+		merged.SourceURL = sourceCfg.URL
+		merged.AuthProfileID = sourceCfg.AuthProfile
+		merged.Enabled = sourceCfg.Enabled
+	}
+	if len(docs) > 0 {
+		sample := docs[0].Normalized
+		if strings.TrimSpace(sample.SourceType) != "" {
+			merged.SourceType = sample.SourceType
+		}
+		if strings.TrimSpace(sample.CreatorID) != "" {
+			merged.CreatorID = sample.CreatorID
+		}
+		if strings.TrimSpace(sample.CreatorName) != "" {
+			merged.CreatorName = sample.CreatorName
+		}
+	}
+	merged.SyncCursor = syncCursor
+	merged.LastSyncedAt = time.Now().UTC()
+	return &merged
 }
 
 func NotImplemented(feature string) error {

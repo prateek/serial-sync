@@ -8,8 +8,9 @@ Implemented:
 - persisted Patreon session reuse from `session_path`
 - isolated Chromium bootstrap in a headed browser session for the non-challenge login case
 - creator-feed discovery through Patreon’s web JSON endpoints
+- steady-state live syncs that stop after a recent known-id boundary instead of re-walking the full corpus every run
 - normalization of title, post type, visibility, tags, collections, attachments, and text content
-- attachment caching for live download URLs
+- lazy attachment caching for live download URLs only when a classified release actually needs the selected attachment
 - attachment lookup via local fixture paths for the demo flow
 
 Operational notes:

@@ -14,6 +14,12 @@ type ReleaseDocument struct {
 	RawJSON    json.RawMessage
 }
 
+type ListResult struct {
+	Documents  []ReleaseDocument
+	AuthState  domain.AuthState
+	SyncCursor string
+}
+
 type AuthBootstrapResult struct {
 	State  domain.AuthState
 	Action string
@@ -23,7 +29,8 @@ type Client interface {
 	Name() string
 	ValidateSource(source config.SourceConfig) error
 	BootstrapAuth(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, force bool) (AuthBootstrapResult, error)
-	ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) ([]ReleaseDocument, domain.AuthState, error)
+	ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (ListResult, error)
+	PrepareRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc ReleaseDocument, decision domain.TrackDecision) (ReleaseDocument, domain.AuthState, error)
 }
 
 type Registry struct {

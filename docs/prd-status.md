@@ -9,10 +9,10 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - XDG-aware config loading, defaults, and container-first `/config` + `/state` roots
 - live Patreon username/password bootstrap for the non-challenge case
 - persisted Patreon session reuse and explicit live auth state reporting
-- live Patreon release discovery and normalization
+- live Patreon release discovery and normalization, with recent-id incremental steady-state syncs
 - fixture-backed Patreon demo inputs
 - story-track rule classification with deterministic unmatched fallback behavior
-- durable artifact planning and materialization for `text_post` and `attachment_preferred`
+- durable artifact planning and materialization for `text_post` and `attachment_preferred`, with lazy selected-attachment downloads
 - idempotent SQLite-backed state, run records, event records, and publish records
 - `filesystem` publisher
 - `exec` publisher with stable environment variables and idempotent replay behavior

@@ -130,6 +130,13 @@ content_strategy = "text_post"
 	if firstRunOnce.Publish.Published != 4 || firstRunOnce.Publish.Failed != 0 {
 		t.Fatalf("unexpected run-once publish summary: %#v", firstRunOnce.Publish)
 	}
+	storedSource, err := repo.GetSource(context.Background(), "plum-parrot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedSource == nil || strings.TrimSpace(storedSource.SyncCursor) == "" {
+		t.Fatalf("expected plum-parrot source to persist a sync cursor, got %#v", storedSource)
+	}
 
 	secondRunOnce, err := service.RunOnce(context.Background(), "", "", "run once")
 	if err != nil {

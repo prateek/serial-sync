@@ -80,36 +80,43 @@ func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, sou
 	return provider.AuthBootstrapResult{State: domain.AuthStateAuthenticated, Action: "bootstrapped"}, nil
 }
 
-func (c *Client) ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) ([]provider.ReleaseDocument, domain.AuthState, error) {
+func (c *Client) ListReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (provider.ListResult, error) {
 	if err := c.ValidateSource(source); err != nil {
-		return nil, domain.AuthStateReauthRequired, err
+		return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, err
 	}
 	if source.FixtureDir != "" {
 		return c.listFixtureReleases(ctx, source)
 	}
-	return c.listLiveReleases(ctx, auth, source)
+	return c.listLiveReleases(ctx, auth, source, storedSource)
 }
 
-func (c *Client) listFixtureReleases(ctx context.Context, source config.SourceConfig) ([]provider.ReleaseDocument, domain.AuthState, error) {
+func (c *Client) PrepareRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision) (provider.ReleaseDocument, domain.AuthState, error) {
+	if source.FixtureDir != "" {
+		return doc, domain.AuthStateAuthenticated, nil
+	}
+	return c.prepareLiveRelease(ctx, auth, source, doc, decision)
+}
+
+func (c *Client) listFixtureReleases(ctx context.Context, source config.SourceConfig) (provider.ListResult, error) {
 	postFiles, err := filepath.Glob(filepath.Join(source.FixtureDir, "posts", "*.json"))
 	if err != nil {
-		return nil, domain.AuthStateReauthRequired, err
+		return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, err
 	}
 	sort.Strings(postFiles)
 	docs := make([]provider.ReleaseDocument, 0, len(postFiles))
 	for _, postPath := range postFiles {
 		select {
 		case <-ctx.Done():
-			return nil, domain.AuthStateReauthRequired, ctx.Err()
+			return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, ctx.Err()
 		default:
 		}
 		raw, err := os.ReadFile(postPath)
 		if err != nil {
-			return nil, domain.AuthStateReauthRequired, err
+			return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, err
 		}
 		norm, err := parsePost(raw, source.FixtureDir)
 		if err != nil {
-			return nil, domain.AuthStateReauthRequired, fmt.Errorf("parse %s: %w", postPath, err)
+			return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, fmt.Errorf("parse %s: %w", postPath, err)
 		}
 		docs = append(docs, provider.ReleaseDocument{
 			Normalized: norm,
@@ -117,7 +124,11 @@ func (c *Client) listFixtureReleases(ctx context.Context, source config.SourceCo
 		})
 	}
 	provider.SortReleaseDocuments(docs)
-	return docs, domain.AuthStateAuthenticated, nil
+	return provider.ListResult{
+		Documents:  docs,
+		AuthState:  domain.AuthStateAuthenticated,
+		SyncCursor: buildLiveSyncCursor(docs),
+	}, nil
 }
 
 type postEnvelope struct {

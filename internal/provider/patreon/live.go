@@ -18,6 +18,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
+	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
@@ -111,27 +112,40 @@ type pageSnapshot struct {
 	Text  string
 }
 
-func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) ([]provider.ReleaseDocument, domain.AuthState, error) {
+const (
+	liveSyncCursorVersion    = 1
+	liveSyncCursorLookback   = 25
+	liveSyncCursorRecentKeep = 64
+)
+
+type liveSyncCursor struct {
+	Version          int      `json:"version"`
+	Lookback         int      `json:"lookback"`
+	RecentReleaseIDs []string `json:"recent_release_ids"`
+}
+
+func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (provider.ListResult, error) {
 	session, authState, err := c.ensureLiveSession(ctx, auth, source)
 	if err != nil {
-		return nil, authState, err
+		return provider.ListResult{AuthState: authState}, err
 	}
-	postIDs, authState, err := c.listPostIDs(ctx, session, source)
+	cursor := parseLiveSyncCursor("")
+	if storedSource != nil {
+		cursor = parseLiveSyncCursor(storedSource.SyncCursor)
+	}
+	postIDs, authState, err := c.listPostIDs(ctx, session, source, cursor)
 	if err != nil {
-		return nil, authState, err
+		return provider.ListResult{AuthState: authState}, err
 	}
 	docs := make([]provider.ReleaseDocument, 0, len(postIDs))
 	for _, postID := range postIDs {
 		raw, authState, err := c.fetchPostDetail(ctx, session, source, postID)
 		if err != nil {
-			return nil, authState, err
+			return provider.ListResult{AuthState: authState}, err
 		}
 		norm, err := parsePost(raw, "")
 		if err != nil {
-			return nil, domain.AuthStateReauthRequired, fmt.Errorf("parse Patreon post %s: %w", postID, err)
-		}
-		if err := c.downloadLiveAttachments(ctx, session, auth, source, &norm); err != nil {
-			return nil, domain.AuthStateReauthRequired, err
+			return provider.ListResult{AuthState: domain.AuthStateReauthRequired}, fmt.Errorf("parse Patreon post %s: %w", postID, err)
 		}
 		docs = append(docs, provider.ReleaseDocument{
 			Normalized: norm,
@@ -139,7 +153,11 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 		})
 	}
 	provider.SortReleaseDocuments(docs)
-	return docs, domain.AuthStateAuthenticated, nil
+	return provider.ListResult{
+		Documents:  docs,
+		AuthState:  domain.AuthStateAuthenticated,
+		SyncCursor: buildLiveSyncCursor(docs),
+	}, nil
 }
 
 func (c *Client) ensureLiveSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (*liveSession, domain.AuthState, error) {
@@ -240,10 +258,20 @@ func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, sourc
 	return campaignInfo{}, domain.AuthStateReauthRequired, fmt.Errorf("could not resolve Patreon campaign id for source %q", source.ID)
 }
 
-func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source config.SourceConfig) ([]string, domain.AuthState, error) {
+func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor) ([]string, domain.AuthState, error) {
 	nextURL := c.postsIndexAPIURL(session.campaign.ID, session.currentUserID)
 	seen := map[string]struct{}{}
 	ids := make([]string, 0, 32)
+	known := map[string]struct{}{}
+	lookback := 0
+	if cursor != nil {
+		lookback = cursor.Lookback
+		for _, id := range cursor.RecentReleaseIDs {
+			if strings.TrimSpace(id) != "" {
+				known[id] = struct{}{}
+			}
+		}
+	}
 	for nextURL != "" {
 		body, authState, err := c.get(ctx, session.client, nextURL, source.URL, &session.bundle, "application/json")
 		if err != nil {
@@ -262,6 +290,11 @@ func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source c
 			}
 			seen[item.ID] = struct{}{}
 			ids = append(ids, item.ID)
+			if lookback > 0 && len(ids) >= lookback {
+				if _, ok := known[item.ID]; ok {
+					return ids, domain.AuthStateAuthenticated, nil
+				}
+			}
 		}
 		nextURL = resolveRelativeURL(nextURL, page.Links.Next)
 	}
@@ -273,31 +306,70 @@ func (c *Client) fetchPostDetail(ctx context.Context, session *liveSession, sour
 	return c.get(ctx, session.client, requestURL, source.URL, &session.bundle, "application/json")
 }
 
-func (c *Client) downloadLiveAttachments(ctx context.Context, session *liveSession, auth config.AuthProfile, source config.SourceConfig, release *domain.NormalizedRelease) error {
-	for idx := range release.Attachments {
-		attachment := &release.Attachments[idx]
-		if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
-			continue
-		}
-		targetDir := filepath.Join(sessionCacheRoot(auth.SessionPath), "attachments", source.ID, release.ProviderReleaseID)
-		if err := os.MkdirAll(targetDir, 0o755); err != nil {
-			return err
-		}
-		targetPath := filepath.Join(targetDir, sanitizeAttachmentFileName(attachment.FileName))
-		if _, err := os.Stat(targetPath); err == nil {
-			attachment.LocalPath = targetPath
-			continue
-		}
-		body, authState, err := c.get(ctx, session.client, attachment.DownloadURL, source.URL, &session.bundle, "*/*")
-		if err != nil {
-			return fmt.Errorf("download Patreon attachment %q (%s): %s: %w", attachment.FileName, attachment.DownloadURL, authState, err)
-		}
-		if err := os.WriteFile(targetPath, body, 0o644); err != nil {
-			return err
-		}
-		attachment.LocalPath = targetPath
+func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision) (provider.ReleaseDocument, domain.AuthState, error) {
+	switch decision.ContentStrategy {
+	case domain.ContentStrategyAttachmentPreferred, domain.ContentStrategyAttachmentOnly:
+	default:
+		return doc, domain.AuthStateAuthenticated, nil
 	}
-	return nil
+	attachment, ok := classify.SelectAttachment(doc.Normalized, decision)
+	if !ok {
+		return doc, domain.AuthStateAuthenticated, nil
+	}
+	index := selectedAttachmentIndex(doc.Normalized.Attachments, attachment)
+	if index < 0 {
+		return doc, domain.AuthStateAuthenticated, nil
+	}
+	if doc.Normalized.Attachments[index].LocalPath != "" ||
+		strings.TrimSpace(doc.Normalized.Attachments[index].DownloadURL) == "" ||
+		strings.TrimSpace(doc.Normalized.Attachments[index].FileName) == "" {
+		return doc, domain.AuthStateAuthenticated, nil
+	}
+	bundle, err := loadSessionBundle(auth.SessionPath)
+	if err != nil {
+		return doc, domain.AuthStateReauthRequired, fmt.Errorf("load Patreon session: %w", err)
+	}
+	client, err := httpClientFromSession()
+	if err != nil {
+		return doc, domain.AuthStateReauthRequired, err
+	}
+	session := &liveSession{
+		bundle: *bundle,
+		client: client,
+	}
+	authState, err := c.downloadLiveAttachment(ctx, session, auth, source, &doc.Normalized, index)
+	if err != nil {
+		return doc, authState, err
+	}
+	return doc, domain.AuthStateAuthenticated, nil
+}
+
+func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSession, auth config.AuthProfile, source config.SourceConfig, release *domain.NormalizedRelease, index int) (domain.AuthState, error) {
+	if index < 0 || index >= len(release.Attachments) {
+		return domain.AuthStateAuthenticated, nil
+	}
+	attachment := &release.Attachments[index]
+	if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
+		return domain.AuthStateAuthenticated, nil
+	}
+	targetDir := filepath.Join(sessionCacheRoot(auth.SessionPath), "attachments", source.ID, release.ProviderReleaseID)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return domain.AuthStateReauthRequired, err
+	}
+	targetPath := filepath.Join(targetDir, sanitizeAttachmentFileName(attachment.FileName))
+	if _, err := os.Stat(targetPath); err == nil {
+		attachment.LocalPath = targetPath
+		return domain.AuthStateAuthenticated, nil
+	}
+	body, authState, err := c.get(ctx, session.client, attachment.DownloadURL, source.URL, &session.bundle, "*/*")
+	if err != nil {
+		return authState, fmt.Errorf("download Patreon attachment %q (%s): %s: %w", attachment.FileName, attachment.DownloadURL, authState, err)
+	}
+	if err := os.WriteFile(targetPath, body, 0o644); err != nil {
+		return domain.AuthStateReauthRequired, err
+	}
+	attachment.LocalPath = targetPath
+	return domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) get(ctx context.Context, client *http.Client, requestURL, referer string, bundle *sessionBundle, accept string) ([]byte, domain.AuthState, error) {
@@ -758,6 +830,103 @@ func sourceHandle(rawURL string) (string, error) {
 		return "", fmt.Errorf("could not derive Patreon handle from %q", rawURL)
 	}
 	return parts[len(parts)-2], nil
+}
+
+func buildLiveSyncCursor(docs []provider.ReleaseDocument) string {
+	if len(docs) == 0 {
+		return ""
+	}
+	recent := make([]string, 0, min(len(docs), liveSyncCursorRecentKeep))
+	seen := map[string]struct{}{}
+	for _, doc := range docs {
+		id := strings.TrimSpace(doc.Normalized.ProviderReleaseID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		recent = append(recent, id)
+		if len(recent) >= liveSyncCursorRecentKeep {
+			break
+		}
+	}
+	if len(recent) == 0 {
+		return ""
+	}
+	payload, err := json.Marshal(liveSyncCursor{
+		Version:          liveSyncCursorVersion,
+		Lookback:         liveSyncCursorLookback,
+		RecentReleaseIDs: recent,
+	})
+	if err != nil {
+		return ""
+	}
+	return string(payload)
+}
+
+func parseLiveSyncCursor(raw string) *liveSyncCursor {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var cursor liveSyncCursor
+	if err := json.Unmarshal([]byte(raw), &cursor); err != nil {
+		return nil
+	}
+	if cursor.Version != liveSyncCursorVersion {
+		return nil
+	}
+	if cursor.Lookback <= 0 {
+		cursor.Lookback = liveSyncCursorLookback
+	}
+	cursor.RecentReleaseIDs = compactRecentReleaseIDs(cursor.RecentReleaseIDs)
+	if len(cursor.RecentReleaseIDs) == 0 {
+		return nil
+	}
+	return &cursor
+}
+
+func compactRecentReleaseIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, min(len(ids), liveSyncCursorRecentKeep))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+		if len(out) >= liveSyncCursorRecentKeep {
+			break
+		}
+	}
+	return out
+}
+
+func selectedAttachmentIndex(attachments []domain.Attachment, selected domain.Attachment) int {
+	for idx, attachment := range attachments {
+		if attachment.FileName == selected.FileName &&
+			attachment.MIMEType == selected.MIMEType &&
+			attachment.DownloadURL == selected.DownloadURL {
+			return idx
+		}
+	}
+	return -1
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func campaignMatchesHandle(vanity, campaignURL, handle string) bool {
