@@ -63,7 +63,7 @@ func Start(ctx context.Context, repo store.Repository, command string, sourceSco
 		recorder.closeLogs()
 		return nil, err
 	}
-	if err := recorder.log("info", "run", "run started", "", "", ""); err != nil {
+	if err := recorder.Event(ctx, "info", "run", "run started", "", ""); err != nil {
 		return nil, err
 	}
 	return recorder, nil
@@ -100,7 +100,10 @@ func (r *Recorder) EventData(ctx context.Context, level, component, message, ent
 }
 
 func (r *Recorder) Finish(ctx context.Context, status domain.RunStatus, summary string) error {
-	if err := r.log("info", "run", "run finished: "+string(status), "", "", ""); err != nil {
+	if err := r.EventData(ctx, "info", "run", "run finished: "+string(status), "", "", map[string]any{
+		"status":  status,
+		"summary": summary,
+	}); err != nil {
 		return err
 	}
 	if err := r.repo.FinishRun(ctx, r.run.ID, status, summary); err != nil {

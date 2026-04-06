@@ -140,7 +140,9 @@ const (
 	liveSyncCursorVersion    = 1
 	liveSyncCursorLookback   = 25
 	liveSyncCursorRecentKeep = 64
-	liveFetchWorkerLimit     = 4
+	liveFetchWorkerLimitCold = 1
+	liveFetchWorkerLimitWarm = 2
+	liveFetchProgressEvery   = 25
 	patreonRetryAttempts     = 4
 	patreonRetryBaseDelay    = 500 * time.Millisecond
 	patreonRetryMaxDelay     = 4 * time.Second
@@ -152,7 +154,36 @@ type liveSyncCursor struct {
 	RecentReleaseIDs []string `json:"recent_release_ids"`
 }
 
+func reportPatreonProgress(ctx context.Context, level, message, entityKind, entityID string, payload any) {
+	provider.ReportProgress(ctx, provider.ProgressEvent{
+		Level:      level,
+		Component:  "provider",
+		Message:    message,
+		EntityKind: entityKind,
+		EntityID:   entityID,
+		Payload:    payload,
+	})
+}
+
+func reportSourceProgress(ctx context.Context, sourceID, level, message string, payload any) {
+	reportPatreonProgress(ctx, level, message, "source", sourceID, payload)
+}
+
+func reportRequestProgress(ctx context.Context, requestURL, level, message string, payload any) {
+	reportPatreonProgress(ctx, level, message, "request", requestURL, payload)
+}
+
+func elapsedMillis(start time.Time) int64 {
+	return time.Since(start).Milliseconds()
+}
+
 func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (provider.ListResult, error) {
+	startedAt := time.Now()
+	reportSourceProgress(ctx, source.ID, "info", "starting Patreon live release listing", map[string]any{
+		"source_id":      source.ID,
+		"source_kind":    string(detectSourceKind(source.URL)),
+		"has_sync_cursor": storedSource != nil && strings.TrimSpace(storedSource.SyncCursor) != "",
+	})
 	session, authState, err := c.ensureLiveSession(ctx, auth, source)
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
@@ -171,10 +202,18 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
 	}
-	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs)
+	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs, liveFetchWorkerLimitForStoredSource(storedSource))
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
 	}
+	reportSourceProgress(ctx, source.ID, "info", "Patreon live release listing complete", map[string]any{
+		"source_id":         source.ID,
+		"documents":         len(docs),
+		"duration_ms":       elapsedMillis(startedAt),
+		"sync_cursor_kept":  min(len(docs), liveSyncCursorRecentKeep),
+		"auth_state":        domain.AuthStateAuthenticated,
+		"source_kind":       string(detectSourceKind(source.URL)),
+	})
 	return provider.ListResult{
 		Documents:  docs,
 		AuthState:  domain.AuthStateAuthenticated,
@@ -183,8 +222,15 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 }
 
 func (c *Client) ensureLiveSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (*liveSession, domain.AuthState, error) {
+	resolveStartedAt := time.Now()
 	session, authState, err := c.resolveLiveSession(ctx, auth, source)
 	if err == nil {
+		reportSourceProgress(ctx, source.ID, "info", "resolved Patreon session", map[string]any{
+			"source_id":   source.ID,
+			"auth_state":  authState,
+			"duration_ms": elapsedMillis(resolveStartedAt),
+			"reused":      true,
+		})
 		return session, authState, nil
 	}
 	if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
@@ -199,14 +245,32 @@ func (c *Client) ensureLiveSession(ctx context.Context, auth config.AuthProfile,
 	if c.bootstrap == nil {
 		return nil, domain.AuthStateReauthRequired, errors.New("no Patreon bootstrapper configured")
 	}
+	reportSourceProgress(ctx, source.ID, "warn", "Patreon session bootstrap required", map[string]any{
+		"source_id":   source.ID,
+		"auth_state":  authState,
+		"duration_ms": elapsedMillis(resolveStartedAt),
+		"error":       err.Error(),
+	})
+	bootstrapStartedAt := time.Now()
 	authState, bootErr := c.bootstrap(ctx, auth, source, sessionProfileDir(auth.SessionPath))
 	if bootErr != nil {
 		return nil, authState, bootErr
 	}
+	reportSourceProgress(ctx, source.ID, "info", "bootstrapped Patreon session", map[string]any{
+		"source_id":   source.ID,
+		"auth_state":  authState,
+		"duration_ms": elapsedMillis(bootstrapStartedAt),
+	})
 	session, authState, err = c.resolveLiveSession(ctx, auth, source)
 	if err != nil {
 		return nil, authState, err
 	}
+	reportSourceProgress(ctx, source.ID, "info", "resolved Patreon session", map[string]any{
+		"source_id":   source.ID,
+		"auth_state":  authState,
+		"duration_ms": elapsedMillis(resolveStartedAt),
+		"reused":      false,
+	})
 	return session, authState, nil
 }
 
@@ -288,11 +352,14 @@ func (c *Client) listPostIDs(ctx context.Context, session *liveSession, source c
 }
 
 func (c *Client) listPostIDsWithLimit(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor, limit int) ([]string, domain.AuthState, error) {
+	startedAt := time.Now()
 	nextURL := c.postsIndexAPIURL(session.campaign.ID, session.currentUserID)
 	seen := map[string]struct{}{}
 	ids := make([]string, 0, 32)
 	known := map[string]struct{}{}
 	lookback := 0
+	pageCount := 0
+	stopReason := "exhausted"
 	if cursor != nil {
 		lookback = cursor.Lookback
 		for _, id := range cursor.RecentReleaseIDs {
@@ -302,6 +369,7 @@ func (c *Client) listPostIDsWithLimit(ctx context.Context, session *liveSession,
 		}
 	}
 	for nextURL != "" {
+		pageCount++
 		body, authState, err := c.get(ctx, session.client, nextURL, source.URL, &session.bundle, "application/json")
 		if err != nil {
 			return nil, authState, err
@@ -320,20 +388,73 @@ func (c *Client) listPostIDsWithLimit(ctx context.Context, session *liveSession,
 			seen[item.ID] = struct{}{}
 			ids = append(ids, item.ID)
 			if limit > 0 && len(ids) >= limit {
+				stopReason = "limit_reached"
+				reportSourceProgress(ctx, source.ID, "info", "Patreon feed page fetched", map[string]any{
+					"source_id":      source.ID,
+					"page":           pageCount,
+					"discovered_ids": len(ids),
+					"next_page":      strings.TrimSpace(page.Links.Next) != "",
+					"duration_ms":    elapsedMillis(startedAt),
+				})
+				reportSourceProgress(ctx, source.ID, "info", "Patreon feed pagination complete", map[string]any{
+					"source_id":      source.ID,
+					"pages":          pageCount,
+					"discovered_ids": len(ids),
+					"stop_reason":    stopReason,
+					"duration_ms":    elapsedMillis(startedAt),
+				})
 				return ids, domain.AuthStateAuthenticated, nil
 			}
 			if lookback > 0 && len(ids) >= lookback {
 				if _, ok := known[item.ID]; ok {
+					stopReason = "known_recent_boundary"
+					reportSourceProgress(ctx, source.ID, "info", "Patreon feed page fetched", map[string]any{
+						"source_id":      source.ID,
+						"page":           pageCount,
+						"discovered_ids": len(ids),
+						"next_page":      strings.TrimSpace(page.Links.Next) != "",
+						"duration_ms":    elapsedMillis(startedAt),
+					})
+					reportSourceProgress(ctx, source.ID, "info", "Patreon feed scan stopped at known recent post", map[string]any{
+						"source_id":           source.ID,
+						"provider_release_id": item.ID,
+						"lookback":            lookback,
+						"pages":               pageCount,
+						"discovered_ids":      len(ids),
+						"duration_ms":         elapsedMillis(startedAt),
+					})
+					reportSourceProgress(ctx, source.ID, "info", "Patreon feed pagination complete", map[string]any{
+						"source_id":      source.ID,
+						"pages":          pageCount,
+						"discovered_ids": len(ids),
+						"stop_reason":    stopReason,
+						"duration_ms":    elapsedMillis(startedAt),
+					})
 					return ids, domain.AuthStateAuthenticated, nil
 				}
 			}
 		}
+		reportSourceProgress(ctx, source.ID, "info", "Patreon feed page fetched", map[string]any{
+			"source_id":      source.ID,
+			"page":           pageCount,
+			"discovered_ids": len(ids),
+			"next_page":      strings.TrimSpace(page.Links.Next) != "",
+			"duration_ms":    elapsedMillis(startedAt),
+		})
 		nextURL = resolveRelativeURL(nextURL, page.Links.Next)
 	}
+	reportSourceProgress(ctx, source.ID, "info", "Patreon feed pagination complete", map[string]any{
+		"source_id":      source.ID,
+		"pages":          pageCount,
+		"discovered_ids": len(ids),
+		"stop_reason":    stopReason,
+		"duration_ms":    elapsedMillis(startedAt),
+	})
 	return ids, domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) listCollectionPostIDs(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor) ([]string, domain.AuthState, error) {
+	startedAt := time.Now()
 	body, authState, err := c.get(ctx, session.client, source.URL, source.URL, &session.bundle, "text/html")
 	if err != nil {
 		return nil, authState, err
@@ -342,7 +463,14 @@ func (c *Client) listCollectionPostIDs(ctx context.Context, session *liveSession
 	if len(ids) == 0 {
 		return nil, domain.AuthStateReauthRequired, fmt.Errorf("could not discover Patreon collection posts for %q", source.ID)
 	}
-	return trimPostIDsWithCursor(ids, cursor), domain.AuthStateAuthenticated, nil
+	trimmed := trimPostIDsWithCursor(ids, cursor)
+	reportSourceProgress(ctx, source.ID, "info", "Patreon collection scan complete", map[string]any{
+		"source_id":      source.ID,
+		"discovered_ids": len(trimmed),
+		"source_kind":    string(sourceKindCollection),
+		"duration_ms":    elapsedMillis(startedAt),
+	})
+	return trimmed, domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) fetchPostDetail(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) ([]byte, domain.AuthState, error) {
@@ -357,11 +485,17 @@ type postDocumentResult struct {
 	err       error
 }
 
-func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, source config.SourceConfig, postIDs []string) ([]provider.ReleaseDocument, domain.AuthState, error) {
+func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, source config.SourceConfig, postIDs []string, workerLimit int) ([]provider.ReleaseDocument, domain.AuthState, error) {
 	if len(postIDs) == 0 {
 		return nil, domain.AuthStateAuthenticated, nil
 	}
-	workerCount := min(len(postIDs), liveFetchWorkerLimit)
+	startedAt := time.Now()
+	workerCount := min(len(postIDs), max(1, workerLimit))
+	reportSourceProgress(ctx, source.ID, "info", "starting Patreon post detail fetch", map[string]any{
+		"source_id":   source.ID,
+		"total_posts": len(postIDs),
+		"concurrency": workerCount,
+	})
 	jobs := make(chan int)
 	results := make(chan postDocumentResult, len(postIDs))
 	var wg sync.WaitGroup
@@ -391,8 +525,23 @@ func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, s
 	docs := make([]provider.ReleaseDocument, len(postIDs))
 	authState := domain.AuthStateAuthenticated
 	var firstErr error
+	completed := 0
+	failed := 0
+	lastProgress := time.Now()
 	for result := range results {
+		completed++
 		if result.err != nil {
+			failed++
+			reportSourceProgress(ctx, source.ID, "error", "Patreon post detail fetch failed", map[string]any{
+				"source_id":           source.ID,
+				"provider_release_id": postIDs[result.index],
+				"completed":           completed,
+				"total_posts":         len(postIDs),
+				"failed":              failed,
+				"auth_state":          result.authState,
+				"error":               result.err.Error(),
+				"duration_ms":         elapsedMillis(startedAt),
+			})
 			if firstErr == nil {
 				firstErr = result.err
 				authState = result.authState
@@ -400,12 +549,36 @@ func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, s
 			continue
 		}
 		docs[result.index] = result.document
+		if completed == len(postIDs) || completed%liveFetchProgressEvery == 0 || time.Since(lastProgress) >= 10*time.Second {
+			lastProgress = time.Now()
+			reportSourceProgress(ctx, source.ID, "info", "Patreon post details progress", map[string]any{
+				"source_id":   source.ID,
+				"completed":   completed,
+				"total_posts": len(postIDs),
+				"failed":      failed,
+				"duration_ms": elapsedMillis(startedAt),
+			})
+		}
 	}
 	if firstErr != nil {
 		return nil, authState, firstErr
 	}
 	provider.SortReleaseDocuments(docs)
+	reportSourceProgress(ctx, source.ID, "info", "Patreon post detail fetch complete", map[string]any{
+		"source_id":   source.ID,
+		"completed":   completed,
+		"total_posts": len(postIDs),
+		"failed":      failed,
+		"duration_ms": elapsedMillis(startedAt),
+	})
 	return docs, domain.AuthStateAuthenticated, nil
+}
+
+func liveFetchWorkerLimitForStoredSource(storedSource *domain.Source) int {
+	if storedSource != nil && strings.TrimSpace(storedSource.SyncCursor) != "" {
+		return liveFetchWorkerLimitWarm
+	}
+	return liveFetchWorkerLimitCold
 }
 
 func (c *Client) fetchPostDocument(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) (provider.ReleaseDocument, domain.AuthState, error) {
@@ -477,8 +650,15 @@ func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSessio
 	targetPath := filepath.Join(targetDir, sanitizeAttachmentFileName(attachment.FileName))
 	if _, err := os.Stat(targetPath); err == nil {
 		attachment.LocalPath = targetPath
+		reportPatreonProgress(ctx, "info", "Patreon attachment cache hit", "release", release.ProviderReleaseID, map[string]any{
+			"source_id":           source.ID,
+			"provider_release_id": release.ProviderReleaseID,
+			"file_name":           attachment.FileName,
+			"cached_path":         targetPath,
+		})
 		return domain.AuthStateAuthenticated, nil
 	}
+	startedAt := time.Now()
 	body, authState, err := c.get(ctx, session.client, attachment.DownloadURL, source.URL, &session.bundle, "*/*")
 	if err != nil {
 		return authState, fmt.Errorf("download Patreon attachment %q (%s): %s: %w", attachment.FileName, attachment.DownloadURL, authState, err)
@@ -487,6 +667,13 @@ func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSessio
 		return domain.AuthStateReauthRequired, err
 	}
 	attachment.LocalPath = targetPath
+	reportPatreonProgress(ctx, "info", "downloaded Patreon attachment", "release", release.ProviderReleaseID, map[string]any{
+		"source_id":           source.ID,
+		"provider_release_id": release.ProviderReleaseID,
+		"file_name":           attachment.FileName,
+		"bytes":               len(body),
+		"duration_ms":         elapsedMillis(startedAt),
+	})
 	return domain.AuthStateAuthenticated, nil
 }
 
@@ -530,12 +717,32 @@ func (c *Client) getOnce(ctx context.Context, client *http.Client, requestURL, r
 		return nil, domain.AuthStateReauthRequired, -1, err
 	}
 	if authState, authErr := classifyHTTPAuthFailure(resp, body); authErr != nil {
+		reportRequestProgress(ctx, requestURL, "error", "Patreon request failed authentication checks", map[string]any{
+			"request_url": requestURL,
+			"status":      resp.StatusCode,
+			"auth_state":  authState,
+			"attempt":     attempt,
+			"error":       authErr.Error(),
+		})
 		return nil, authState, -1, authErr
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, domain.AuthStateAuthenticated, retryDelay(resp.Header.Get("Retry-After"), attempt), fmt.Errorf("Patreon rate limited request with status %d for %s", resp.StatusCode, requestURL)
+		delay := retryDelay(resp.Header.Get("Retry-After"), attempt)
+		reportRequestProgress(ctx, requestURL, "warn", "Patreon rate limited request; backing off", map[string]any{
+			"request_url": requestURL,
+			"status":      resp.StatusCode,
+			"attempt":     attempt,
+			"delay_ms":    delay.Milliseconds(),
+			"retry_after": strings.TrimSpace(resp.Header.Get("Retry-After")),
+		})
+		return nil, domain.AuthStateAuthenticated, delay, fmt.Errorf("Patreon rate limited request with status %d for %s", resp.StatusCode, requestURL)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		reportRequestProgress(ctx, requestURL, "error", "unexpected Patreon response status", map[string]any{
+			"request_url": requestURL,
+			"status":      resp.StatusCode,
+			"attempt":     attempt,
+		})
 		return nil, domain.AuthStateReauthRequired, -1, fmt.Errorf("unexpected Patreon response status %d for %s", resp.StatusCode, requestURL)
 	}
 	return body, domain.AuthStateAuthenticated, -1, nil

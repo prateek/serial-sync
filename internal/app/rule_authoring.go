@@ -106,6 +106,7 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 	if err != nil {
 		return SourceDumpResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := SourceDumpResult{RunID: recorder.RunID()}
 	defer func() {
 		if err != nil {
@@ -287,6 +288,7 @@ func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions,
 	if err != nil {
 		return RulesPreviewResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := RulesPreviewResult{RunID: recorder.RunID()}
 	defer func() {
 		if err != nil {

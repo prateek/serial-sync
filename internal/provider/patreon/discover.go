@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
@@ -21,6 +22,7 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 		Provider:  c.Name(),
 		AuthState: domain.AuthStateReauthRequired,
 	}
+	startedAt := time.Now()
 	if normalizeAuthMode(auth.Mode) == "fixture" {
 		return result, fmt.Errorf("Patreon source discovery requires a live username_password auth profile")
 	}
@@ -35,6 +37,18 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 	if err != nil {
 		return result, err
 	}
+	provider.ReportProgress(ctx, provider.ProgressEvent{
+		Level:      "info",
+		Component:  "discover",
+		Message:    "Patreon discovery session ready",
+		EntityKind: "auth_profile",
+		EntityID:   auth.ID,
+		Payload: map[string]any{
+			"auth_profile_id": auth.ID,
+			"auth_state":      authState,
+			"duration_ms":     elapsedMillis(startedAt),
+		},
+	})
 	existingByHandle := buildExistingSourceIndex(existingSources)
 	membershipKinds := membershipKindsByCampaign(user)
 	suggestions := make([]provider.SourceSuggestion, 0, len(user.Included))
@@ -72,6 +86,20 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 		if !matchesCreatorFilters(suggestion, options.CreatorFilters) {
 			continue
 		}
+		provider.ReportProgress(ctx, provider.ProgressEvent{
+			Level:      "info",
+			Component:  "discover",
+			Message:    "discovered Patreon creator",
+			EntityKind: "source",
+			EntityID:   suggestion.Source.ID,
+			Payload: map[string]any{
+				"source_id":        suggestion.Source.ID,
+				"creator_name":     suggestion.CreatorName,
+				"creator_handle":   suggestion.CreatorHandle,
+				"membership_kind":  suggestion.MembershipKind,
+				"already_configured": suggestion.AlreadyConfigured,
+			},
+		})
 		sessionWithCampaign := *session
 		sessionWithCampaign.campaign = campaignInfo{ID: item.ID, Name: suggestion.CreatorName}
 		if !options.MetadataOnly {
@@ -79,6 +107,7 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 			if options.FullHistory {
 				documentLimit = 0
 			}
+			sampleStartedAt := time.Now()
 			sampledDocs, sampleErr := c.sampleDiscoveryDocuments(ctx, &sessionWithCampaign, suggestion.Source, documentLimit)
 			if sampleErr != nil {
 				return result, sampleErr
@@ -93,6 +122,20 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 			suggestion.SampleCollections = sampleValues(sampledDocs, sampleSummaryLimit, func(doc provider.ReleaseDocument) []string { return doc.Normalized.Collections })
 			suggestion.SuggestedRules = suggestRulesForSource(suggestion.Source.ID, sampledDocs)
 			suggestion.Preview = rulepreview.Build(suggestion.Source.ID, normalizedReleases(sampledDocs), suggestion.SuggestedRules, true)
+			provider.ReportProgress(ctx, provider.ProgressEvent{
+				Level:      "info",
+				Component:  "discover",
+				Message:    "sampled Patreon creator posts",
+				EntityKind: "source",
+				EntityID:   suggestion.Source.ID,
+				Payload: map[string]any{
+					"source_id":      suggestion.Source.ID,
+					"sampled_posts":  len(sampledDocs),
+					"duration_ms":    elapsedMillis(sampleStartedAt),
+					"materializable": suggestion.Preview.Materializable,
+					"fallback_posts": suggestion.Preview.FallbackPosts,
+				},
+			})
 		}
 		suggestions = append(suggestions, suggestion)
 	}
@@ -101,6 +144,18 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 	})
 	result.Suggestions = suggestions
 	result.AuthState = domain.AuthStateAuthenticated
+	provider.ReportProgress(ctx, provider.ProgressEvent{
+		Level:      "info",
+		Component:  "discover",
+		Message:    "Patreon discovery complete",
+		EntityKind: "auth_profile",
+		EntityID:   auth.ID,
+		Payload: map[string]any{
+			"auth_profile_id": auth.ID,
+			"suggestions":     len(suggestions),
+			"duration_ms":     elapsedMillis(startedAt),
+		},
+	})
 	return result, nil
 }
 
@@ -199,7 +254,7 @@ func (c *Client) sampleDiscoveryDocuments(ctx context.Context, session *liveSess
 	if err != nil {
 		return nil, fmt.Errorf("discover Patreon posts for %q (%s): %w", source.ID, authState, err)
 	}
-	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs)
+	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs, liveFetchWorkerLimitCold)
 	if err != nil {
 		return nil, fmt.Errorf("discover Patreon posts for %q (%s): %w", source.ID, authState, err)
 	}

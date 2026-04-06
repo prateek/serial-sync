@@ -119,9 +119,13 @@ type RunForensics struct {
 	LogText             string               `json:"log_text,omitempty"`
 	LogJSON             string               `json:"log_json,omitempty"`
 	InfoEvents          int                  `json:"info_events"`
+	WarningEvents       int                  `json:"warning_events"`
 	ErrorEvents         int                  `json:"error_events"`
+	RetryEvents         int                  `json:"retry_events"`
+	EventPayloadCount   int                  `json:"event_payload_count"`
 	ComponentCounts     map[string]int       `json:"component_counts"`
 	EntityCounts        map[string]int       `json:"entity_counts"`
+	PhaseTimingsMS      map[string]int64     `json:"phase_timings_ms,omitempty"`
 	ClassifiedMatched   int                  `json:"classified_matched"`
 	ClassifiedUnmatched int                  `json:"classified_unmatched"`
 	ReleaseSynced       int                  `json:"release_synced"`
@@ -130,6 +134,7 @@ type RunForensics struct {
 	PublishSkipped      int                  `json:"publish_skipped"`
 	PublishSucceeded    int                  `json:"publish_succeeded"`
 	PublishFailed       int                  `json:"publish_failed"`
+	ProgressHighlights  []string             `json:"progress_highlights,omitempty"`
 	Highlights          []string             `json:"highlights"`
 	RecentErrors        []domain.EventRecord `json:"recent_errors,omitempty"`
 }
@@ -155,6 +160,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 	if err != nil {
 		return domain.SyncResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := domain.SyncResult{RunID: recorder.RunID()}
 	defer func() {
 		if err != nil {
@@ -271,6 +277,7 @@ func (s *Service) BootstrapAuth(ctx context.Context, sourceFilter, authFilter st
 	if err != nil {
 		return AuthBootstrapResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := AuthBootstrapResult{RunID: recorder.RunID()}
 	var failures []string
 	sources := selectSources(s.Config.Sources, sourceFilter)
@@ -365,6 +372,7 @@ func (s *Service) ImportAuthSession(ctx context.Context, sourceFilter, authFilte
 	if err != nil {
 		return AuthImportResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := AuthImportResult{RunID: recorder.RunID()}
 	defer func() {
 		if err != nil {
@@ -487,6 +495,7 @@ func (s *Service) DiscoverSources(ctx context.Context, authFilter string, option
 	if err != nil {
 		return SourceDiscoverResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := SourceDiscoverResult{RunID: recorder.RunID(), Options: options}
 	defer func() {
 		if err != nil {
@@ -541,6 +550,7 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 	if err != nil {
 		return domain.PublishResult{}, err
 	}
+	ctx = withRecorderProgress(ctx, recorder)
 	result := domain.PublishResult{RunID: recorder.RunID(), DryRun: dryRun}
 	defer func() {
 		if err != nil {
@@ -970,9 +980,12 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 		LogJSON:         filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
 		ComponentCounts: map[string]int{},
 		EntityCounts:    map[string]int{},
+		PhaseTimingsMS:  map[string]int64{},
 	}
 	for _, event := range bundle.Events {
 		switch strings.ToLower(strings.TrimSpace(event.Level)) {
+		case "warn", "warning":
+			result.WarningEvents++
 		case "error":
 			result.ErrorEvents++
 			result.RecentErrors = append(result.RecentErrors, event)
@@ -984,6 +997,9 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 		}
 		if entityKind := strings.TrimSpace(event.EntityKind); entityKind != "" {
 			result.EntityCounts[entityKind]++
+		}
+		if strings.TrimSpace(event.PayloadRef) != "" {
+			result.EventPayloadCount++
 		}
 		switch event.Component {
 		case "classify":
@@ -1011,6 +1027,22 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 				result.PublishSucceeded++
 			case strings.ToLower(strings.TrimSpace(event.Level)) == "error":
 				result.PublishFailed++
+			}
+		}
+		if strings.Contains(strings.ToLower(event.Message), "rate limited") {
+			result.RetryEvents++
+		}
+		if payload, err := loadEventPayload(event.PayloadRef); err == nil {
+			if durationMS, ok := payloadInt64(payload, "duration_ms"); ok {
+				if phaseName := phaseNameForEvent(event); phaseName != "" {
+					result.PhaseTimingsMS[phaseName] = durationMS
+				}
+			}
+			if highlight := progressHighlightForEvent(event, payload); highlight != "" {
+				result.ProgressHighlights = append(result.ProgressHighlights, highlight)
+				if len(result.ProgressHighlights) > 8 {
+					result.ProgressHighlights = result.ProgressHighlights[len(result.ProgressHighlights)-8:]
+				}
 			}
 		}
 		if strings.ToLower(strings.TrimSpace(event.Level)) == "error" && len(result.RecentErrors) > 5 {
@@ -1041,6 +1073,10 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 	if err != nil {
 		return "", err
 	}
+	forensics, err := s.ExplainRun(ctx, runID)
+	if err != nil {
+		return "", err
+	}
 	dir := filepath.Join(s.Config.Runtime.SupportRoot, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -1059,6 +1095,13 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 	if err := os.WriteFile(filepath.Join(dir, "config.redacted.json"), configJSON, 0o644); err != nil {
 		return "", err
 	}
+	forensicsJSON, err := json.MarshalIndent(forensics, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "forensics.json"), forensicsJSON, 0o644); err != nil {
+		return "", err
+	}
 	logFiles := make([]string, 0, 2)
 	for _, logPath := range []string{
 		filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
@@ -1071,6 +1114,24 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 		}
 	}
 	releaseIDs, artifactIDs := collectRunEntityIDs(bundle)
+	sourceIDs := collectRunSourceIDs(bundle)
+	for _, sourceID := range sourceIDs {
+		source, err := s.Repo.GetSource(ctx, sourceID)
+		if err != nil || source == nil {
+			continue
+		}
+		sourceJSON, err := json.MarshalIndent(source, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		sourcePath := filepath.Join(dir, "sources", sourceID+".json")
+		if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(sourcePath, sourceJSON, 0o644); err != nil {
+			return "", err
+		}
+	}
 	for _, releaseID := range releaseIDs {
 		releaseBundle, err := s.Repo.GetReleaseBundle(ctx, releaseID)
 		if err != nil || releaseBundle == nil {
@@ -1122,10 +1183,12 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 		"run_id":              runID,
 		"generated_at":        time.Now().UTC(),
 		"config_path":         redactPathForSupport(s.ConfigPath),
+		"source_ids":          sourceIDs,
 		"log_files":           logFiles,
 		"release_ids":         releaseIDs,
 		"artifact_ids":        artifactIDs,
 		"event_payload_files": eventPayloads,
+		"forensics_file":      filepath.Join(dir, "forensics.json"),
 		"redactions": []string{
 			"auth env var names are redacted",
 			"session paths and runtime storage paths are redacted",
@@ -1286,6 +1349,133 @@ func collectRunEntityIDs(bundle *domain.RunBundle) ([]string, []string) {
 	sort.Strings(releaseIDs)
 	sort.Strings(artifactIDs)
 	return releaseIDs, artifactIDs
+}
+
+func collectRunSourceIDs(bundle *domain.RunBundle) []string {
+	sourceSet := map[string]struct{}{}
+	for _, event := range bundle.Events {
+		if event.EntityKind != "source" {
+			continue
+		}
+		if strings.TrimSpace(event.EntityID) == "" {
+			continue
+		}
+		sourceSet[event.EntityID] = struct{}{}
+	}
+	sourceIDs := make([]string, 0, len(sourceSet))
+	for id := range sourceSet {
+		sourceIDs = append(sourceIDs, id)
+	}
+	sort.Strings(sourceIDs)
+	return sourceIDs
+}
+
+func loadEventPayload(path string) (map[string]any, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func payloadInt64(payload map[string]any, key string) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	value, ok := payload[key]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	}
+	return 0, false
+}
+
+func phaseNameForEvent(event domain.EventRecord) string {
+	switch strings.TrimSpace(event.Message) {
+	case "resolved Patreon session":
+		return "provider_session_resolution"
+	case "bootstrapped Patreon session":
+		return "provider_session_bootstrap"
+	case "Patreon collection scan complete":
+		return "provider_collection_scan"
+	case "Patreon feed pagination complete":
+		return "provider_feed_pagination"
+	case "Patreon post detail fetch complete":
+		return "provider_post_detail_fetch"
+	case "Patreon live release listing complete":
+		return "provider_list_releases"
+	case "downloaded Patreon attachment":
+		return "provider_attachment_download"
+	}
+	return ""
+}
+
+func progressHighlightForEvent(event domain.EventRecord, payload map[string]any) string {
+	switch strings.TrimSpace(event.Message) {
+	case "Patreon feed pagination complete":
+		return fmt.Sprintf(
+			"feed pagination discovered=%d pages=%d stop=%s duration=%dms",
+			intOrZero(payload["discovered_ids"]),
+			intOrZero(payload["pages"]),
+			stringOrEmpty(payload["stop_reason"]),
+			intOrZero(payload["duration_ms"]),
+		)
+	case "Patreon post detail fetch complete":
+		return fmt.Sprintf(
+			"post detail fetch completed=%d total=%d failed=%d duration=%dms",
+			intOrZero(payload["completed"]),
+			intOrZero(payload["total_posts"]),
+			intOrZero(payload["failed"]),
+			intOrZero(payload["duration_ms"]),
+		)
+	case "Patreon rate limited request; backing off":
+		return fmt.Sprintf(
+			"rate limited attempt=%d delay=%dms",
+			intOrZero(payload["attempt"]),
+			intOrZero(payload["delay_ms"]),
+		)
+	case "Patreon live release listing complete":
+		return fmt.Sprintf(
+			"live listing documents=%d duration=%dms",
+			intOrZero(payload["documents"]),
+			intOrZero(payload["duration_ms"]),
+		)
+	}
+	return ""
+}
+
+func intOrZero(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	}
+	return 0
+}
+
+func stringOrEmpty(value any) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
 }
 
 func copySupportFile(src, dstDir string) (string, error) {

@@ -15,6 +15,44 @@ type ReleaseDocument struct {
 	RawJSON    json.RawMessage
 }
 
+type ProgressEvent struct {
+	Level      string
+	Component  string
+	Message    string
+	EntityKind string
+	EntityID   string
+	Payload    any
+}
+
+type ProgressReporter interface {
+	ReportProgress(context.Context, ProgressEvent)
+}
+
+type ProgressReporterFunc func(context.Context, ProgressEvent)
+
+func (fn ProgressReporterFunc) ReportProgress(ctx context.Context, event ProgressEvent) {
+	if fn != nil {
+		fn(ctx, event)
+	}
+}
+
+type progressReporterKey struct{}
+
+func WithProgress(ctx context.Context, reporter ProgressReporter) context.Context {
+	if reporter == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, progressReporterKey{}, reporter)
+}
+
+func ReportProgress(ctx context.Context, event ProgressEvent) {
+	reporter, _ := ctx.Value(progressReporterKey{}).(ProgressReporter)
+	if reporter == nil {
+		return
+	}
+	reporter.ReportProgress(ctx, event)
+}
+
 type ListResult struct {
 	Documents  []ReleaseDocument
 	AuthState  domain.AuthState
