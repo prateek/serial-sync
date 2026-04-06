@@ -56,29 +56,27 @@ Why I would not keep `4` as the default:
 
 ## Recommendation
 
-Use a much lower default and treat concurrency as a steady-state optimization, not a first-backfill optimization.
+Model the real constraint directly: Patreon only tolerates some amount of in-flight request pressure before it starts returning `429`.
 
-Recommended default:
+So the implementation should:
 
-- full-history / no stored cursor: `1`
-- incremental / stored cursor present: `2`
+- keep concurrency enabled
+- use a shared per-session request budget rather than mode-specific worker counts
+- start from a small initial budget
+- reduce that budget immediately on `429`
+- recover it slowly after a sustained success streak
 
-If you want one fixed default instead of mode-specific behavior:
+A practical policy is:
 
-- pick `1`
+- initial request budget: `2`
+- minimum budget: `1`
+- maximum budget: `4`
+- on `429`: cut the budget down
+- on long success streak: raise it by one step
 
-That is the safer product default because:
+That gives the right behavior for both cases:
 
-- first sync can be slow
-- incremental runs are where speed matters
-- incremental runs should become fast anyway once the live cursor is working correctly
+- cold/full-history runs naturally converge toward the lower concurrency Patreon can actually sustain
+- delta runs can still climb to a faster level when Patreon is tolerating it
 
-## Follow-up Improvement
-
-The best version is adaptive rather than fixed:
-
-1. start at `2` only when a stored cursor exists
-2. drop to `1` immediately after the first `429`
-3. keep `1` for the rest of that run
-
-That keeps steady-state runs reasonably quick without turning first backfills into retry storms.
+So the recommendation is not “warm vs cold concurrency.” The recommendation is “adaptive request-budget concurrency that converges on Patreon’s tolerated in-flight load.”

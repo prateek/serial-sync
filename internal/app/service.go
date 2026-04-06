@@ -1449,6 +1449,14 @@ func progressHighlightForEvent(event domain.EventRecord, payload map[string]any)
 			intOrZero(payload["attempt"]),
 			intOrZero(payload["delay_ms"]),
 		)
+	case "Patreon request budget reduced", "Patreon request budget increased":
+		budget, _ := payload["budget"].(map[string]any)
+		return fmt.Sprintf(
+			"%s limit=%d inflight=%d",
+			strings.ToLower(strings.TrimSpace(event.Message)),
+			intOrZero(budget["limit"]),
+			intOrZero(budget["in_flight"]),
+		)
 	case "Patreon live release listing complete":
 		return fmt.Sprintf(
 			"live listing documents=%d duration=%dms",

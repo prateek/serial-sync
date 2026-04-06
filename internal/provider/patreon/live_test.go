@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
@@ -362,6 +363,41 @@ func TestListReleasesUsesStoredCursorLookback(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(detailRequests); got != 5 {
 		t.Fatalf("detail requests = %d, want 5", got)
+	}
+}
+
+func TestListReleasesAdaptsToRequestBudget(t *testing.T) {
+	t.Parallel()
+
+	postIDs := []string{"8", "7", "6", "5", "4", "3", "2", "1"}
+	server, rateLimits := newPatreonConcurrencyLimitedTestServer(t, postIDs, 1)
+	client := New()
+	client.apiBaseURL = server.URL
+
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+
+	result, err := client.ListReleases(context.Background(), config.AuthProfile{
+		ID:          "patreon-default",
+		Provider:    "patreon",
+		Mode:        "username_password",
+		SessionPath: sessionPath,
+	}, config.SourceConfig{
+		ID:          "example-creator",
+		Provider:    "patreon",
+		URL:         "https://www.patreon.com/c/ExampleCreator/posts",
+		AuthProfile: "patreon-default",
+		Enabled:     true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ListReleases() error = %v", err)
+	}
+	if got, want := len(result.Documents), len(postIDs); got != want {
+		t.Fatalf("len(docs) = %d, want %d", got, want)
+	}
+	if got := atomic.LoadInt32(rateLimits); got == 0 {
+		t.Fatal("expected adaptive budget test server to trigger at least one rate limit")
 	}
 }
 
@@ -866,6 +902,91 @@ func newPatreonPagedTestServer(t *testing.T, postIDs []string) (*httptest.Server
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return server, &detailRequests
+}
+
+func newPatreonConcurrencyLimitedTestServer(t *testing.T, postIDs []string, allowedConcurrent int32) (*httptest.Server, *int32) {
+	t.Helper()
+
+	var inFlight int32
+	var rateLimits int32
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.Header.Get("Cookie"), "session_id=patreon-test-session") {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("/api/current_user", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":{"id":"user-1"},"included":[{"id":"campaign-1","type":"campaign","attributes":{"name":"Example Creator","url":"https://www.patreon.com/ExampleCreator","vanity":"ExampleCreator"}}]}`)
+	}))
+	mux.HandleFunc("/api/posts", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		items := make([]string, 0, len(postIDs))
+		for _, id := range postIDs {
+			items = append(items, fmt.Sprintf(`{"id":"%s"}`, id))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data":[%s],"links":{"next":""}}`, strings.Join(items, ","))
+	}))
+	mux.HandleFunc("/api/posts/", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		postID := strings.TrimPrefix(r.URL.Path, "/api/posts/")
+		current := atomic.AddInt32(&inFlight, 1)
+		defer atomic.AddInt32(&inFlight, -1)
+		if current > allowedConcurrent {
+			atomic.AddInt32(&rateLimits, 1)
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+  "data": {
+    "id": %q,
+    "type": "post",
+    "attributes": {
+      "title": "Chapter %s",
+      "post_type": "text",
+      "current_user_can_view": true,
+      "url": "https://www.patreon.com/posts/chapter-%s-%s",
+      "content": "<p>Hello %s</p>",
+      "content_json_string": "",
+      "published_at": "2026-04-01T00:00:00Z",
+      "edited_at": "2026-04-01T00:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "campaign-1" } },
+      "user": { "data": { "id": "creator-user-1" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    {
+      "id": "campaign-1",
+      "type": "campaign",
+      "attributes": { "name": "Example Creator" },
+      "relationships": { "creator": { "data": { "id": "creator-user-1" } } }
+    },
+    {
+      "id": "creator-user-1",
+      "type": "user",
+      "attributes": { "full_name": "Example Creator", "vanity": "ExampleCreator" },
+      "relationships": {}
+    }
+  ]
+}`, postID, postID, postID, postID, postID)
+	}))
+
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server, &rateLimits
 }
 
 func newPatreonCollectionTestServer(t *testing.T) *httptest.Server {

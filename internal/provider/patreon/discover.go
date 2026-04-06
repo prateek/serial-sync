@@ -93,10 +93,10 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 			EntityKind: "source",
 			EntityID:   suggestion.Source.ID,
 			Payload: map[string]any{
-				"source_id":        suggestion.Source.ID,
-				"creator_name":     suggestion.CreatorName,
-				"creator_handle":   suggestion.CreatorHandle,
-				"membership_kind":  suggestion.MembershipKind,
+				"source_id":          suggestion.Source.ID,
+				"creator_name":       suggestion.CreatorName,
+				"creator_handle":     suggestion.CreatorHandle,
+				"membership_kind":    suggestion.MembershipKind,
 				"already_configured": suggestion.AlreadyConfigured,
 			},
 		})
@@ -211,18 +211,21 @@ func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthPro
 		if clientErr != nil {
 			return nil, nil, domain.AuthStateReauthRequired, clientErr
 		}
-			user, authState, userErr := c.fetchCurrentUser(ctx, client, dummySource, bundle)
-			if userErr == nil {
-				return &liveSession{
-					bundle:        *bundle,
-					client:        client,
-					currentUserID: user.Data.ID,
-				}, user, authState, nil
-			}
-			if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
-				return nil, nil, authState, userErr
-			}
+		session := &liveSession{
+			sourceID: dummySource.ID,
+			bundle:   *bundle,
+			client:   client,
+			budget:   newRequestBudget(),
 		}
+		user, authState, userErr := c.fetchCurrentUser(ctx, session, dummySource.URL)
+		if userErr == nil {
+			session.currentUserID = user.Data.ID
+			return session, user, authState, nil
+		}
+		if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
+			return nil, nil, authState, userErr
+		}
+	}
 	if c.bootstrap == nil {
 		return nil, nil, domain.AuthStateReauthRequired, fmt.Errorf("no Patreon bootstrapper configured")
 	}
@@ -238,15 +241,18 @@ func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthPro
 	if err != nil {
 		return nil, nil, domain.AuthStateReauthRequired, err
 	}
-	user, authState, err := c.fetchCurrentUser(ctx, client, dummySource, bundle)
+	session := &liveSession{
+		sourceID: dummySource.ID,
+		bundle:   *bundle,
+		client:   client,
+		budget:   newRequestBudget(),
+	}
+	user, authState, err := c.fetchCurrentUser(ctx, session, dummySource.URL)
 	if err != nil {
 		return nil, nil, authState, err
 	}
-	return &liveSession{
-		bundle:        *bundle,
-		client:        client,
-		currentUserID: user.Data.ID,
-	}, user, domain.AuthStateAuthenticated, nil
+	session.currentUserID = user.Data.ID
+	return session, user, domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) sampleDiscoveryDocuments(ctx context.Context, session *liveSession, source config.SourceConfig, sampleLimit int) ([]provider.ReleaseDocument, error) {
@@ -254,7 +260,7 @@ func (c *Client) sampleDiscoveryDocuments(ctx context.Context, session *liveSess
 	if err != nil {
 		return nil, fmt.Errorf("discover Patreon posts for %q (%s): %w", source.ID, authState, err)
 	}
-	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs, liveFetchWorkerLimitCold)
+	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs)
 	if err != nil {
 		return nil, fmt.Errorf("discover Patreon posts for %q (%s): %w", source.ID, authState, err)
 	}

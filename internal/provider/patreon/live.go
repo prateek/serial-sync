@@ -124,8 +124,10 @@ type campaignInfo struct {
 }
 
 type liveSession struct {
+	sourceID      string
 	bundle        sessionBundle
 	client        *http.Client
+	budget        *requestBudget
 	currentUserID string
 	campaign      campaignInfo
 }
@@ -140,8 +142,6 @@ const (
 	liveSyncCursorVersion    = 1
 	liveSyncCursorLookback   = 25
 	liveSyncCursorRecentKeep = 64
-	liveFetchWorkerLimitCold = 1
-	liveFetchWorkerLimitWarm = 2
 	liveFetchProgressEvery   = 25
 	patreonRetryAttempts     = 4
 	patreonRetryBaseDelay    = 500 * time.Millisecond
@@ -180,8 +180,8 @@ func elapsedMillis(start time.Time) int64 {
 func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, storedSource *domain.Source) (provider.ListResult, error) {
 	startedAt := time.Now()
 	reportSourceProgress(ctx, source.ID, "info", "starting Patreon live release listing", map[string]any{
-		"source_id":      source.ID,
-		"source_kind":    string(detectSourceKind(source.URL)),
+		"source_id":       source.ID,
+		"source_kind":     string(detectSourceKind(source.URL)),
 		"has_sync_cursor": storedSource != nil && strings.TrimSpace(storedSource.SyncCursor) != "",
 	})
 	session, authState, err := c.ensureLiveSession(ctx, auth, source)
@@ -202,17 +202,17 @@ func (c *Client) listLiveReleases(ctx context.Context, auth config.AuthProfile, 
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
 	}
-	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs, liveFetchWorkerLimitForStoredSource(storedSource))
+	docs, authState, err := c.fetchPostDocuments(ctx, session, source, postIDs)
 	if err != nil {
 		return provider.ListResult{AuthState: authState}, err
 	}
 	reportSourceProgress(ctx, source.ID, "info", "Patreon live release listing complete", map[string]any{
-		"source_id":         source.ID,
-		"documents":         len(docs),
-		"duration_ms":       elapsedMillis(startedAt),
-		"sync_cursor_kept":  min(len(docs), liveSyncCursorRecentKeep),
-		"auth_state":        domain.AuthStateAuthenticated,
-		"source_kind":       string(detectSourceKind(source.URL)),
+		"source_id":        source.ID,
+		"documents":        len(docs),
+		"duration_ms":      elapsedMillis(startedAt),
+		"sync_cursor_kept": min(len(docs), liveSyncCursorRecentKeep),
+		"auth_state":       domain.AuthStateAuthenticated,
+		"source_kind":      string(detectSourceKind(source.URL)),
 	})
 	return provider.ListResult{
 		Documents:  docs,
@@ -286,17 +286,19 @@ func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, err
 	}
-	user, authState, err := c.fetchCurrentUser(ctx, client, source, bundle)
+	session := &liveSession{
+		sourceID: source.ID,
+		bundle:   *bundle,
+		client:   client,
+		budget:   newRequestBudget(),
+	}
+	user, authState, err := c.fetchCurrentUser(ctx, session, source.URL)
 	if err != nil {
 		return nil, authState, err
 	}
-	session := &liveSession{
-		bundle:        *bundle,
-		client:        client,
-		currentUserID: user.Data.ID,
-	}
+	session.currentUserID = user.Data.ID
 	if detectSourceKind(source.URL) != sourceKindCollection {
-		campaign, authState, err := c.resolveCampaign(ctx, client, source, bundle, user)
+		campaign, authState, err := c.resolveCampaign(ctx, session, source, user)
 		if err != nil {
 			return nil, authState, err
 		}
@@ -305,9 +307,9 @@ func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile
 	return session, domain.AuthStateAuthenticated, nil
 }
 
-func (c *Client) fetchCurrentUser(ctx context.Context, client *http.Client, source config.SourceConfig, bundle *sessionBundle) (*currentUserEnvelope, domain.AuthState, error) {
+func (c *Client) fetchCurrentUser(ctx context.Context, session *liveSession, referer string) (*currentUserEnvelope, domain.AuthState, error) {
 	requestURL := c.currentUserAPIURL()
-	body, authState, err := c.get(ctx, client, requestURL, source.URL, bundle, "application/json")
+	body, authState, err := c.get(ctx, session, requestURL, referer, "application/json")
 	if err != nil {
 		return nil, authState, err
 	}
@@ -321,7 +323,7 @@ func (c *Client) fetchCurrentUser(ctx context.Context, client *http.Client, sour
 	return &payload, domain.AuthStateAuthenticated, nil
 }
 
-func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, source config.SourceConfig, bundle *sessionBundle, user *currentUserEnvelope) (campaignInfo, domain.AuthState, error) {
+func (c *Client) resolveCampaign(ctx context.Context, session *liveSession, source config.SourceConfig, user *currentUserEnvelope) (campaignInfo, domain.AuthState, error) {
 	handle, err := sourceHandle(source.URL)
 	if err != nil {
 		return campaignInfo{}, domain.AuthStateReauthRequired, err
@@ -334,7 +336,7 @@ func (c *Client) resolveCampaign(ctx context.Context, client *http.Client, sourc
 			return campaignInfo{ID: item.ID, Name: item.Attributes.Name}, domain.AuthStateAuthenticated, nil
 		}
 	}
-	body, authState, err := c.get(ctx, client, source.URL, source.URL, bundle, "text/html")
+	body, authState, err := c.get(ctx, session, source.URL, source.URL, "text/html")
 	if err != nil {
 		return campaignInfo{}, authState, err
 	}
@@ -370,7 +372,7 @@ func (c *Client) listPostIDsWithLimit(ctx context.Context, session *liveSession,
 	}
 	for nextURL != "" {
 		pageCount++
-		body, authState, err := c.get(ctx, session.client, nextURL, source.URL, &session.bundle, "application/json")
+		body, authState, err := c.get(ctx, session, nextURL, source.URL, "application/json")
 		if err != nil {
 			return nil, authState, err
 		}
@@ -455,7 +457,7 @@ func (c *Client) listPostIDsWithLimit(ctx context.Context, session *liveSession,
 
 func (c *Client) listCollectionPostIDs(ctx context.Context, session *liveSession, source config.SourceConfig, cursor *liveSyncCursor) ([]string, domain.AuthState, error) {
 	startedAt := time.Now()
-	body, authState, err := c.get(ctx, session.client, source.URL, source.URL, &session.bundle, "text/html")
+	body, authState, err := c.get(ctx, session, source.URL, source.URL, "text/html")
 	if err != nil {
 		return nil, authState, err
 	}
@@ -475,7 +477,7 @@ func (c *Client) listCollectionPostIDs(ctx context.Context, session *liveSession
 
 func (c *Client) fetchPostDetail(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) ([]byte, domain.AuthState, error) {
 	requestURL := c.postDetailAPIURL(postID)
-	return c.get(ctx, session.client, requestURL, source.URL, &session.bundle, "application/json")
+	return c.get(ctx, session, requestURL, source.URL, "application/json")
 }
 
 type postDocumentResult struct {
@@ -485,16 +487,20 @@ type postDocumentResult struct {
 	err       error
 }
 
-func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, source config.SourceConfig, postIDs []string, workerLimit int) ([]provider.ReleaseDocument, domain.AuthState, error) {
+func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, source config.SourceConfig, postIDs []string) ([]provider.ReleaseDocument, domain.AuthState, error) {
 	if len(postIDs) == 0 {
 		return nil, domain.AuthStateAuthenticated, nil
 	}
 	startedAt := time.Now()
-	workerCount := min(len(postIDs), max(1, workerLimit))
+	workerCount := session.budget.workerCeiling(len(postIDs))
 	reportSourceProgress(ctx, source.ID, "info", "starting Patreon post detail fetch", map[string]any{
 		"source_id":   source.ID,
 		"total_posts": len(postIDs),
 		"concurrency": workerCount,
+		"budget": map[string]any{
+			"initial_limit": patreonRequestLimitInitial,
+			"max_limit":     patreonRequestLimitMax,
+		},
 	})
 	jobs := make(chan int)
 	results := make(chan postDocumentResult, len(postIDs))
@@ -574,13 +580,6 @@ func (c *Client) fetchPostDocuments(ctx context.Context, session *liveSession, s
 	return docs, domain.AuthStateAuthenticated, nil
 }
 
-func liveFetchWorkerLimitForStoredSource(storedSource *domain.Source) int {
-	if storedSource != nil && strings.TrimSpace(storedSource.SyncCursor) != "" {
-		return liveFetchWorkerLimitWarm
-	}
-	return liveFetchWorkerLimitCold
-}
-
 func (c *Client) fetchPostDocument(ctx context.Context, session *liveSession, source config.SourceConfig, postID string) (provider.ReleaseDocument, domain.AuthState, error) {
 	raw, authState, err := c.fetchPostDetail(ctx, session, source, postID)
 	if err != nil {
@@ -625,8 +624,10 @@ func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile
 		return doc, domain.AuthStateReauthRequired, err
 	}
 	session := &liveSession{
-		bundle: *bundle,
-		client: client,
+		sourceID: source.ID,
+		bundle:   *bundle,
+		client:   client,
+		budget:   newRequestBudget(),
 	}
 	authState, err := c.downloadLiveAttachment(ctx, session, auth, source, &doc.Normalized, index)
 	if err != nil {
@@ -659,7 +660,7 @@ func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSessio
 		return domain.AuthStateAuthenticated, nil
 	}
 	startedAt := time.Now()
-	body, authState, err := c.get(ctx, session.client, attachment.DownloadURL, source.URL, &session.bundle, "*/*")
+	body, authState, err := c.get(ctx, session, attachment.DownloadURL, source.URL, "*/*")
 	if err != nil {
 		return authState, fmt.Errorf("download Patreon attachment %q (%s): %s: %w", attachment.FileName, attachment.DownloadURL, authState, err)
 	}
@@ -677,9 +678,9 @@ func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSessio
 	return domain.AuthStateAuthenticated, nil
 }
 
-func (c *Client) get(ctx context.Context, client *http.Client, requestURL, referer string, bundle *sessionBundle, accept string) ([]byte, domain.AuthState, error) {
+func (c *Client) get(ctx context.Context, session *liveSession, requestURL, referer, accept string) ([]byte, domain.AuthState, error) {
 	for attempt := range patreonRetryAttempts {
-		body, authState, retryDelay, err := c.getOnce(ctx, client, requestURL, referer, bundle, accept, attempt+1)
+		body, authState, retryDelay, err := c.getOnce(ctx, session, requestURL, referer, accept, attempt+1)
 		if retryDelay < 0 {
 			return body, authState, err
 		}
@@ -693,21 +694,30 @@ func (c *Client) get(ctx context.Context, client *http.Client, requestURL, refer
 	return nil, domain.AuthStateAuthenticated, fmt.Errorf("Patreon request retries exhausted for %s", requestURL)
 }
 
-func (c *Client) getOnce(ctx context.Context, client *http.Client, requestURL, referer string, bundle *sessionBundle, accept string, attempt int) ([]byte, domain.AuthState, time.Duration, error) {
+func (c *Client) getOnce(ctx context.Context, session *liveSession, requestURL, referer, accept string, attempt int) ([]byte, domain.AuthState, time.Duration, error) {
+	if session == nil || session.client == nil || session.budget == nil {
+		return nil, domain.AuthStateReauthRequired, -1, errors.New("missing Patreon live session")
+	}
+	budget, err := session.budget.acquire(ctx)
+	if err != nil {
+		return nil, domain.AuthStateReauthRequired, -1, err
+	}
+	defer session.budget.release()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, -1, err
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("User-Agent", firstNonEmpty(bundleUserAgent(bundle), defaultUserAgent))
+	req.Header.Set("User-Agent", firstNonEmpty(bundleUserAgent(&session.bundle), defaultUserAgent))
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}
-	if cookieHeader := cookieHeaderForURL(bundle, requestURL); cookieHeader != "" {
+	if cookieHeader := cookieHeaderForURL(&session.bundle, requestURL); cookieHeader != "" {
 		req.Header.Set("Cookie", cookieHeader)
 	}
-	resp, err := client.Do(req)
+	resp, err := session.client.Do(req)
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, -1, err
 	}
@@ -722,19 +732,30 @@ func (c *Client) getOnce(ctx context.Context, client *http.Client, requestURL, r
 			"status":      resp.StatusCode,
 			"auth_state":  authState,
 			"attempt":     attempt,
+			"budget":      budget,
 			"error":       authErr.Error(),
 		})
 		return nil, authState, -1, authErr
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		delay := retryDelay(resp.Header.Get("Retry-After"), attempt)
+		changed, snapshot := session.budget.markRateLimit()
 		reportRequestProgress(ctx, requestURL, "warn", "Patreon rate limited request; backing off", map[string]any{
 			"request_url": requestURL,
 			"status":      resp.StatusCode,
 			"attempt":     attempt,
 			"delay_ms":    delay.Milliseconds(),
+			"budget":      snapshot,
 			"retry_after": strings.TrimSpace(resp.Header.Get("Retry-After")),
 		})
+		if changed {
+			reportSourceProgress(ctx, session.sourceID, "warn", "Patreon request budget reduced", map[string]any{
+				"source_id": session.sourceID,
+				"budget":    snapshot,
+				"request":   requestURL,
+				"attempt":   attempt,
+			})
+		}
 		return nil, domain.AuthStateAuthenticated, delay, fmt.Errorf("Patreon rate limited request with status %d for %s", resp.StatusCode, requestURL)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -742,8 +763,16 @@ func (c *Client) getOnce(ctx context.Context, client *http.Client, requestURL, r
 			"request_url": requestURL,
 			"status":      resp.StatusCode,
 			"attempt":     attempt,
+			"budget":      budget,
 		})
 		return nil, domain.AuthStateReauthRequired, -1, fmt.Errorf("unexpected Patreon response status %d for %s", resp.StatusCode, requestURL)
+	}
+	if changed, snapshot := session.budget.markSuccess(); changed {
+		reportSourceProgress(ctx, session.sourceID, "info", "Patreon request budget increased", map[string]any{
+			"source_id": session.sourceID,
+			"budget":    snapshot,
+			"request":   requestURL,
+		})
 	}
 	return body, domain.AuthStateAuthenticated, -1, nil
 }
