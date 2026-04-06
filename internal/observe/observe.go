@@ -29,6 +29,7 @@ type Recorder struct {
 
 type logEntry struct {
 	Timestamp   time.Time `json:"timestamp"`
+	EventID     string    `json:"event_id,omitempty"`
 	RunID       string    `json:"run_id"`
 	Command     string    `json:"command"`
 	SourceScope string    `json:"source_scope"`
@@ -96,7 +97,7 @@ func (r *Recorder) EventData(ctx context.Context, level, component, message, ent
 	if err := r.repo.AddEvent(ctx, event); err != nil {
 		return err
 	}
-	return r.log(event.Level, event.Component, event.Message, event.EntityKind, event.EntityID, event.PayloadRef)
+	return r.log(event.ID, event.Level, event.Component, event.Message, event.EntityKind, event.EntityID, event.PayloadRef)
 }
 
 func (r *Recorder) Finish(ctx context.Context, status domain.RunStatus, summary string) error {
@@ -172,9 +173,10 @@ func (r *Recorder) writePayload(payload any) (string, error) {
 	return payloadPath, nil
 }
 
-func (r *Recorder) log(level, component, message, entityKind, entityID, payloadRef string) error {
+func (r *Recorder) log(eventID, level, component, message, entityKind, entityID, payloadRef string) error {
 	entry := logEntry{
 		Timestamp:   time.Now().UTC(),
+		EventID:     eventID,
 		RunID:       r.run.ID,
 		Command:     r.run.Command,
 		SourceScope: r.run.SourceScope,

@@ -1,10 +1,10 @@
 # Observability
 
-`serial-sync` now records the same run in three places:
+`serial-sync` splits runtime observability into:
 
-- SQLite `RunRecord` and `EventRecord`
-- a human-readable text log
-- a JSONL log with stable fields for shipping or machine parsing
+- SQLite `RunRecord` summaries for cheap listing and status lookup
+- a human-readable text log for each run
+- a JSONL event stream for each run, with stable fields for shipping or machine parsing
 
 ## Log Files
 
@@ -21,6 +21,8 @@ Default `log_root`:
 Event payload files are stored under:
 
 - `<log_root>/event-payloads/<run-id>/`
+
+This is the authoritative per-event history. `serial-sync` no longer duplicates the full event stream into SQLite.
 
 ## What Is Logged
 
@@ -56,7 +58,7 @@ The daemon exposes:
 `debug bundle <run-id>` includes:
 
 - redacted config
-- run and event summaries
+- run summary plus the JSONL-backed event history
 - copied release and artifact payloads
 - copied event payload files
 - copied text and JSONL logs for that run

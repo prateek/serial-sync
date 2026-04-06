@@ -415,17 +415,7 @@ func (s *Store) FinishRun(ctx context.Context, runID string, status domain.RunSt
 }
 
 func (s *Store) AddEvent(ctx context.Context, event domain.EventRecord) error {
-	return s.queries.InsertEventRecord(ctx, sqldb.InsertEventRecordParams{
-		ID:         event.ID,
-		RunID:      event.RunID,
-		Timestamp:  formatTime(event.Timestamp),
-		Level:      event.Level,
-		Component:  event.Component,
-		Message:    event.Message,
-		EntityKind: event.EntityKind,
-		EntityID:   event.EntityID,
-		PayloadRef: event.PayloadRef,
-	})
+	return nil
 }
 
 func (s *Store) GetRunBundle(ctx context.Context, runID string) (*domain.RunBundle, error) {
@@ -436,17 +426,8 @@ func (s *Store) GetRunBundle(ctx context.Context, runID string) (*domain.RunBund
 	if err != nil {
 		return nil, err
 	}
-	eventRows, err := s.queries.ListEventsByRunID(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	events := make([]domain.EventRecord, 0, len(eventRows))
-	for _, row := range eventRows {
-		events = append(events, eventFromRow(row))
-	}
 	return &domain.RunBundle{
-		Run:    runFromRow(runRow),
-		Events: events,
+		Run: runFromRow(runRow),
 	}, nil
 }
 
@@ -707,20 +688,6 @@ func runFromRow(row sqldb.RunRecord) domain.RunRecord {
 		item.FinishedAt = &finished
 	}
 	return item
-}
-
-func eventFromRow(row sqldb.EventRecord) domain.EventRecord {
-	return domain.EventRecord{
-		ID:         row.ID,
-		RunID:      row.RunID,
-		Timestamp:  parseTime(row.Timestamp),
-		Level:      row.Level,
-		Component:  row.Component,
-		Message:    row.Message,
-		EntityKind: row.EntityKind,
-		EntityID:   row.EntityID,
-		PayloadRef: row.PayloadRef,
-	}
 }
 
 func publishCandidateFromRow(row sqldb.ListPublishCandidatesRow) domain.PublishCandidate {

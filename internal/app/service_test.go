@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"github.com/prateek/serial-sync/internal/provider"
 	"github.com/prateek/serial-sync/internal/provider/patreon"
 	"github.com/prateek/serial-sync/internal/store/sqlite"
+	_ "modernc.org/sqlite"
 )
 
 func TestSyncAndPublishLifecycle(t *testing.T) {
@@ -177,6 +179,18 @@ content_strategy = "text_post"
 	}
 	if explain.LogText == "" || explain.LogJSON == "" {
 		t.Fatalf("expected explain summary to expose log paths, got %#v", explain)
+	}
+	rawDB, err := sql.Open("sqlite", cfg.Runtime.StoreDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rawDB.Close() })
+	var eventTableCount int
+	if err := rawDB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_records'`).Scan(&eventTableCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventTableCount != 0 {
+		t.Fatalf("expected event_records table to be absent from fresh schema, found count=%d", eventTableCount)
 	}
 	storedSource, err := repo.GetSource(context.Background(), "plum-parrot")
 	if err != nil {

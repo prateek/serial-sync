@@ -92,18 +92,6 @@ CREATE TABLE IF NOT EXISTS run_records (
   dry_run INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS event_records (
-  id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL,
-  timestamp TEXT NOT NULL,
-  level TEXT NOT NULL,
-  component TEXT NOT NULL,
-  message TEXT NOT NULL,
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  payload_ref TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS leases (
   key TEXT PRIMARY KEY,
   holder TEXT NOT NULL,

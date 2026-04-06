@@ -194,20 +194,6 @@ FROM run_records
 ORDER BY started_at DESC, id DESC
 LIMIT sqlc.arg(limit);
 
--- name: InsertEventRecord :exec
-INSERT INTO event_records (id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref)
-VALUES (
-  sqlc.arg(id), sqlc.arg(run_id), sqlc.arg(timestamp), sqlc.arg(level),
-  sqlc.arg(component), sqlc.arg(message), sqlc.arg(entity_kind), sqlc.arg(entity_id),
-  sqlc.arg(payload_ref)
-);
-
--- name: ListEventsByRunID :many
-SELECT id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref
-FROM event_records
-WHERE run_id = sqlc.arg(run_id)
-ORDER BY timestamp;
-
 -- name: CountSuccessfulPublishRecords :one
 SELECT COUNT(1)
 FROM publish_records

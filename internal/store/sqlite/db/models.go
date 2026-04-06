@@ -25,18 +25,6 @@ type Artifact struct {
 	RawRef        string
 }
 
-type EventRecord struct {
-	ID         string
-	RunID      string
-	Timestamp  string
-	Level      string
-	Component  string
-	Message    string
-	EntityKind string
-	EntityID   string
-	PayloadRef string
-}
-
 type Lease struct {
 	Key       string
 	Holder    string

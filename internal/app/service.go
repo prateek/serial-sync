@@ -937,6 +937,11 @@ func (s *Service) InspectRun(ctx context.Context, id string) (*domain.RunBundle,
 	if run == nil {
 		return nil, fmt.Errorf("unknown run %q", id)
 	}
+	events, err := s.loadRunEvents(id, run.Events)
+	if err != nil {
+		return nil, err
+	}
+	run.Events = events
 	return run, nil
 }
 

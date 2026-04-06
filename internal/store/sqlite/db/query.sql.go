@@ -453,42 +453,6 @@ func (q *Queries) GetTrackBySourceAndKey(ctx context.Context, arg GetTrackBySour
 	return i, err
 }
 
-const insertEventRecord = `-- name: InsertEventRecord :exec
-INSERT INTO event_records (id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref)
-VALUES (
-  ?1, ?2, ?3, ?4,
-  ?5, ?6, ?7, ?8,
-  ?9
-)
-`
-
-type InsertEventRecordParams struct {
-	ID         string
-	RunID      string
-	Timestamp  string
-	Level      string
-	Component  string
-	Message    string
-	EntityKind string
-	EntityID   string
-	PayloadRef string
-}
-
-func (q *Queries) InsertEventRecord(ctx context.Context, arg InsertEventRecordParams) error {
-	_, err := q.db.ExecContext(ctx, insertEventRecord,
-		arg.ID,
-		arg.RunID,
-		arg.Timestamp,
-		arg.Level,
-		arg.Component,
-		arg.Message,
-		arg.EntityKind,
-		arg.EntityID,
-		arg.PayloadRef,
-	)
-	return err
-}
-
 const insertRunRecord = `-- name: InsertRunRecord :exec
 INSERT INTO run_records (id, command, started_at, finished_at, status, summary, source_scope, dry_run)
 VALUES (
@@ -553,46 +517,6 @@ func (q *Queries) ListArtifactsByReleaseID(ctx context.Context, releaseID string
 			&i.MetadataRef,
 			&i.NormalizedRef,
 			&i.RawRef,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listEventsByRunID = `-- name: ListEventsByRunID :many
-SELECT id, run_id, timestamp, level, component, message, entity_kind, entity_id, payload_ref
-FROM event_records
-WHERE run_id = ?1
-ORDER BY timestamp
-`
-
-func (q *Queries) ListEventsByRunID(ctx context.Context, runID string) ([]EventRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listEventsByRunID, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []EventRecord
-	for rows.Next() {
-		var i EventRecord
-		if err := rows.Scan(
-			&i.ID,
-			&i.RunID,
-			&i.Timestamp,
-			&i.Level,
-			&i.Component,
-			&i.Message,
-			&i.EntityKind,
-			&i.EntityID,
-			&i.PayloadRef,
 		); err != nil {
 			return nil, err
 		}
