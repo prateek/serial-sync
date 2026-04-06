@@ -512,6 +512,41 @@ func TestClassifyHTTPAuthFailureFlagsHTMLChallengePage(t *testing.T) {
 	}
 }
 
+func TestSelectorWaitErrorClassifiesChallengeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	_, authState, err := selectorWaitError("email", pageSnapshot{
+		URL:   "https://www.patreon.com/login",
+		Title: "Just a moment...",
+		Text:  "Checking your browser before accessing Patreon.",
+	})
+	if err == nil {
+		t.Fatal("expected selectorWaitError() error")
+	}
+	if authState != domain.AuthStateChallengeNeeded {
+		t.Fatalf("authState = %q, want %q", authState, domain.AuthStateChallengeNeeded)
+	}
+}
+
+func TestPrepareChromiumProfileDirRemovesStaleLocks(t *testing.T) {
+	t.Parallel()
+
+	profileDir := t.TempDir()
+	for _, name := range chromiumProfileLockFiles {
+		if err := os.WriteFile(filepath.Join(profileDir, name), []byte("stale"), 0o600); err != nil {
+			t.Fatalf("write lock file %s: %v", name, err)
+		}
+	}
+	if err := prepareChromiumProfileDir(profileDir); err != nil {
+		t.Fatalf("prepareChromiumProfileDir() error = %v", err)
+	}
+	for _, name := range chromiumProfileLockFiles {
+		if _, err := os.Stat(filepath.Join(profileDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("lock file %s still exists, err=%v", name, err)
+		}
+	}
+}
+
 func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
 	t.Parallel()
 
@@ -646,6 +681,18 @@ func TestSuggestRulesForSourcePrefersTitleSeriesOverGenericTags(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(rules[0].MatchValue), "fantasy") {
 		t.Fatalf("unexpected generic tag rule in primary match: %#v", rules[0])
+	}
+}
+
+func TestShouldDisableChromiumSandboxHonorsEnvOverride(t *testing.T) {
+	t.Setenv("SERIAL_SYNC_CHROME_NO_SANDBOX", "false")
+	if shouldDisableChromiumSandbox() {
+		t.Fatalf("expected sandbox to remain enabled when env override is false")
+	}
+
+	t.Setenv("SERIAL_SYNC_CHROME_NO_SANDBOX", "true")
+	if !shouldDisableChromiumSandbox() {
+		t.Fatalf("expected sandbox to be disabled when env override is true")
 	}
 }
 

@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+DISPLAY_VALUE="${DISPLAY:-:99}"
+SCREEN_SIZE="${XVFB_SCREEN_SIZE:-1366x768x24}"
+NOVNC_PORT="${NOVNC_PORT:-8080}"
+VNC_PORT="${VNC_PORT:-5900}"
+NOVNC_WEB_ROOT="${NOVNC_WEB_ROOT:-/usr/share/novnc}"
+
+xvfb_pid=""
+fluxbox_pid=""
+x11vnc_pid=""
+websockify_pid=""
+
+cleanup() {
+  for pid in "$websockify_pid" "$x11vnc_pid" "$fluxbox_pid" "$xvfb_pid"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+}
+trap cleanup EXIT INT TERM
+
+export DISPLAY="$DISPLAY_VALUE"
+
+if [ ! -e "/tmp/.X11-unix/X${DISPLAY#:}" ]; then
+  Xvfb "$DISPLAY" -screen 0 "$SCREEN_SIZE" -nolisten tcp -ac >/tmp/serial-sync-xvfb.log 2>&1 &
+  xvfb_pid="$!"
+  sleep 1
+fi
+
+fluxbox >/tmp/serial-sync-fluxbox.log 2>&1 &
+fluxbox_pid="$!"
+
+x11vnc -display "$DISPLAY" -rfbport "$VNC_PORT" -localhost -shared -forever -nopw >/tmp/serial-sync-x11vnc.log 2>&1 &
+x11vnc_pid="$!"
+
+websockify --web "$NOVNC_WEB_ROOT" "$NOVNC_PORT" "localhost:$VNC_PORT" >/tmp/serial-sync-websockify.log 2>&1 &
+websockify_pid="$!"
+
+echo "noVNC available at http://127.0.0.1:${NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale"
+
+exec /usr/local/bin/serial-sync "$@"

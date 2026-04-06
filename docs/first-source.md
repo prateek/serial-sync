@@ -28,6 +28,11 @@ If you already have a valid session bundle:
 serial-sync --config ./config.toml setup auth --import-session /path/to/patreon-session.json --auth-profile patreon-default
 ```
 
+If Patreon serves a Cloudflare or other interactive challenge, prefer running
+this bootstrap once from a visible host browser session or the bundled Docker
+noVNC auth flow so you can complete the challenge manually before returning to
+Docker for dumps and steady-state runs.
+
 ## 3. Dump posts for offline series authoring
 
 Start by dumping all paid memberships into a local workspace:

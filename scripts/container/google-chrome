@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+BROWSER_USER="${SERIAL_SYNC_BROWSER_USER:-serialsync}"
+
+resolve_real_browser() {
+  if [ -n "${REAL_CHROME_BIN:-}" ] && [ -x "${REAL_CHROME_BIN:-}" ]; then
+    printf '%s\n' "$REAL_CHROME_BIN"
+    return 0
+  fi
+  for candidate in /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+REAL_CHROME_BIN="$(resolve_real_browser)"
+
+profile_dir=""
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*)
+      profile_dir="${arg#--user-data-dir=}"
+      ;;
+  esac
+done
+
+if [ "$(id -u)" -eq 0 ] && id "$BROWSER_USER" >/dev/null 2>&1; then
+  if [ -n "$profile_dir" ]; then
+    mkdir -p "$profile_dir"
+    chown -R "$BROWSER_USER:$BROWSER_USER" "$profile_dir"
+  fi
+  exec gosu "$BROWSER_USER:$BROWSER_USER" "$REAL_CHROME_BIN" "$@"
+fi
+
+exec "$REAL_CHROME_BIN" "$@"

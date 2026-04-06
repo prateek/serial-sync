@@ -14,6 +14,11 @@ docker run --rm \
   serial-sync run
 ```
 
+If Patreon serves a Cloudflare or other interactive challenge during bootstrap, run
+`setup auth` once in a visible browser session, the bundled noVNC auth container,
+or import a session bundle, then return to the containerized `setup dump` / `run`
+flow.
+
 If you want to author series definitions against a local dump instead of repeatedly hitting Patreon:
 
 ```sh
@@ -46,7 +51,7 @@ docker run --rm \
 - dump-first series authoring is implemented through `setup dump` and `setup preview`
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
-- the Docker image includes Chromium and Xvfb for first-run Patreon bootstrap inside the container
+- the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
 - the daemon exposes `/healthz`, `/status`, and `/metrics`
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`

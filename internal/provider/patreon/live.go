@@ -66,6 +66,18 @@ var totpInputSelectors = []string{
 
 var collectionPostLinkPattern = regexp.MustCompile(`/posts/[^"'?#>]*-([0-9]+)`)
 
+const (
+	patreonBootstrapTimeout    = 7 * time.Minute
+	patreonLoginSurfaceTimeout = 4 * time.Minute
+	patreonPostSubmitTimeout   = 3 * time.Minute
+)
+
+var chromiumProfileLockFiles = []string{
+	"SingletonCookie",
+	"SingletonLock",
+	"SingletonSocket",
+}
+
 type sessionBundle struct {
 	Provider  string          `json:"provider"`
 	SavedAt   time.Time       `json:"saved_at"`
@@ -958,7 +970,7 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	if password == "" {
 		return domain.AuthStateReauthRequired, fmt.Errorf("auth profile %q expects password in %s", auth.ID, auth.PasswordEnv)
 	}
-	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+	if err := prepareChromiumProfileDir(profileDir); err != nil {
 		return domain.AuthStateReauthRequired, err
 	}
 	displaySession, err := display.Ensure(ctx)
@@ -983,14 +995,14 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	if env := displaySession.ChromeEnv(); len(env) > 0 {
 		allocOptions = append(allocOptions, chromedp.Env(env...))
 	}
-	if os.Geteuid() == 0 {
+	if shouldDisableChromiumSandbox() {
 		allocOptions = append(allocOptions, chromedp.Flag("no-sandbox", true))
 	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, allocOptions...)
 	defer allocCancel()
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()
-	loginCtx, loginCancel := context.WithTimeout(browserCtx, 2*time.Minute)
+	loginCtx, loginCancel := context.WithTimeout(browserCtx, patreonBootstrapTimeout)
 	defer loginCancel()
 	if err := chromedp.Run(loginCtx, network.Enable()); err != nil {
 		return domain.AuthStateReauthRequired, fmt.Errorf("start Chromium for Patreon auth: %w", err)
@@ -998,9 +1010,12 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	if err := chromedp.Run(loginCtx, chromedp.Navigate("https://www.patreon.com/login")); err != nil {
 		return domain.AuthStateReauthRequired, fmt.Errorf("open Patreon login page: %w", err)
 	}
-	emailSelector, err := waitForSelector(loginCtx, emailInputSelectors, 45*time.Second)
+	emailSelector, authState, err := waitForSelectorOrAuthenticated(loginCtx, emailInputSelectors, auth.SessionPath, "email", patreonLoginSurfaceTimeout)
 	if err != nil {
-		return inferBrowserState(loginCtx, domain.AuthStateChallengeNeeded), fmt.Errorf("could not find Patreon email field: %w", err)
+		return authState, err
+	}
+	if authState == domain.AuthStateAuthenticated {
+		return domain.AuthStateAuthenticated, nil
 	}
 	if err := chromedp.Run(loginCtx,
 		chromedp.WaitVisible(emailSelector, chromedp.ByQuery),
@@ -1015,9 +1030,12 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 		if submitErr == nil && submitSelector != "" {
 			_ = chromedp.Run(loginCtx, chromedp.Click(submitSelector, chromedp.ByQuery))
 		}
-		passwordSelector, err = waitForSelector(loginCtx, passwordInputSelectors, 20*time.Second)
+		passwordSelector, authState, err = waitForSelectorOrAuthenticated(loginCtx, passwordInputSelectors, auth.SessionPath, "password", patreonLoginSurfaceTimeout)
 		if err != nil {
-			return inferBrowserState(loginCtx, domain.AuthStateChallengeNeeded), fmt.Errorf("could not find Patreon password field: %w", err)
+			return authState, err
+		}
+		if authState == domain.AuthStateAuthenticated {
+			return domain.AuthStateAuthenticated, nil
 		}
 	}
 	if err := chromedp.Run(loginCtx,
@@ -1034,7 +1052,7 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	if err := chromedp.Run(loginCtx, chromedp.Click(submitSelector, chromedp.ByQuery)); err != nil {
 		return domain.AuthStateReauthRequired, fmt.Errorf("submit Patreon login form: %w", err)
 	}
-	deadline := time.Now().Add(75 * time.Second)
+	deadline := time.Now().Add(patreonPostSubmitTimeout)
 	for time.Now().Before(deadline) {
 		completedTOTP, err := maybeCompleteTOTPChallenge(loginCtx, auth)
 		if err != nil {
@@ -1050,8 +1068,6 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 			}
 		}
 		switch inferSnapshotState(snapshot, "") {
-		case domain.AuthStateChallengeNeeded:
-			return domain.AuthStateChallengeNeeded, fmt.Errorf("Patreon presented an interactive login challenge")
 		case domain.AuthStateReauthRequired:
 			return domain.AuthStateReauthRequired, fmt.Errorf("Patreon rejected the provided credentials")
 		}
@@ -1064,19 +1080,24 @@ func bootstrapWithChromium(ctx context.Context, auth config.AuthProfile, source 
 	if err := saveCurrentSession(loginCtx, auth.SessionPath); err == nil {
 		return domain.AuthStateAuthenticated, nil
 	}
-	return inferBrowserState(loginCtx, domain.AuthStateChallengeNeeded), fmt.Errorf("Patreon login did not reach an authenticated session for source %q", source.ID)
+	snapshot := currentPageSnapshot(loginCtx)
+	authState = inferSnapshotState(snapshot, domain.AuthStateChallengeNeeded)
+	if authState == domain.AuthStateReauthRequired {
+		return authState, fmt.Errorf("Patreon rejected the provided credentials")
+	}
+	return authState, fmt.Errorf("Patreon login stayed on an interactive challenge or did not reach an authenticated session for source %q", source.ID)
 }
 
 func maybeCompleteTOTPChallenge(ctx context.Context, auth config.AuthProfile) (bool, error) {
 	if strings.TrimSpace(auth.TOTPSecretEnv) == "" {
 		return false, nil
 	}
-	secret := strings.TrimSpace(os.Getenv(auth.TOTPSecretEnv))
-	if secret == "" {
-		return false, fmt.Errorf("auth profile %q expects TOTP secret in %s", auth.ID, auth.TOTPSecretEnv)
-	}
 	selector, err := waitForSelector(ctx, totpInputSelectors, 2*time.Second)
 	if err != nil || selector == "" {
+		return false, nil
+	}
+	secret := strings.TrimSpace(os.Getenv(auth.TOTPSecretEnv))
+	if secret == "" {
 		return false, nil
 	}
 	code, err := totp.GenerateCode(secret, time.Now().UTC())
@@ -1100,13 +1121,23 @@ func maybeCompleteTOTPChallenge(ctx context.Context, auth config.AuthProfile) (b
 }
 
 func resolveChromiumBinary() string {
-	for _, candidate := range []string{"google-chrome", "chromium", "chromium-browser", "chrome"} {
+	for _, candidate := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"} {
 		path, err := exec.LookPath(candidate)
 		if err == nil {
 			return path
 		}
 	}
 	return ""
+}
+
+func shouldDisableChromiumSandbox() bool {
+	if raw := strings.TrimSpace(os.Getenv("SERIAL_SYNC_CHROME_NO_SANDBOX")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err == nil {
+			return enabled
+		}
+	}
+	return os.Geteuid() == 0
 }
 
 func waitForSelector(ctx context.Context, selectors []string, timeout time.Duration) (string, error) {
@@ -1123,6 +1154,56 @@ func waitForSelector(ctx context.Context, selectors []string, timeout time.Durat
 		}
 	}
 	return "", context.DeadlineExceeded
+}
+
+func waitForSelectorOrAuthenticated(ctx context.Context, selectors []string, sessionPath, fieldLabel string, timeout time.Duration) (string, domain.AuthState, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		selector, err := firstVisibleSelector(ctx, selectors)
+		if err == nil && selector != "" {
+			return selector, "", nil
+		}
+		snapshot := currentPageSnapshot(ctx)
+		if !strings.Contains(strings.ToLower(snapshot.URL), "/login") {
+			if err := saveCurrentSession(ctx, sessionPath); err == nil {
+				return "", domain.AuthStateAuthenticated, nil
+			}
+		}
+		if inferSnapshotState(snapshot, "") == domain.AuthStateReauthRequired {
+			return "", domain.AuthStateReauthRequired, fmt.Errorf("Patreon rejected the provided credentials before the %s field became available", fieldLabel)
+		}
+		select {
+		case <-ctx.Done():
+			return "", domain.AuthStateChallengeNeeded, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return selectorWaitError(fieldLabel, currentPageSnapshot(ctx))
+}
+
+func selectorWaitError(fieldLabel string, snapshot pageSnapshot) (string, domain.AuthState, error) {
+	authState := inferSnapshotState(snapshot, domain.AuthStateChallengeNeeded)
+	switch authState {
+	case domain.AuthStateChallengeNeeded:
+		return "", authState, fmt.Errorf("Patreon login remained behind an interactive challenge before the %s field became available", fieldLabel)
+	case domain.AuthStateReauthRequired:
+		return "", authState, fmt.Errorf("Patreon rejected the provided credentials before the %s field became available", fieldLabel)
+	default:
+		return "", authState, fmt.Errorf("Patreon login did not expose the %s field before timeout", fieldLabel)
+	}
+}
+
+func prepareChromiumProfileDir(profileDir string) error {
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		return err
+	}
+	for _, name := range chromiumProfileLockFiles {
+		path := filepath.Join(profileDir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale Chromium lock %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func firstVisibleSelector(ctx context.Context, selectors []string) (string, error) {

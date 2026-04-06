@@ -36,6 +36,43 @@ docker run --rm \
 
 The image includes Chromium and Xvfb. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
 
+The browser still runs as the unprivileged `serialsync` user inside the container. By default the bundled image keeps Chromium on `--no-sandbox` because many container runtimes block the namespace sandbox. If your runtime supports Chromium's sandbox cleanly, override `SERIAL_SYNC_CHROME_NO_SANDBOX=false`.
+
+If Patreon presents a Cloudflare or other interactive challenge, you now have
+three bootstrap paths:
+
+- run `setup auth` from a visible host browser session
+- run `setup auth` through the bundled noVNC wrapper in Docker
+- import a session bundle
+
+After auth succeeds once, return to the normal Docker `setup dump`, `run`, and
+`run daemon` flow.
+
+## Headless Server Bootstrap Via noVNC
+
+For a headless Linux box, expose a temporary noVNC session and complete Patreon
+auth remotely:
+
+```sh
+docker compose -f ./examples/docker-compose.yml --profile auth-ui up --build serial-sync-auth
+```
+
+Then open:
+
+```text
+http://<host>:8080/vnc.html?autoconnect=true&resize=scale
+```
+
+This runs Chrome on Xvfb inside the container, exposes it through noVNC, and
+executes:
+
+```sh
+serial-sync setup auth --auth-profile patreon-default --force
+```
+
+Once auth completes and the session is saved under `/state`, stop the auth
+service and run the normal daemon or one-shot sync container.
+
 ## Dump Sources For Series Authoring
 
 After auth succeeds, dump the creators you care about into a local workspace. By default this uses paid memberships.

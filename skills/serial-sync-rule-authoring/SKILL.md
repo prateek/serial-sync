@@ -10,6 +10,7 @@ Use this workflow when the user wants to figure out which `[[series]]` and `[[se
 The canonical loop is:
 
 1. Ensure auth works.
+   If Patreon serves a Cloudflare or similar interactive challenge, complete `setup auth` in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle before trying to dump.
 2. Dump the creators to a local workspace once.
 3. Inspect the dumped posts locally.
 4. Edit `series.toml` in that workspace.

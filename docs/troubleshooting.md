@@ -9,7 +9,7 @@ Patreon presented an interactive step the current MVP does not solve automatical
 - SMS / email one-time code
 - passwordless or social-login-only auth flow
 
-If the challenge is an authenticator-app code, set `totp_secret_env` in the auth profile and retry. Otherwise the tool stops intentionally. Re-run after completing auth in the dedicated Chromium profile next to your configured `session_path`, or import a fresh session bundle with `serial-sync setup auth --import-session`.
+If the challenge is an authenticator-app code, set `totp_secret_env` in the auth profile and retry. For Cloudflare or other interactive gates, use a visible host browser session or the bundled noVNC Docker auth flow for `serial-sync setup auth` so you can finish the challenge by hand, then reuse that saved session from Docker. You can also import a fresh session bundle with `serial-sync setup auth --import-session`.
 
 ## `reauth_required`
 
@@ -33,7 +33,9 @@ The command copies the bundle into `session_path` and validates it against the m
 
 ## Chrome / Chromium is missing
 
-Live Patreon bootstrap uses a dedicated Chromium profile in a headed browser session. In Docker on Linux, `serial-sync` starts Xvfb automatically when no display is available. If you are not using the bundled image, install Chrome or Chromium and `Xvfb`, then rerun `serial-sync setup auth` or `serial-sync run`.
+Live Patreon bootstrap uses a dedicated browser profile in a headed browser session. In Docker on Linux, `serial-sync` starts Xvfb automatically when no display is available. For headless hosts, the bundled noVNC auth wrapper exposes that browser so you can finish Cloudflare-style challenges remotely before you go back to normal Docker runs. The image uses Google Chrome on `amd64` and Chromium on `arm64`. If you are not using the bundled image, install Chrome or Chromium and `Xvfb`, then rerun `serial-sync setup auth` or `serial-sync run`.
+
+The bundled container defaults `SERIAL_SYNC_CHROME_NO_SANDBOX=true` because many Docker and homelab runtimes block Chromium's namespace sandbox even for an unprivileged browser user. If your runtime supports the sandbox, set `SERIAL_SYNC_CHROME_NO_SANDBOX=false` and retry.
 
 ## I want a fully offline demo
 

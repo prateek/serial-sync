@@ -2,10 +2,24 @@ services:
   serial-sync:
     build:
       context: ..
-    command: ["daemon"]
+    command: ["run", "daemon"]
     restart: unless-stopped
     env_file:
       - ./patreon.env
+    volumes:
+      - serial-sync-state:/state
+      - ./config.toml:/config/config.toml:ro
+
+  serial-sync-auth:
+    build:
+      context: ..
+    entrypoint: ["/usr/local/bin/serial-sync-with-novnc"]
+    command: ["setup", "auth", "--auth-profile", "patreon-default", "--force"]
+    profiles: ["auth-ui"]
+    env_file:
+      - ./patreon.env
+    ports:
+      - "8080:8080"
     volumes:
       - serial-sync-state:/state
       - ./config.toml:/config/config.toml:ro

@@ -119,6 +119,7 @@ Notes:
 - later runs reuse the saved session over plain HTTP unless Patreon forces a reauth.
 - `setup auth --import-session` can seed `session_path` from an externally generated session bundle.
 - `setup dump` writes additive `sources.toml` plus a local `series.toml` scaffold based on the Patreon memberships tied to the selected auth profile.
+- if Patreon presents a Cloudflare or other interactive challenge, complete `setup auth` in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle before returning to the Docker run path.
 - `format = "preserve"` keeps the source format when possible.
 - `format = "preserve"` plus `preface_mode = "prepend_post"` wraps existing EPUB attachments with a front-matter page while leaving non-EPUB attachments in their original format.
 - `format = "epub"` emits EPUB output for EPUB attachments, HTML/text sources, and PDF attachments via Calibre's `ebook-convert`.

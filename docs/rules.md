@@ -23,6 +23,7 @@ Matchers are applied by ascending `priority`. The first matching input wins.
 ## Recommended Workflow
 
 1. Run `setup dump` for the authors you care about.
+   If Patreon login is blocked by Cloudflare or another interactive challenge, finish `setup auth` first in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle.
 2. Edit `series.toml` inside the dump workspace.
 3. Run `setup preview --show-posts` against that workspace.
 4. Tighten source-specific matchers until the fallback bucket is acceptable.

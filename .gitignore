@@ -9,3 +9,6 @@ dist/
 coverage.out
 /publish/
 /state/
+/serial-sync-rule-workspace/
+/serial-sync-rule-workspace.parts/
+/.codex/site-plan/
