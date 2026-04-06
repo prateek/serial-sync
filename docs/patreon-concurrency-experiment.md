@@ -39,44 +39,56 @@ The important shape is:
 3. after enough concurrent detail requests accumulated, the provider entered a heavy `429` regime
 4. retries/backoff dominated the rest of the run and the run still failed
 
+## Follow-up Validation
+
+After the adaptive-budget experiment, I reran the same live `plum-parrot` path with the request budget hard-capped to a single in-flight Patreon request:
+
+- fresh runtime workspace: `/tmp/serial-sync-live-e2e-serial.U9xwjM`
+- `setup auth`: succeeded
+- first `run sync`: succeeded in `3m56s`
+- first `run publish`: succeeded in `0.19s`
+- immediate second `run sync`: succeeded in `10.9s`
+- immediate second `run publish`: succeeded in `0.006s`
+
+The first full-history run completed without the earlier `429` storm:
+
+- `572` posts discovered
+- `572` releases classified
+- `25` artifacts materialized
+- `25` artifacts published
+- no detail-fetch failures
+
+The immediate second run stayed incremental:
+
+- `25` posts discovered
+- `0` changed
+- `25` unchanged
+- `0` artifacts materialized
+- `0` artifacts published
+
 ## Interpretation
 
-Concurrency is still useful in principle, but `4` is too aggressive as the default for Patreon detail fetches on a cold full-history sync.
+For Patreon, the important product requirement is reliability, not maximizing cold-sync throughput.
 
-Why I would not drop concurrency entirely:
+The validated behavior is:
 
-- steady-state incremental runs are supposed to fetch a much smaller delta, so a small amount of concurrency can still reduce wall-clock time
-- the expensive phase is detail fetch, not feed pagination, and serial detail fetch across a large backlog may be unnecessarily slow once rate limiting is not the dominant constraint
+- a single in-flight request is reliable for full-history fetches
+- incremental runs are already fast enough without concurrency
+- the earlier adaptive policy still climbed back into a bad `429` regime on real traffic
 
-Why I would not keep `4` as the default:
+So the question is no longer theoretical. We have an end-to-end live result showing that the serialized client works acceptably for both:
 
-- the real run produced hundreds of `429` backoff events
-- once Patreon starts returning `Retry-After: 60`, more parallelism stops helping
-- this product does not require first-run speed if that speed materially reduces reliability
+- first-run backfills
+- steady-state incremental syncs
 
 ## Recommendation
 
-Model the real constraint directly: Patreon only tolerates some amount of in-flight request pressure before it starts returning `429`.
+Keep the Patreon live client serialized for now:
 
-So the implementation should:
+- initial request budget: `1`
+- minimum request budget: `1`
+- maximum request budget: `1`
 
-- keep concurrency enabled
-- use a shared per-session request budget rather than mode-specific worker counts
-- start from a small initial budget
-- reduce that budget immediately on `429`
-- recover it slowly after a sustained success streak
+That is intentionally conservative, but it matches the behavior we have actually validated against the live source.
 
-A practical policy is:
-
-- initial request budget: `2`
-- minimum budget: `1`
-- maximum budget: `4`
-- on `429`: cut the budget down
-- on long success streak: raise it by one step
-
-That gives the right behavior for both cases:
-
-- cold/full-history runs naturally converge toward the lower concurrency Patreon can actually sustain
-- delta runs can still climb to a faster level when Patreon is tolerating it
-
-So the recommendation is not “warm vs cold concurrency.” The recommendation is “adaptive request-budget concurrency that converges on Patreon’s tolerated in-flight load.”
+If we revisit higher concurrency later, it should only happen behind another real live validation pass with explicit pacing/cooldown controls, not by re-enabling optimistic budget growth by default.
