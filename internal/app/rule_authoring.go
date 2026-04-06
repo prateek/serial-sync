@@ -45,7 +45,7 @@ type SourceDumpResult struct {
 	WorkspacePath string              `json:"workspace_path"`
 	ManifestFile  string              `json:"manifest_file"`
 	SourcesFile   string              `json:"sources_file"`
-	RulesFile     string              `json:"rules_file"`
+	SeriesFile    string              `json:"series_file"`
 	Provider      string              `json:"provider"`
 	AuthProfileID string              `json:"auth_profile_id"`
 	Membership    string              `json:"membership"`
@@ -55,7 +55,7 @@ type SourceDumpResult struct {
 
 type RulesPreviewOptions struct {
 	WorkspacePath  string
-	RulesFile      string
+	SeriesFile     string
 	CreatorFilters []string
 	ShowPosts      bool
 }
@@ -72,7 +72,7 @@ type RulesPreviewCreator struct {
 type RulesPreviewResult struct {
 	RunID          string                `json:"run_id"`
 	WorkspacePath  string                `json:"workspace_path"`
-	RulesFile      string                `json:"rules_file"`
+	SeriesFile     string                `json:"series_file"`
 	TotalPosts     int                   `json:"total_posts"`
 	Materializable int                   `json:"materializable"`
 	FallbackPosts  int                   `json:"fallback_posts"`
@@ -87,7 +87,7 @@ type dumpManifest struct {
 	Membership     string              `json:"membership"`
 	CreatorFilters []string            `json:"creator_filters,omitempty"`
 	SourcesFile    string              `json:"sources_file"`
-	RulesFile      string              `json:"rules_file"`
+	SeriesFile     string              `json:"series_file"`
 	Creators       []SourceDumpCreator `json:"creators"`
 }
 
@@ -95,8 +95,8 @@ type dumpPostRecord struct {
 	Normalized domain.NormalizedRelease `json:"normalized"`
 }
 
-type rulesFileConfig struct {
-	Rules []config.RuleConfig `toml:"rules"`
+type seriesFileConfig struct {
+	Series []config.SeriesConfig `toml:"series"`
 }
 
 const sourceDumpWorkerLimit = 2
@@ -169,8 +169,8 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 	if err := writeTOMLFile(sourcesFile, sourcesSnippet); err != nil {
 		return result, err
 	}
-	rulesFile := filepath.Join(workspacePath, "rules.toml")
-	if err := os.WriteFile(rulesFile, []byte(defaultRulesScaffold), 0o644); err != nil {
+	seriesFile := filepath.Join(workspacePath, "series.toml")
+	if err := os.WriteFile(seriesFile, []byte(defaultSeriesScaffold), 0o644); err != nil {
 		return result, err
 	}
 	manifest := dumpManifest{
@@ -181,7 +181,7 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 		Membership:     result.Membership,
 		CreatorFilters: append([]string(nil), options.CreatorFilters...),
 		SourcesFile:    sourcesFile,
-		RulesFile:      rulesFile,
+		SeriesFile:     seriesFile,
 		Creators:       result.Creators,
 	}
 	manifestFile := filepath.Join(workspacePath, "manifest.json")
@@ -194,7 +194,7 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 
 	result.ManifestFile = manifestFile
 	result.SourcesFile = sourcesFile
-	result.RulesFile = rulesFile
+	result.SeriesFile = seriesFile
 	summary := fmt.Sprintf("creators=%d posts=%d workspace=%s", len(result.Creators), result.TotalPosts, workspacePath)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
@@ -327,19 +327,19 @@ func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions,
 	if err != nil {
 		return result, err
 	}
-	rulesFile := strings.TrimSpace(options.RulesFile)
-	if rulesFile == "" {
-		rulesFile = manifest.RulesFile
+	seriesFile := strings.TrimSpace(options.SeriesFile)
+	if seriesFile == "" {
+		seriesFile = manifest.SeriesFile
 	}
-	if !filepath.IsAbs(rulesFile) {
-		rulesFile = filepath.Join(workspacePath, rulesFile)
+	if !filepath.IsAbs(seriesFile) {
+		seriesFile = filepath.Join(workspacePath, seriesFile)
 	}
-	rules, err := loadRulesFile(rulesFile)
+	rules, err := loadSeriesFile(seriesFile)
 	if err != nil {
 		return result, err
 	}
 	result.WorkspacePath = workspacePath
-	result.RulesFile = rulesFile
+	result.SeriesFile = seriesFile
 	for _, creator := range manifest.Creators {
 		if !matchesDumpCreatorFilters(creator, options.CreatorFilters) {
 			continue
@@ -377,7 +377,7 @@ func FormatSourceDumpResult(result SourceDumpResult) string {
 		fmt.Sprintf("run_id=%s workspace=%s creators=%d posts=%d membership=%s", result.RunID, result.WorkspacePath, len(result.Creators), result.TotalPosts, result.Membership),
 		fmt.Sprintf("manifest=%s", result.ManifestFile),
 		fmt.Sprintf("sources=%s", result.SourcesFile),
-		fmt.Sprintf("rules=%s", result.RulesFile),
+		fmt.Sprintf("series=%s", result.SeriesFile),
 	}
 	for _, creator := range result.Creators {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\tposts=%d", creator.SourceID, creator.CreatorName, firstNonEmpty(creator.MembershipKind, "unknown"), creator.PostCount))
@@ -387,7 +387,7 @@ func FormatSourceDumpResult(result SourceDumpResult) string {
 
 func FormatRulesPreviewResult(result RulesPreviewResult, showPosts bool) string {
 	lines := []string{
-		fmt.Sprintf("run_id=%s workspace=%s rules=%s creators=%d posts=%d materializable=%d fallback=%d", result.RunID, result.WorkspacePath, result.RulesFile, len(result.Creators), result.TotalPosts, result.Materializable, result.FallbackPosts),
+		fmt.Sprintf("run_id=%s workspace=%s series=%s creators=%d posts=%d materializable=%d fallback=%d", result.RunID, result.WorkspacePath, result.SeriesFile, len(result.Creators), result.TotalPosts, result.Materializable, result.FallbackPosts),
 	}
 	for _, creator := range result.Creators {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\tposts=%d", creator.SourceID, creator.CreatorName, firstNonEmpty(creator.MembershipKind, "unknown"), creator.PostCount))
@@ -497,16 +497,16 @@ func loadDumpManifest(path string) (dumpManifest, error) {
 	return manifest, nil
 }
 
-func loadRulesFile(path string) ([]config.RuleConfig, error) {
+func loadSeriesFile(path string) ([]config.RuleConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var ruleConfig rulesFileConfig
-	if err := toml.Unmarshal(data, &ruleConfig); err != nil {
+	var fileConfig seriesFileConfig
+	if err := toml.Unmarshal(data, &fileConfig); err != nil {
 		return nil, err
 	}
-	return ruleConfig.Rules, nil
+	return config.CompileSeriesRules(fileConfig.Series), nil
 }
 
 func filterRulesBySource(rules []config.RuleConfig, sourceID string) []config.RuleConfig {
@@ -564,15 +564,15 @@ func writeTOMLFile(path string, value any) error {
 
 func workspaceReadme(path string) string {
 	return strings.TrimSpace(fmt.Sprintf(`
-# serial-sync rule workspace
+# serial-sync series workspace
 
-This directory is a local rule-authoring workspace.
+This directory is a local series-authoring workspace.
 
-- Edit rules in %s
-- Preview those rules offline with:
-  serial-sync rules preview --workspace %s --show-posts
-- Merge the resulting sources from sources.toml into your main config when you are happy with the rules.
-`, filepath.Base(filepath.Join(path, "rules.toml")), path)) + "\n"
+- Edit series in %s
+- Preview those series definitions offline with:
+  serial-sync setup preview --workspace %s --show-posts
+- Merge the resulting sources from sources.toml and series from series.toml into your main config when you are happy with the results.
+`, filepath.Base(filepath.Join(path, "series.toml")), path)) + "\n"
 }
 
 func min(a, b int) int {
@@ -582,6 +582,25 @@ func min(a, b int) int {
 	return b
 }
 
-const defaultRulesScaffold = `# Add [[rules]] entries here, then run:
-# serial-sync rules preview --workspace <workspace> --rules-file ./rules.toml --show-posts
+const defaultSeriesScaffold = `# Add [[series]] entries here, then run:
+# serial-sync setup preview --workspace <workspace> --series-file ./series.toml --show-posts
+#
+# [[series]]
+# id = "main-series"
+# title = "Main Series"
+# authors = ["Author Name"]
+#
+#   [series.output]
+#   format = "preserve"
+#   preface_mode = "none"
+#
+#   [[series.inputs]]
+#   source = "creator-id"
+#   priority = 10
+#   match_type = "title_regex"
+#   match_value = "^Main Series"
+#   release_role = "chapter"
+#   content_strategy = "attachment_preferred"
+#   attachment_glob = ["*.epub", "*.pdf"]
+#   attachment_priority = ["epub", "pdf"]
 `

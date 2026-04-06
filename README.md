@@ -14,7 +14,7 @@ docker run --rm \
   serial-sync run
 ```
 
-If you want to author rules against a local dump instead of repeatedly hitting Patreon:
+If you want to author series definitions against a local dump instead of repeatedly hitting Patreon:
 
 ```sh
 docker run --rm \
@@ -27,13 +27,13 @@ docker run --rm \
 docker run --rm \
   -v "$PWD:/work" \
   -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync setup preview --workspace /work/serial-sync-rule-workspace --rules-file /work/serial-sync-rule-workspace/rules.toml --show-posts
+  serial-sync setup preview --workspace /work/serial-sync-rule-workspace --series-file /work/serial-sync-rule-workspace/series.toml --show-posts
 ```
 
 ## What It Does
 
 - syncs releases from provider-backed sources
-- classifies them into story tracks
+- classifies them into series
 - materializes canonical artifacts on disk
 - publishes those artifacts to filesystem or exec-hook targets
 - records runs, events, and publish history in SQLite
@@ -43,7 +43,7 @@ docker run --rm \
 - Patreon is the first provider
 - live Patreon `username_password` bootstrap, TOTP-assisted login, session import, and persisted session reuse are implemented
 - Patreon membership-driven source dumping is implemented through `setup dump`
-- dump-first rule authoring is implemented through `setup dump` and `setup preview`
+- dump-first series authoring is implemented through `setup dump` and `setup preview`
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
 - the Docker image includes Chromium and Xvfb for first-run Patreon bootstrap inside the container
@@ -51,13 +51,14 @@ docker run --rm \
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
+- series output can preserve source attachments or emit EPUB/PDF, including an EPUB preface page rendered from the Patreon post text
 - static binary release packaging is configured through `.goreleaser.yml`
 
 ## More
 
 - [Developer guide](DEVELOPER.md)
 - [First source walkthrough](docs/first-source.md)
-- [Rule authoring guide](docs/rules.md)
+- [Series authoring guide](docs/rules.md)
 - [Config reference](docs/config.md)
 - [Docker quickstart](docs/docker-quickstart.md)
 - [Observability guide](docs/observability.md)
@@ -70,7 +71,7 @@ docker run --rm \
 
 The public CLI is now intentionally small:
 
-- `setup`: config, auth, source dumps, and rules preview
+- `setup`: config, auth, source dumps, and series preview
 - `run`: the normal sync-plus-publish execution path, plus `run daemon`
 - `debug`: run forensics, publish record inspection, and support bundles
 

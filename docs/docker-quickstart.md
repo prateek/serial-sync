@@ -36,7 +36,7 @@ docker run --rm \
 
 The image includes Chromium and Xvfb. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
 
-## Dump Sources For Rule Authoring
+## Dump Sources For Series Authoring
 
 After auth succeeds, dump the creators you care about into a local workspace. By default this uses paid memberships.
 
@@ -51,7 +51,7 @@ docker run --rm \
 docker run --rm \
   -v "$PWD/config.toml:/config/config.toml:ro" \
   -v "$PWD/serial-sync-rule-workspace:/work" \
-  serial-sync setup preview --workspace /work --rules-file /work/rules.toml --show-posts
+  serial-sync setup preview --workspace /work --series-file /work/series.toml --show-posts
 ```
 
 If you already have a valid Patreon session bundle, you can import it instead:

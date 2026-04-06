@@ -132,6 +132,9 @@ content_strategy = "text_post"
 	if firstRunOnce.Publish.Published != 4 || firstRunOnce.Publish.Failed != 0 {
 		t.Fatalf("unexpected run-once publish summary: %#v", firstRunOnce.Publish)
 	}
+	if publishEntries := findFiles(t, filepath.Join(tmp, "publish"), ".metadata.json"); len(publishEntries) != 0 {
+		t.Fatalf("expected published output to omit metadata sidecars, found %v", publishEntries)
+	}
 	for _, logPath := range []string{
 		filepath.Join(cfg.Runtime.LogRoot, firstRunOnce.Sync.RunID+".log"),
 		filepath.Join(cfg.Runtime.LogRoot, firstRunOnce.Sync.RunID+".jsonl"),
@@ -210,6 +213,28 @@ content_strategy = "text_post"
 	if secondRunOnce.Publish.Published != 0 || secondRunOnce.Publish.Skipped != 4 {
 		t.Fatalf("unexpected second run-once publish result: %#v", secondRunOnce.Publish)
 	}
+}
+
+func findFiles(t *testing.T, root, suffix string) []string {
+	t.Helper()
+
+	var matches []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, suffix) {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return matches
 }
 
 func TestExecPublishLifecycle(t *testing.T) {

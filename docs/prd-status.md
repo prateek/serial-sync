@@ -5,7 +5,7 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 ## Implemented
 
 - a compact public CLI organized around `setup`, `run`, and `debug`
-- `setup` covers config validation, auth bootstrap/import, source dumps, and rules preview
+- `setup` covers config validation, auth bootstrap/import, source dumps, and series preview
 - `run` covers the normal sync-plus-publish path, plus `run daemon` for interval scheduling
 - `debug` covers recent-run inspection, publish-record inspection, and support-bundle export
 - XDG-aware config loading, defaults, and container-first `/config` + `/state` roots
@@ -17,14 +17,14 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - Patreon membership-driven source dumping from active subscriptions
 - Patreon collection-style source discovery through authenticated HTML
 - fixture-backed Patreon demo inputs
-- story-track rule classification with deterministic unmatched fallback behavior
+- series-centric classification with deterministic unmatched fallback behavior
 - durable artifact planning and materialization for `text_post` and `attachment_preferred`, with lazy selected-attachment downloads
-- idempotent SQLite-backed state, run records, event records, and publish records
+- idempotent SQLite-backed state, compact run records, and publish records
 - `filesystem` publisher
 - `exec` publisher with stable environment variables and idempotent replay behavior
 - Docker packaging with Chromium, Xvfb, and `tini` for first-run auth bootstrap inside the image
 - static binary release packaging config via `.goreleaser.yml`
-- Docker quickstart, config docs, observability docs, troubleshooting docs, rule-authoring docs, hook docs, and developer docs
+- Docker quickstart, config docs, observability docs, troubleshooting docs, series-authoring docs, hook docs, and developer docs
 
 ## Partial
 
@@ -32,7 +32,7 @@ This repo now covers the first live Patreon vertical slice plus both built-in pu
 - observability now includes recent-run listing, filtered event inspection, run explanations, per-run text/JSON logs, event payload files, and daemon health/status/metrics, but richer metrics backends are still future work
 - CUE config validation exists as an optional schema layer, not as the runtime control-plane source of truth
 - daemon mode now includes source leases and local health/status endpoints, but deeper multi-replica coordination is still future work
-- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, observability docs, rule-authoring docs, and a first-source walkthrough)
+- the project posture docs are mostly in place (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, provider notes, issue templates, observability docs, series-authoring docs, and a first-source walkthrough)
 - the store seam is generic at the repository boundary, but lease-specific store contracts and alternative backends are still future work
 
 ## Remaining

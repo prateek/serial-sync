@@ -9,14 +9,16 @@ Core sections:
 - `[[auth_profiles]]`: auth bootstrap and session persistence references
 - `[[publishers]]`: downstream targets
 - `[[sources]]`: upstream sources
-- `[[rules]]`: story-track classification rules
+- `[[series]]`: canonical story/serial definitions
+- `[[series.inputs]]`: source-specific matchers that feed each series
+- `[series.output]`: preferred output format and preface behavior for a series
 
 The current MVP supports:
 
 - provider: `patreon`
 - auth modes: `fixture`, `username_password`
 - publisher kinds: `filesystem`, `exec`
-- rule match types: `tag`, `collection`, `title_regex`, `attachment_filename_regex`, `fallback`
+- matcher types: `tag`, `collection`, `title_regex`, `attachment_filename_regex`, `fallback`
 
 Live auth example:
 
@@ -54,6 +56,25 @@ provider = "patreon"
 url = "https://www.patreon.com/collection/123456"
 auth_profile = "patreon-default"
 enabled = false
+
+[[series]]
+id = "main-story"
+title = "Main Story"
+authors = ["Example Creator"]
+
+  [series.output]
+  format = "epub"
+  preface_mode = "prepend_post"
+
+  [[series.inputs]]
+  source = "example-creator"
+  priority = 10
+  match_type = "collection"
+  match_value = "Main Story"
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
 ```
 
 Fixture demo example:
@@ -97,7 +118,10 @@ Notes:
 - in the Docker image, `/config/config.toml` and `/state` are the default roots.
 - later runs reuse the saved session over plain HTTP unless Patreon forces a reauth.
 - `setup auth --import-session` can seed `session_path` from an externally generated session bundle.
-- `setup dump` writes additive `sources.toml` plus a local `rules.toml` scaffold based on the Patreon memberships tied to the selected auth profile.
+- `setup dump` writes additive `sources.toml` plus a local `series.toml` scaffold based on the Patreon memberships tied to the selected auth profile.
+- `format = "preserve"` keeps the source format when possible.
+- `format = "epub"` emits EPUB output and can prepend the Patreon post text as a front-matter page when `preface_mode = "prepend_post"` is enabled.
+- `format = "pdf"` currently requires a PDF source attachment.
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).
 

@@ -6,7 +6,7 @@ The model is:
 
 1. `sync` materializes canonical artifacts into durable local storage.
 2. `publish` replays those artifacts to one or more targets.
-3. An `exec` publisher receives stable file paths and metadata sidecars after the artifact already exists on disk.
+3. An `exec` publisher receives stable file paths plus internal metadata/normalized/raw JSON paths after the artifact already exists on disk.
 
 Minimal config:
 

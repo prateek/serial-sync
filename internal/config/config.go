@@ -26,6 +26,7 @@ type Config struct {
 	AuthProfiles []AuthProfile     `toml:"auth_profiles"`
 	Publishers   []PublisherConfig `toml:"publishers"`
 	Sources      []SourceConfig    `toml:"sources"`
+	Series       []SeriesConfig    `toml:"series"`
 	Rules        []RuleConfig      `toml:"rules"`
 }
 
@@ -73,15 +74,44 @@ type SourceConfig struct {
 	FixtureDir  string `toml:"fixture_dir"`
 }
 
+type SeriesConfig struct {
+	ID      string             `toml:"id"`
+	Title   string             `toml:"title"`
+	Authors []string           `toml:"authors"`
+	Output  SeriesOutputConfig `toml:"output"`
+	Inputs  []SeriesInputConfig `toml:"inputs"`
+}
+
+type SeriesOutputConfig struct {
+	Format      string `toml:"format"`
+	PrefaceMode string `toml:"preface_mode"`
+}
+
+type SeriesInputConfig struct {
+	Source             string   `toml:"source"`
+	Priority           int      `toml:"priority"`
+	MatchType          string   `toml:"match_type"`
+	MatchValue         string   `toml:"match_value"`
+	ReleaseRole        string   `toml:"release_role"`
+	ContentStrategy    string   `toml:"content_strategy"`
+	AttachmentGlob     []string `toml:"attachment_glob"`
+	AttachmentPriority []string `toml:"attachment_priority"`
+	AnthologyMode      bool     `toml:"anthology_mode"`
+}
+
 type RuleConfig struct {
+	SeriesID           string   `toml:"series_id"`
 	Source             string   `toml:"source"`
 	Priority           int      `toml:"priority"`
 	MatchType          string   `toml:"match_type"`
 	MatchValue         string   `toml:"match_value"`
 	TrackKey           string   `toml:"track_key"`
 	TrackName          string   `toml:"track_name"`
+	CanonicalAuthor    string   `toml:"canonical_author"`
 	ReleaseRole        string   `toml:"release_role"`
 	ContentStrategy    string   `toml:"content_strategy"`
+	OutputFormat       string   `toml:"output_format"`
+	PrefaceMode        string   `toml:"preface_mode"`
 	AttachmentGlob     []string `toml:"attachment_glob"`
 	AttachmentPriority []string `toml:"attachment_priority"`
 	AnthologyMode      bool     `toml:"anthology_mode"`
@@ -159,6 +189,7 @@ func Load(path string) (*Config, Roots, error) {
 	if err := cfg.expandPaths(roots); err != nil {
 		return nil, Roots{}, err
 	}
+	cfg.Rules = append(cfg.Rules, CompileSeriesRules(cfg.Series)...)
 	if err := cfg.Validate(); err != nil {
 		return nil, Roots{}, err
 	}
@@ -239,6 +270,7 @@ func (c *Config) Validate() error {
 	sourceIDs := map[string]struct{}{}
 	authIDs := map[string]struct{}{}
 	publisherIDs := map[string]struct{}{}
+	seriesIDs := map[string]struct{}{}
 	for _, auth := range c.AuthProfiles {
 		if auth.ID == "" {
 			return errors.New("auth profile id is required")
@@ -305,6 +337,38 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	for _, series := range c.Series {
+		if strings.TrimSpace(series.ID) == "" {
+			return errors.New("series id is required")
+		}
+		if _, exists := seriesIDs[series.ID]; exists {
+			return fmt.Errorf("duplicate series id %q", series.ID)
+		}
+		seriesIDs[series.ID] = struct{}{}
+		if strings.TrimSpace(series.Title) == "" {
+			return fmt.Errorf("series %q title is required", series.ID)
+		}
+		if err := validateOutputFormat(series.Output.Format); err != nil {
+			return fmt.Errorf("series %q output.format %q is invalid: %w", series.ID, series.Output.Format, err)
+		}
+		if err := validatePrefaceMode(series.Output.PrefaceMode); err != nil {
+			return fmt.Errorf("series %q output.preface_mode %q is invalid: %w", series.ID, series.Output.PrefaceMode, err)
+		}
+		if len(series.Inputs) == 0 {
+			return fmt.Errorf("series %q must define at least one input", series.ID)
+		}
+		for _, input := range series.Inputs {
+			if strings.TrimSpace(input.Source) == "" {
+				return fmt.Errorf("series %q input source is required", series.ID)
+			}
+			if _, ok := sourceIDs[input.Source]; !ok {
+				return fmt.Errorf("series %q references unknown source %q", series.ID, input.Source)
+			}
+			if strings.TrimSpace(input.MatchType) == "" {
+				return fmt.Errorf("series %q input for source %q must set match_type", series.ID, input.Source)
+			}
+		}
+	}
 	for _, publisher := range c.Publishers {
 		if publisher.ID == "" {
 			return errors.New("publisher id is required")
@@ -336,6 +400,12 @@ func (c *Config) Validate() error {
 		if rule.TrackKey == "" {
 			return fmt.Errorf("rule for source %q must set track_key", rule.Source)
 		}
+		if err := validateOutputFormat(rule.OutputFormat); err != nil {
+			return fmt.Errorf("rule for source %q output_format %q is invalid: %w", rule.Source, rule.OutputFormat, err)
+		}
+		if err := validatePrefaceMode(rule.PrefaceMode); err != nil {
+			return fmt.Errorf("rule for source %q preface_mode %q is invalid: %w", rule.Source, rule.PrefaceMode, err)
+		}
 	}
 	return nil
 }
@@ -363,6 +433,48 @@ func (c *Config) RulesForSource(sourceID string) []RuleConfig {
 	for _, rule := range c.Rules {
 		if rule.Source == sourceID {
 			rules = append(rules, rule)
+		}
+	}
+	return rules
+}
+
+func SeriesOutputDefaults(output SeriesOutputConfig) SeriesOutputConfig {
+	if strings.TrimSpace(output.Format) == "" {
+		output.Format = "preserve"
+	}
+	if strings.TrimSpace(output.PrefaceMode) == "" {
+		output.PrefaceMode = "none"
+	}
+	return output
+}
+
+func CompileSeriesRules(series []SeriesConfig) []RuleConfig {
+	rules := make([]RuleConfig, 0)
+	for _, item := range series {
+		output := SeriesOutputDefaults(item.Output)
+		canonicalAuthor := firstNonEmptyString(item.Authors...)
+		for inputIndex, input := range item.Inputs {
+			priority := input.Priority
+			if priority == 0 {
+				priority = 10 + (inputIndex * 10)
+			}
+			rules = append(rules, RuleConfig{
+				SeriesID:           item.ID,
+				Source:             input.Source,
+				Priority:           priority,
+				MatchType:          input.MatchType,
+				MatchValue:         input.MatchValue,
+				TrackKey:           item.ID,
+				TrackName:          item.Title,
+				CanonicalAuthor:    canonicalAuthor,
+				ReleaseRole:        input.ReleaseRole,
+				ContentStrategy:    input.ContentStrategy,
+				OutputFormat:       output.Format,
+				PrefaceMode:        output.PrefaceMode,
+				AttachmentGlob:     append([]string(nil), input.AttachmentGlob...),
+				AttachmentPriority: append([]string(nil), input.AttachmentPriority...),
+				AnthologyMode:      input.AnthologyMode,
+			})
 		}
 	}
 	return rules
@@ -469,17 +581,24 @@ url = "https://www.patreon.com/c/ExampleCreator/posts"
 auth_profile = "patreon-default"
 enabled = true
 
-[[rules]]
-source = "example-creator"
-priority = 10
-match_type = "fallback"
-match_value = ""
-track_key = "main-series"
-track_name = "Main Series"
-release_role = "chapter"
-content_strategy = "attachment_preferred"
-attachment_glob = ["*.epub", "*.pdf"]
-attachment_priority = ["epub", "pdf"]
+[[series]]
+id = "main-series"
+title = "Main Series"
+authors = ["Example Creator"]
+
+  [series.output]
+  format = "epub"
+  preface_mode = "prepend_post"
+
+  [[series.inputs]]
+  source = "example-creator"
+  priority = 10
+  match_type = "fallback"
+  match_value = ""
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
 `, logRoot, storeDSN, artifactRoot, supportRoot, sessionPath, publishPath)
 }
 
@@ -505,6 +624,33 @@ func normalizeAuthMode(mode string) string {
 
 func normalizeSchedulerMode(mode string) string {
 	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func validateOutputFormat(value string) error {
+	switch strings.ToLower(strings.TrimSpace(firstNonEmptyString(value, "preserve"))) {
+	case "preserve", "epub", "pdf":
+		return nil
+	default:
+		return fmt.Errorf("supported values are preserve, epub, pdf")
+	}
+}
+
+func validatePrefaceMode(value string) error {
+	switch strings.ToLower(strings.TrimSpace(firstNonEmptyString(value, "none"))) {
+	case "none", "prepend_post":
+		return nil
+	default:
+		return fmt.Errorf("supported values are none, prepend_post")
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func shouldUseContainerRoots() bool {

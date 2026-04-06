@@ -29,14 +29,8 @@ func PublishFilesystem(ctx context.Context, target FilesystemTarget, candidate d
 		return domain.PublishRecord{}, err
 	}
 	targetArtifactPath := filepath.Join(targetDir, candidate.Artifact.Filename)
-	targetMetadataPath := targetArtifactPath + ".metadata.json"
 	if err := copyFile(candidate.Artifact.StorageRef, targetArtifactPath); err != nil {
 		return domain.PublishRecord{}, err
-	}
-	if candidate.Artifact.MetadataRef != "" {
-		if err := copyFile(candidate.Artifact.MetadataRef, targetMetadataPath); err != nil {
-			return domain.PublishRecord{}, err
-		}
 	}
 	publishHash := hashPublish(target.ID, candidate.Artifact.SHA256, targetArtifactPath)
 	return domain.PublishRecord{

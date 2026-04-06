@@ -1,6 +1,6 @@
 # First Source Walkthrough
 
-Use this when you want the fastest path from zero config to a working Patreon source and an offline rule-authoring workspace.
+Use this when you want the fastest path from zero config to a working Patreon source and an offline series-authoring workspace.
 
 ## 1. Start with a normal config
 
@@ -9,7 +9,7 @@ Use `serial-sync setup init` or write a config manually. The minimum useful conf
 - one Patreon auth profile
 - one filesystem publisher
 - at least one enabled source
-- a rules file you will refine after inspecting a dump
+- a series file you will refine after inspecting a dump
 
 ## 2. Provide auth
 
@@ -28,7 +28,7 @@ If you already have a valid session bundle:
 serial-sync --config ./config.toml setup auth --import-session /path/to/patreon-session.json --auth-profile patreon-default
 ```
 
-## 3. Dump posts for offline rule authoring
+## 3. Dump posts for offline series authoring
 
 Start by dumping all paid memberships into a local workspace:
 
@@ -45,22 +45,22 @@ This writes:
 
 - `manifest.json`
 - `sources.toml`
-- `rules.toml`
+- `series.toml`
 - `creators/<source-id>/posts.ndjson`
 
-Preview that rules file offline:
+Preview that series file offline:
 
 ```sh
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --series-file ./serial-sync-rule-workspace/series.toml \
   --show-posts
 ```
 
 Use the dump workspace to:
 
 - copy the suggested `[[sources]]` from `sources.toml` into your real config
-- edit `rules.toml`
+- edit `series.toml`
 - iterate locally with `setup preview` until the grouped output looks right
 
 ## 4. Merge the dumped sources and sample safely
@@ -96,9 +96,9 @@ Every run also writes:
 - a text log under `runtime.log_root/<run-id>.log`
 - a JSONL log under `runtime.log_root/<run-id>.jsonl`
 
-## 7. Tighten the rules
+## 7. Tighten the series matchers
 
-Replace the draft rules in the dump workspace with source-specific matching:
+Replace the draft series matchers in the dump workspace with source-specific matching:
 
 - `tag`
 - `collection`
@@ -107,13 +107,13 @@ Replace the draft rules in the dump workspace with source-specific matching:
 
 Use the dedicated guide for examples and debugging flow:
 
-- [Rule authoring guide](rules.md)
+- [Series authoring guide](rules.md)
 
 Then rerun:
 
 ```sh
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --series-file ./serial-sync-rule-workspace/series.toml \
   --show-posts
 ```

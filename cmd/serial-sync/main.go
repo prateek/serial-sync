@@ -26,7 +26,7 @@ import (
 type CLI struct {
 	ConfigPath string `name:"config" short:"c" help:"Path to config file."`
 
-	Setup SetupCmd `cmd:"" help:"Bootstrap config, auth, and rule-authoring workspaces."`
+	Setup SetupCmd `cmd:"" help:"Bootstrap config, auth, and series-authoring workspaces."`
 	Run   RunCmd   `cmd:"" help:"Run the normal sync+publish workflow, or the daemon."`
 	Debug DebugCmd `cmd:"" help:"Inspect prior runs, publish records, and support bundles."`
 }
@@ -35,8 +35,8 @@ type SetupCmd struct {
 	Init    SetupInitCmd    `cmd:"" help:"Write an example config file."`
 	Check   SetupCheckCmd   `cmd:"" help:"Validate config and print the loaded counts. Replaces 'config validate'."`
 	Auth    SetupAuthCmd    `cmd:"" help:"Create, verify, or import provider session state. Replaces 'auth bootstrap' and 'auth import-session'."`
-	Dump    SetupDumpCmd    `cmd:"" help:"Dump creator posts into a local rule-authoring workspace. Replaces 'source dump'."`
-	Preview SetupPreviewCmd `cmd:"" help:"Preview how a rules file classifies a dumped workspace. Replaces 'rules preview'."`
+	Dump    SetupDumpCmd    `cmd:"" help:"Dump creator posts into a local series-authoring workspace. Replaces 'source dump'."`
+	Preview SetupPreviewCmd `cmd:"" help:"Preview how a series file classifies a dumped workspace."`
 }
 
 type DebugCmd struct {
@@ -72,7 +72,7 @@ type SetupDumpCmd struct {
 
 type SetupPreviewCmd struct {
 	Workspace string   `name:"workspace" help:"Path to a source dump workspace."`
-	RulesFile string   `name:"rules-file" help:"Path to a rules TOML file. Defaults to <workspace>/rules.toml."`
+	SeriesFile string  `name:"series-file" help:"Path to a series TOML file. Defaults to <workspace>/series.toml."`
 	Creators  []string `name:"creator" help:"Limit preview to specific dumped creators. Repeat the flag for multiple authors."`
 	ShowPosts bool     `name:"show-posts" help:"Include per-post classification output in text mode."`
 	Format    string   `name:"format" default:"text" enum:"text,json" help:"Output format."`
@@ -189,9 +189,9 @@ func (cmd *SetupInitCmd) Run() error {
 func (cmd *SetupCheckCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
 		fmt.Printf(
-			"config ok: %d source(s), %d rule(s), %d publisher(s)\n",
+			"config ok: %d source(s), %d series, %d publisher(s)\n",
 			len(service.Config.Sources),
-			len(service.Config.Rules),
+			len(service.Config.Series),
 			len(service.Config.Publishers),
 		)
 		return nil
@@ -231,7 +231,7 @@ func (cmd *SetupPreviewCmd) Run(cli *CLI) error {
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		result, err := service.PreviewRules(ctx, app.RulesPreviewOptions{
 			WorkspacePath:  cmd.Workspace,
-			RulesFile:      cmd.RulesFile,
+			SeriesFile:     cmd.SeriesFile,
 			CreatorFilters: trimStrings(cmd.Creators),
 			ShowPosts:      cmd.ShowPosts,
 		}, "setup preview")
@@ -496,7 +496,7 @@ func firstNonEmpty(values ...string) string {
 func newParser(cli *CLI, stdout, stderr io.Writer, exit func(int)) (*kong.Kong, error) {
 	options := []kong.Option{
 		kong.Name("serial-sync"),
-		kong.Description("Use `setup` to bootstrap config/auth/rules, `run` for execution, and `debug` for forensics."),
+		kong.Description("Use `setup` to bootstrap config/auth/series, `run` for execution, and `debug` for forensics."),
 		kong.UsageOnError(),
 		kong.Writers(stdout, stderr),
 	}
@@ -587,7 +587,7 @@ func wantsRunHelp(args []string) bool {
 func printRootHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage: serial-sync <command> [flags]
 
-Use `+"`setup`"+` to bootstrap config/auth/rules, `+"`run`"+` for execution, and `+"`debug`"+` for
+Use `+"`setup`"+` to bootstrap config/auth/series, `+"`run`"+` for execution, and `+"`debug`"+` for
 forensics.
 
 Flags:
@@ -606,12 +606,11 @@ Commands:
     and 'auth import-session'.
 
   setup dump [flags]
-    Dump creator posts into a local rule-authoring workspace. Replaces 'source
+    Dump creator posts into a local series-authoring workspace. Replaces 'source
     dump'.
 
   setup preview [flags]
-    Preview how a rules file classifies a dumped workspace. Replaces 'rules
-    preview'.
+    Preview how a series file classifies a dumped workspace.
 
   run [flags]
     Run the normal sync-plus-publish workflow.

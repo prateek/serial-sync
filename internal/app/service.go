@@ -771,6 +771,7 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		TrackKey:          decision.TrackKey,
 		ReleaseRole:       decision.ReleaseRole,
 		Strategy:          decision.ContentStrategy,
+		OutputFormat:      decision.OutputFormat,
 		ArtifactKind:      artifactPlan.ArtifactKind,
 		Filename:          artifactPlan.Filename,
 		Action:            action,
@@ -833,10 +834,13 @@ func (s *Service) resolveTrack(ctx context.Context, source domain.Source, decisi
 	if err != nil {
 		return domain.StoryTrack{}, err
 	}
+	canonicalAuthor := firstNonEmpty(decision.CanonicalAuthor, source.CreatorName)
+	seriesMeta := buildSeriesMeta(decision)
 	if existing != nil {
 		existing.TrackName = decision.TrackName
-		existing.CanonicalAuthor = source.CreatorName
-		existing.OutputPolicy = string(decision.ContentStrategy)
+		existing.CanonicalAuthor = canonicalAuthor
+		existing.SeriesMeta = seriesMeta
+		existing.OutputPolicy = string(decision.OutputFormat)
 		existing.UpdatedAt = time.Now().UTC()
 		return *existing, nil
 	}
@@ -845,11 +849,29 @@ func (s *Service) resolveTrack(ctx context.Context, source domain.Source, decisi
 		SourceID:        source.ID,
 		TrackKey:        decision.TrackKey,
 		TrackName:       decision.TrackName,
-		CanonicalAuthor: source.CreatorName,
-		OutputPolicy:    string(decision.ContentStrategy),
+		CanonicalAuthor: canonicalAuthor,
+		SeriesMeta:      seriesMeta,
+		OutputPolicy:    string(decision.OutputFormat),
 		CreatedAt:       time.Now().UTC(),
 		UpdatedAt:       time.Now().UTC(),
 	}, nil
+}
+
+func buildSeriesMeta(decision domain.TrackDecision) string {
+	meta := map[string]any{
+		"series_id":        decision.SeriesID,
+		"output_format":    decision.OutputFormat,
+		"preface_mode":     decision.PrefaceMode,
+		"content_strategy": decision.ContentStrategy,
+	}
+	if strings.TrimSpace(decision.CanonicalAuthor) != "" {
+		meta["canonical_author"] = decision.CanonicalAuthor
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (s *Service) InspectSource(ctx context.Context, id string) (*SourceInspect, error) {

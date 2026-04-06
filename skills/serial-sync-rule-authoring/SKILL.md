@@ -1,21 +1,21 @@
 ---
 name: serial-sync-rule-authoring
-description: Build and iterate Patreon rule sets using a local source dump workspace and offline preview. Use when the user wants to author, tighten, or debug serial-sync rules for Patreon creators.
+description: Build and iterate Patreon series definitions using a local source dump workspace and offline preview. Use when the user wants to author, tighten, or debug serial-sync series config for Patreon creators.
 ---
 
-# serial-sync rule authoring
+# serial-sync series authoring
 
-Use this workflow when the user wants to figure out which `[[rules]]` should classify Patreon posts into tracks.
+Use this workflow when the user wants to figure out which `[[series]]` and `[[series.inputs]]` definitions should classify Patreon posts into series.
 
 The canonical loop is:
 
 1. Ensure auth works.
 2. Dump the creators to a local workspace once.
 3. Inspect the dumped posts locally.
-4. Edit `rules.toml` in that workspace.
+4. Edit `series.toml` in that workspace.
 5. Run the offline preview.
 6. Iterate until fallback/unmatched looks acceptable.
-7. Merge the resulting `[[sources]]` and `[[rules]]` into the real config.
+7. Merge the resulting `[[sources]]` and `[[series]]` into the real config.
 
 ## Commands
 
@@ -36,12 +36,12 @@ serial-sync --config ./config.toml setup dump \
 
 This defaults to all paid creators. Use `--creator <value>` only when you want to refresh or inspect a narrower subset.
 
-Preview rules offline:
+Preview series definitions offline:
 
 ```sh
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --series-file ./serial-sync-rule-workspace/series.toml \
   --show-posts
 ```
 
@@ -51,7 +51,7 @@ The dump writes:
 
 - `manifest.json`
 - `sources.toml`
-- `rules.toml`
+- `series.toml`
 - `creators/<source-id>/source.json`
 - `creators/<source-id>/posts.ndjson`
 
@@ -76,7 +76,7 @@ PY
 rg -n "Aura Overload|Andy|AA3|AO2" ./serial-sync-rule-workspace/creators/plumparrot/posts.ndjson
 ```
 
-## Rule drafting heuristics
+## Series drafting heuristics
 
 Prefer these match types in roughly this order:
 
@@ -98,11 +98,11 @@ Use `manual` on a fallback when you want unmatched posts visible but not materia
 
 ## Iteration loop
 
-After each edit to `rules.toml`:
+After each edit to `series.toml`:
 
 1. Run `setup preview --show-posts`.
 2. Check which posts still land in fallback.
-3. Check whether any specific rule is too broad.
+3. Check whether any specific matcher is too broad.
 4. Tighten the match.
 5. Re-run preview.
 
@@ -114,10 +114,10 @@ Stop iterating when:
 
 ## Finalization
 
-When the rules look right:
+When the series config looks right:
 
 1. Copy the relevant `[[sources]]` from `sources.toml` into the real config.
-2. Copy the final `[[rules]]` from the workspace `rules.toml` into the real config.
+2. Copy the final `[[series]]` from the workspace `series.toml` into the real config.
 3. Run:
 
 ```sh

@@ -38,7 +38,7 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 ## Current Scope
 
 - Patreon supports both live auth and the fixture demo flow.
-- Patreon source dumping can enumerate paid memberships into a local rule-authoring workspace.
+- Patreon source dumping can enumerate paid memberships into a local series-authoring workspace.
 - `filesystem` and `exec` publishing are implemented.
 - the public CLI is organized around `setup`, `run`, and `debug`.
 - `run`, `setup auth`, and the single-process `run daemon` are implemented.

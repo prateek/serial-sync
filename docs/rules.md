@@ -1,24 +1,32 @@
-# Rule Authoring
+# Series Authoring
 
-Rules decide how upstream releases become story tracks, release roles, and canonical artifacts.
+Series decide how upstream releases become canonical serials, release roles, and output artifacts.
 
 ## Mental Model
 
-Each `[[rules]]` block answers three questions:
+Treat the config as three layers:
 
-1. Which releases does this rule match?
-2. Which track should those releases land in?
-3. What canonical artifact strategy should the sync choose?
+1. `[[sources]]`: how to fetch a creator feed or collection
+2. `[[series]]`: the actual story/serial you care about
+3. `[[series.inputs]]`: the source-specific matchers that feed that series
 
-Rules are applied by ascending `priority`. The first matching rule wins.
+Each `[[series.inputs]]` matcher answers:
+
+1. Which releases from this source belong to the series?
+2. What role should those releases have?
+3. Which content strategy should the sync use?
+
+The series itself owns output behavior. That is where `format` and `preface_mode` live.
+
+Matchers are applied by ascending `priority`. The first matching input wins.
 
 ## Recommended Workflow
 
 1. Run `setup dump` for the authors you care about.
-2. Edit `rules.toml` inside the dump workspace.
+2. Edit `series.toml` inside the dump workspace.
 3. Run `setup preview --show-posts` against that workspace.
-4. Tighten source-specific rules until the fallback bucket is acceptable.
-5. Merge the resulting `[[rules]]` and `[[sources]]` back into your main config.
+4. Tighten source-specific matchers until the fallback bucket is acceptable.
+5. Merge the resulting `[[series]]` and `[[sources]]` back into your main config.
 
 Example:
 
@@ -31,62 +39,107 @@ serial-sync --config ./config.toml setup dump \
 
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --rules-file ./serial-sync-rule-workspace/rules.toml \
+  --series-file ./serial-sync-rule-workspace/series.toml \
   --show-posts
 ```
 
-For agent-driven rule work, the repo also ships a local skill at `skills/serial-sync-rule-authoring/SKILL.md`.
+For agent-driven authoring, the repo also ships a local skill at `skills/serial-sync-rule-authoring/SKILL.md`.
 
-## Match Types
-
-### `tag`
-
-Best when Patreon posts carry stable author-defined tags.
+## Series Shape
 
 ```toml
-[[rules]]
-source = "plum-parrot"
-priority = 10
-match_type = "tag"
-match_value = "AA3"
-track_key = "andy-again-3"
-track_name = "Andy, Again 3"
-release_role = "chapter"
-content_strategy = "attachment_preferred"
-attachment_glob = ["*.epub", "*.pdf"]
-attachment_priority = ["epub", "pdf"]
+[[series]]
+id = "the-sixth-school"
+title = "The Sixth School"
+authors = ["BlaQQuill"]
+
+  [series.output]
+  format = "epub"
+  preface_mode = "prepend_post"
+
+  [[series.inputs]]
+  source = "blaqquill"
+  priority = 10
+  match_type = "title_regex"
+  match_value = "^The Sixth School\\."
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
+
+[[series]]
+id = "unmatched-review"
+title = "Unmatched Review"
+
+  [series.output]
+  format = "preserve"
+  preface_mode = "none"
+
+  [[series.inputs]]
+  source = "blaqquill"
+  priority = 1000
+  match_type = "fallback"
+  match_value = ""
+  release_role = "announcement"
+  content_strategy = "manual"
 ```
+
+## Match Types
 
 ### `collection`
 
 Best when the creator keeps a dedicated Patreon collection per serial.
 
 ```toml
-[[rules]]
-source = "example-creator"
-priority = 20
-match_type = "collection"
-match_value = "Main Story"
-track_key = "main-story"
-track_name = "Main Story"
-release_role = "chapter"
-content_strategy = "text_post"
+[[series]]
+id = "main-story"
+title = "Main Story"
+
+  [[series.inputs]]
+  source = "example-creator"
+  priority = 20
+  match_type = "collection"
+  match_value = "Main Story"
+  release_role = "chapter"
+  content_strategy = "text_post"
+```
+
+### `tag`
+
+Best when Patreon posts carry stable author-defined tags that are actually series-specific.
+
+```toml
+[[series]]
+id = "andy-again-3"
+title = "Andy, Again 3"
+
+  [[series.inputs]]
+  source = "plum-parrot"
+  priority = 10
+  match_type = "tag"
+  match_value = "AA3"
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
 ```
 
 ### `title_regex`
 
-Best when releases follow a stable prefix.
+Best when releases follow a stable title prefix.
 
 ```toml
-[[rules]]
-source = "actus"
-priority = 10
-match_type = "title_regex"
-match_value = "^Nightmare Realm Summoner\\s+-\\s+Chapter\\s+"
-track_key = "nightmare-realm-summoner"
-track_name = "Nightmare Realm Summoner"
-release_role = "chapter"
-content_strategy = "text_post"
+[[series]]
+id = "nightmare-realm-summoner"
+title = "Nightmare Realm Summoner"
+
+  [[series.inputs]]
+  source = "actus"
+  priority = 10
+  match_type = "title_regex"
+  match_value = "^Nightmare Realm Summoner\\s+-\\s+Chapter\\s+"
+  release_role = "chapter"
+  content_strategy = "text_post"
 ```
 
 ### `attachment_filename_regex`
@@ -94,17 +147,19 @@ content_strategy = "text_post"
 Best when post titles are noisy but attachment filenames are stable.
 
 ```toml
-[[rules]]
-source = "example-creator"
-priority = 30
-match_type = "attachment_filename_regex"
-match_value = "(?i)side[-_ ]quest.*\\.epub$"
-track_key = "side-quest"
-track_name = "Side Quest"
-release_role = "chapter"
-content_strategy = "attachment_only"
-attachment_glob = ["*.epub"]
-attachment_priority = ["epub"]
+[[series]]
+id = "side-quest"
+title = "Side Quest"
+
+  [[series.inputs]]
+  source = "example-creator"
+  priority = 30
+  match_type = "attachment_filename_regex"
+  match_value = "(?i)side[-_ ]quest.*\\.epub$"
+  release_role = "chapter"
+  content_strategy = "attachment_only"
+  attachment_glob = ["*.epub"]
+  attachment_priority = ["epub"]
 ```
 
 ### `fallback`
@@ -113,26 +168,29 @@ Use this sparingly. It matches everything that reached it.
 
 Good use:
 
-- a deliberate source-level default track while you bootstrap
+- a deliberate source-level review bucket while you bootstrap
 
 Bad use:
 
-- a broad fallback above more specific rules
+- a broad matcher above more specific inputs
 
 ```toml
-[[rules]]
-source = "example-creator"
-priority = 100
-match_type = "fallback"
-track_key = "main-series"
-track_name = "Main Series"
-release_role = "chapter"
-content_strategy = "attachment_preferred"
-attachment_glob = ["*.epub", "*.pdf"]
-attachment_priority = ["epub", "pdf"]
+[[series]]
+id = "main-series"
+title = "Main Series"
+
+  [[series.inputs]]
+  source = "example-creator"
+  priority = 100
+  match_type = "fallback"
+  match_value = ""
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
 ```
 
-If no configured rule matches, `serial-sync` still lands the release in the built-in unmatched/manual state instead of dropping it.
+If no configured matcher hits, `serial-sync` still lands the release in the built-in unmatched/manual state instead of dropping it.
 
 ## Content Strategies
 
@@ -156,22 +214,37 @@ Use when either post text or attachments are acceptable canonical sources.
 
 Use when a release should be observed and recorded but not materialized automatically.
 
+## Output Options
+
+Set output policy once per series:
+
+- `format = "preserve"`: keep the source format when possible
+- `format = "epub"`: emit EPUB output
+- `format = "pdf"`: require a PDF attachment
+
+Set preface behavior once per series:
+
+- `preface_mode = "none"`: no extra front matter
+- `preface_mode = "prepend_post"`: when the release materializes from an attachment, render the Patreon post text as a leading EPUB page before the chapter content
+
+That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
+
 ## Choosing Priorities
 
 Recommended pattern:
 
-- `10-40`: specific serial rules
+- `10-40`: specific series matchers
 - `100+`: broad source defaults
 - `1000+`: explicit cleanup fallbacks
 
-Keep related rules spaced apart so inserting a more specific rule later does not force a full renumber.
+Keep related matchers spaced apart so inserting a more specific one later does not force a full renumber.
 
 ## Debugging Misclassified Releases
 
 Useful commands:
 
 ```sh
-serial-sync --config ./config.toml setup preview --workspace ./serial-sync-rule-workspace --rules-file ./serial-sync-rule-workspace/rules.toml --show-posts
+serial-sync --config ./config.toml setup preview --workspace ./serial-sync-rule-workspace --series-file ./serial-sync-rule-workspace/series.toml --show-posts
 serial-sync --config ./config.toml run --dry-run --source example-creator
 serial-sync --config ./config.toml debug run <run-id>
 serial-sync --config ./config.toml debug events <run-id> --component classify
@@ -180,6 +253,6 @@ serial-sync --config ./config.toml debug events <run-id> --component classify
 Look for:
 
 - repeated unmatched fallback hits
-- titles or tags that suggest a tighter regex or tag rule
-- attachment-only rules that match posts with no valid attachment
-- fallback rules that are placed too early
+- titles or collections that suggest a tighter matcher
+- attachment-only matchers that hit posts with no valid attachment
+- fallback matchers that are placed too early

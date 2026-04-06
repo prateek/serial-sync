@@ -32,6 +32,21 @@ const (
 	ContentStrategyManual              ContentStrategy = "manual"
 )
 
+type OutputFormat string
+
+const (
+	OutputFormatPreserve OutputFormat = "preserve"
+	OutputFormatEPUB     OutputFormat = "epub"
+	OutputFormatPDF      OutputFormat = "pdf"
+)
+
+type PrefaceMode string
+
+const (
+	PrefaceModeNone        PrefaceMode = "none"
+	PrefaceModePrependPost PrefaceMode = "prepend_post"
+)
+
 type ArtifactState string
 
 const (
@@ -205,9 +220,13 @@ type NormalizedRelease struct {
 type TrackDecision struct {
 	TrackKey           string          `json:"track_key"`
 	TrackName          string          `json:"track_name"`
+	SeriesID           string          `json:"series_id,omitempty"`
 	RuleID             string          `json:"rule_id"`
 	ReleaseRole        ReleaseRole     `json:"release_role"`
 	ContentStrategy    ContentStrategy `json:"content_strategy"`
+	OutputFormat       OutputFormat    `json:"output_format"`
+	PrefaceMode        PrefaceMode     `json:"preface_mode"`
+	CanonicalAuthor    string          `json:"canonical_author,omitempty"`
 	AttachmentGlob     []string        `json:"attachment_glob"`
 	AttachmentPriority []string        `json:"attachment_priority"`
 	AnthologyMode      bool            `json:"anthology_mode"`
@@ -233,6 +252,7 @@ type SyncItemPlan struct {
 	TrackKey          string          `json:"track_key"`
 	ReleaseRole       ReleaseRole     `json:"release_role"`
 	Strategy          ContentStrategy `json:"strategy"`
+	OutputFormat      OutputFormat    `json:"output_format"`
 	ArtifactKind      string          `json:"artifact_kind"`
 	Filename          string          `json:"filename"`
 	Action            string          `json:"action"`

@@ -32,9 +32,13 @@ func Explain(sourceID string, release domain.NormalizedRelease, rules []config.R
 				Decision: domain.TrackDecision{
 					TrackKey:           rule.TrackKey,
 					TrackName:          fallback(rule.TrackName, rule.TrackKey),
+					SeriesID:           fallback(rule.SeriesID, rule.TrackKey),
 					RuleID:             ruleID(sourceID, idx, rule),
 					ReleaseRole:        domain.ReleaseRole(rule.ReleaseRole),
 					ContentStrategy:    domain.ContentStrategy(rule.ContentStrategy),
+					OutputFormat:       domain.OutputFormat(fallback(rule.OutputFormat, string(domain.OutputFormatPreserve))),
+					PrefaceMode:        domain.PrefaceMode(fallback(rule.PrefaceMode, string(domain.PrefaceModeNone))),
+					CanonicalAuthor:    rule.CanonicalAuthor,
 					AttachmentGlob:     append([]string(nil), rule.AttachmentGlob...),
 					AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
 					AnthologyMode:      rule.AnthologyMode,
@@ -48,9 +52,12 @@ func Explain(sourceID string, release domain.NormalizedRelease, rules []config.R
 		Decision: domain.TrackDecision{
 			TrackKey:        "unmatched",
 			TrackName:       "Unmatched",
+			SeriesID:        "unmatched",
 			RuleID:          "fallback/" + sourceID + "/unmatched",
 			ReleaseRole:     domain.ReleaseRoleUnknown,
 			ContentStrategy: domain.ContentStrategyManual,
+			OutputFormat:    domain.OutputFormatPreserve,
+			PrefaceMode:     domain.PrefaceModeNone,
 			Matched:         false,
 		},
 	}

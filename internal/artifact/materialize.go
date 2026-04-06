@@ -45,9 +45,10 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 		return domain.ArtifactPlan{}, err
 	}
 	var content []byte
-	var fileName string
+	var originalFileName string
 	var mimeType string
 	var kind string
+	var selectedAttachment bool
 	switch decision.ContentStrategy {
 	case domain.ContentStrategyAttachmentPreferred, domain.ContentStrategyAttachmentOnly:
 		if attachment, ok := classify.SelectAttachment(normalized, decision); ok {
@@ -60,9 +61,9 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 				if err != nil {
 					return domain.ArtifactPlan{}, err
 				}
-				fileName = sanitizeFileName(attachment.FileName)
+				originalFileName = attachment.FileName
 				mimeType = attachment.MIMEType
-				kind = attachmentKind(fileName, mimeType)
+				selectedAttachment = true
 				break
 			}
 		}
@@ -70,14 +71,19 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 	case domain.ContentStrategyTextPost, domain.ContentStrategyTextPlusAttachment:
 		rendered := renderHTML(normalized)
 		content = []byte(rendered)
-		fileName = fmt.Sprintf("%s-%s.html", release.ProviderReleaseID, slug(normalized.Title))
+		originalFileName = fmt.Sprintf("%s.html", slug(normalized.Title))
 		mimeType = "text/html"
-		kind = "html"
 	case domain.ContentStrategyManual:
 		return domain.ArtifactPlan{}, errors.New("manual strategy does not select a canonical artifact")
 	default:
 		return domain.ArtifactPlan{}, fmt.Errorf("unsupported content strategy %q", decision.ContentStrategy)
 	}
+	content, originalFileName, mimeType, err = applyOutputProfile(track, release, normalized, decision, content, originalFileName, mimeType, selectedAttachment)
+	if err != nil {
+		return domain.ArtifactPlan{}, err
+	}
+	fileName := canonicalFileName(track, release, normalized, originalFileName, mimeType)
+	kind = attachmentKind(fileName, mimeType)
 	sum := sha256.Sum256(content)
 	return domain.ArtifactPlan{
 		ArtifactKind:    kind,
@@ -101,7 +107,7 @@ func (m *Materializer) Materialize(ctx context.Context, source domain.Source, tr
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return domain.Artifact{}, err
 	}
-	baseName := shortHash(plan.SHA256) + "-" + plan.Filename
+	baseName := plan.Filename
 	artifactPath := filepath.Join(dir, baseName)
 	metadataPath := filepath.Join(dir, baseName+".metadata.json")
 	normalizedPath := filepath.Join(dir, baseName+".normalized.json")
@@ -147,11 +153,6 @@ func renderHTML(normalized domain.NormalizedRelease) string {
 	return "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>" + title + "</title></head><body><article><h1>" + title + "</h1>\n" + body + "\n</article></body></html>\n"
 }
 
-func sanitizeFileName(input string) string {
-	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "\n", " ", "\r", " ")
-	return replacer.Replace(strings.TrimSpace(input))
-}
-
 func slug(input string) string {
 	input = strings.ToLower(strings.TrimSpace(input))
 	var builder strings.Builder
@@ -171,13 +172,6 @@ func slug(input string) string {
 		return "release"
 	}
 	return result
-}
-
-func shortHash(input string) string {
-	if len(input) < 12 {
-		return input
-	}
-	return input[:12]
 }
 
 func attachmentKind(fileName, mimeType string) string {

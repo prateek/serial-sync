@@ -41,7 +41,7 @@ func TestDumpSourcesWritesWorkspace(t *testing.T) {
 	if !stub.lastDiscoverOptions.MetadataOnly {
 		t.Fatal("expected dump discovery to use metadata-only mode")
 	}
-	for _, path := range []string{result.ManifestFile, result.SourcesFile, result.RulesFile, result.Creators[0].SourceFile, result.Creators[0].PostsFile} {
+	for _, path := range []string{result.ManifestFile, result.SourcesFile, result.SeriesFile, result.Creators[0].SourceFile, result.Creators[0].PostsFile} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
 		}
@@ -61,32 +61,46 @@ func TestPreviewRulesUsesDumpedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rulesBody := `[[rules]]
-source = "alpha"
-priority = 10
-match_type = "title_regex"
-match_value = "^Alpha Saga"
-track_key = "alpha-saga"
-track_name = "Alpha Saga"
-release_role = "chapter"
-content_strategy = "text_post"
+	rulesBody := `[[series]]
+id = "alpha-saga"
+title = "Alpha Saga"
+authors = ["Alpha Author"]
 
-[[rules]]
-source = "alpha"
-priority = 1000
-match_type = "fallback"
-match_value = ""
-track_key = "unmatched-review"
-track_name = "Unmatched Review"
-release_role = "unknown"
-content_strategy = "manual"
+  [series.output]
+  format = "epub"
+  preface_mode = "prepend_post"
+
+  [[series.inputs]]
+  source = "alpha"
+  priority = 10
+  match_type = "title_regex"
+  match_value = "^Alpha Saga"
+  release_role = "chapter"
+  content_strategy = "text_post"
+
+[[series]]
+id = "unmatched-review"
+title = "Unmatched Review"
+authors = ["Alpha Author"]
+
+  [series.output]
+  format = "preserve"
+  preface_mode = "none"
+
+  [[series.inputs]]
+  source = "alpha"
+  priority = 1000
+  match_type = "fallback"
+  match_value = ""
+  release_role = "unknown"
+  content_strategy = "manual"
 `
-	if err := os.WriteFile(dump.RulesFile, []byte(rulesBody), 0o644); err != nil {
+	if err := os.WriteFile(dump.SeriesFile, []byte(rulesBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := service.PreviewRules(context.Background(), app.RulesPreviewOptions{
 		WorkspacePath: workspace,
-		RulesFile:     dump.RulesFile,
+		SeriesFile:    dump.SeriesFile,
 		ShowPosts:     true,
 	}, "rules preview")
 	if err != nil {

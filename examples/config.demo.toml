@@ -34,36 +34,57 @@ auth_profile = "patreon-default"
 fixture_dir = "./testdata/fixtures/patreon/actus"
 enabled = true
 
-[[rules]]
-source = "plum-parrot"
-priority = 10
-match_type = "tag"
-match_value = "AA3"
-track_key = "andy-again-3"
-track_name = "Andy, Again 3"
-release_role = "chapter"
-content_strategy = "attachment_preferred"
-attachment_glob = ["*.epub", "*.pdf"]
-attachment_priority = ["epub", "pdf"]
+[[series]]
+id = "andy-again-3"
+title = "Andy, Again 3"
+authors = ["Plum Parrot"]
 
-[[rules]]
-source = "plum-parrot"
-priority = 20
-match_type = "tag"
-match_value = "AO2"
-track_key = "aura-overload-2"
-track_name = "Aura Overload 2"
-release_role = "chapter"
-content_strategy = "attachment_preferred"
-attachment_glob = ["*.pdf"]
-attachment_priority = ["pdf"]
+  [series.output]
+  format = "epub"
+  preface_mode = "prepend_post"
 
-[[rules]]
-source = "actus"
-priority = 10
-match_type = "title_regex"
-match_value = "^Nightmare Realm Summoner\\s+-\\s+Chapter\\s+"
-track_key = "nightmare-realm-summoner"
-track_name = "Nightmare Realm Summoner"
-release_role = "chapter"
-content_strategy = "text_post"
+  [[series.inputs]]
+  source = "plum-parrot"
+  priority = 10
+  match_type = "tag"
+  match_value = "AA3"
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
+
+[[series]]
+id = "aura-overload-2"
+title = "Aura Overload 2"
+authors = ["Plum Parrot"]
+
+  [series.output]
+  format = "pdf"
+  preface_mode = "none"
+
+  [[series.inputs]]
+  source = "plum-parrot"
+  priority = 20
+  match_type = "tag"
+  match_value = "AO2"
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.pdf"]
+  attachment_priority = ["pdf"]
+
+[[series]]
+id = "nightmare-realm-summoner"
+title = "Nightmare Realm Summoner"
+authors = ["Actus"]
+
+  [series.output]
+  format = "epub"
+  preface_mode = "none"
+
+  [[series.inputs]]
+  source = "actus"
+  priority = 10
+  match_type = "title_regex"
+  match_value = "^Nightmare Realm Summoner\\s+-\\s+Chapter\\s+"
+  release_role = "chapter"
+  content_strategy = "text_post"

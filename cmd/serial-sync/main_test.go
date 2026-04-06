@@ -208,7 +208,7 @@ func TestSetupPreviewCommandShape(t *testing.T) {
 		t.Fatalf("newParser() error = %v", err)
 	}
 
-	ctx, err := parser.Parse([]string{"setup", "preview", "--workspace", "./workspace", "--rules-file", "./rules.toml", "--creator", "actus", "--show-posts", "--format", "json"})
+	ctx, err := parser.Parse([]string{"setup", "preview", "--workspace", "./workspace", "--series-file", "./series.toml", "--creator", "actus", "--show-posts", "--format", "json"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -218,8 +218,8 @@ func TestSetupPreviewCommandShape(t *testing.T) {
 	if got, want := cli.Setup.Preview.Workspace, "./workspace"; got != want {
 		t.Fatalf("cli.Setup.Preview.Workspace = %q, want %q", got, want)
 	}
-	if got, want := cli.Setup.Preview.RulesFile, "./rules.toml"; got != want {
-		t.Fatalf("cli.Setup.Preview.RulesFile = %q, want %q", got, want)
+	if got, want := cli.Setup.Preview.SeriesFile, "./series.toml"; got != want {
+		t.Fatalf("cli.Setup.Preview.SeriesFile = %q, want %q", got, want)
 	}
 	if got, want := len(cli.Setup.Preview.Creators), 1; got != want {
 		t.Fatalf("len(cli.Setup.Preview.Creators) = %d, want %d", got, want)
