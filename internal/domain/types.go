@@ -37,7 +37,6 @@ type OutputFormat string
 const (
 	OutputFormatPreserve OutputFormat = "preserve"
 	OutputFormatEPUB     OutputFormat = "epub"
-	OutputFormatPDF      OutputFormat = "pdf"
 )
 
 type PrefaceMode string

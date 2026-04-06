@@ -40,7 +40,7 @@ title = "Andy, Again 3"
 authors = ["Plum Parrot"]
 
   [series.output]
-  format = "epub"
+  format = "preserve"
   preface_mode = "prepend_post"
 
   [[series.inputs]]
@@ -59,7 +59,7 @@ title = "Aura Overload 2"
 authors = ["Plum Parrot"]
 
   [series.output]
-  format = "pdf"
+  format = "preserve"
   preface_mode = "none"
 
   [[series.inputs]]

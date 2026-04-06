@@ -32,7 +32,7 @@ func TestApplyOutputProfileWrapsEPUBWithPreface(t *testing.T) {
 			TextHTML:    "<p>Author note before the chapter.</p>",
 		},
 		domain.TrackDecision{
-			OutputFormat: domain.OutputFormatEPUB,
+			OutputFormat: domain.OutputFormatPreserve,
 			PrefaceMode:  domain.PrefaceModePrependPost,
 		},
 		original,

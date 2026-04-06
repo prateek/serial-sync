@@ -628,10 +628,10 @@ func normalizeSchedulerMode(mode string) string {
 
 func validateOutputFormat(value string) error {
 	switch strings.ToLower(strings.TrimSpace(firstNonEmptyString(value, "preserve"))) {
-	case "preserve", "epub", "pdf":
+	case "preserve", "epub":
 		return nil
 	default:
-		return fmt.Errorf("supported values are preserve, epub, pdf")
+		return fmt.Errorf("supported values are preserve, epub")
 	}
 }
 

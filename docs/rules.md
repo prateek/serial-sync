@@ -54,7 +54,7 @@ title = "The Sixth School"
 authors = ["BlaQQuill"]
 
   [series.output]
-  format = "epub"
+  format = "preserve"
   preface_mode = "prepend_post"
 
   [[series.inputs]]
@@ -220,12 +220,11 @@ Set output policy once per series:
 
 - `format = "preserve"`: keep the source format when possible
 - `format = "epub"`: emit EPUB output
-- `format = "pdf"`: require a PDF attachment
 
 Set preface behavior once per series:
 
 - `preface_mode = "none"`: no extra front matter
-- `preface_mode = "prepend_post"`: when the release materializes from an attachment, render the Patreon post text as a leading EPUB page before the chapter content
+- `preface_mode = "prepend_post"`: when the release materializes from an EPUB attachment, render the Patreon post text as a leading EPUB page before the chapter content while leaving non-EPUB attachments in their original format
 
 That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
 

@@ -16,12 +16,16 @@ func applyOutputProfile(track domain.StoryTrack, release domain.Release, normali
 
 	switch outputFormat {
 	case domain.OutputFormatPreserve:
-		return content, originalFileName, mimeType, nil
-	case domain.OutputFormatPDF:
-		if strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(originalFileName), ".pdf") {
-			return content, forceExtension(originalFileName, ".pdf"), "application/pdf", nil
+		if shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized) &&
+			(strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub")) {
+			prefaceHTML := renderPrefaceHTML(track, release, normalized)
+			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), prefaceHTML)
+			if err != nil {
+				return nil, "", "", err
+			}
+			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
 		}
-		return nil, "", "", fmt.Errorf("output format %q requires a PDF source attachment", outputFormat)
+		return content, originalFileName, mimeType, nil
 	case domain.OutputFormatEPUB:
 		prefaceHTML := ""
 		if shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized) {

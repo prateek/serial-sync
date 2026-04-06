@@ -63,7 +63,7 @@ title = "Main Story"
 authors = ["Example Creator"]
 
   [series.output]
-  format = "epub"
+  format = "preserve"
   preface_mode = "prepend_post"
 
   [[series.inputs]]
@@ -120,8 +120,8 @@ Notes:
 - `setup auth --import-session` can seed `session_path` from an externally generated session bundle.
 - `setup dump` writes additive `sources.toml` plus a local `series.toml` scaffold based on the Patreon memberships tied to the selected auth profile.
 - `format = "preserve"` keeps the source format when possible.
-- `format = "epub"` emits EPUB output and can prepend the Patreon post text as a front-matter page when `preface_mode = "prepend_post"` is enabled.
-- `format = "pdf"` currently requires a PDF source attachment.
+- `format = "preserve"` plus `preface_mode = "prepend_post"` wraps existing EPUB attachments with a front-matter page while leaving non-EPUB attachments in their original format.
+- `format = "epub"` emits EPUB output for EPUB attachments and HTML/text sources.
 
 For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).
 
