@@ -145,7 +145,7 @@ const (
 	liveFetchProgressEvery   = 25
 	patreonRetryAttempts     = 4
 	patreonRetryBaseDelay    = 500 * time.Millisecond
-	patreonRetryMaxDelay     = 4 * time.Second
+	patreonRetryMaxBackoff   = 4 * time.Second
 )
 
 type liveSyncCursor struct {
@@ -739,21 +739,22 @@ func (c *Client) getOnce(ctx context.Context, session *liveSession, requestURL, 
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		delay := retryDelay(resp.Header.Get("Retry-After"), attempt)
-		changed, snapshot := session.budget.markRateLimit()
+		update := session.budget.markRateLimit(delay)
 		reportRequestProgress(ctx, requestURL, "warn", "Patreon rate limited request; backing off", map[string]any{
 			"request_url": requestURL,
 			"status":      resp.StatusCode,
 			"attempt":     attempt,
 			"delay_ms":    delay.Milliseconds(),
-			"budget":      snapshot,
+			"budget":      update.Snapshot,
 			"retry_after": strings.TrimSpace(resp.Header.Get("Retry-After")),
 		})
-		if changed {
-			reportSourceProgress(ctx, session.sourceID, "warn", "Patreon request budget reduced", map[string]any{
+		if update.LimitReduced || update.CooldownExtended {
+			reportSourceProgress(ctx, session.sourceID, "warn", "Patreon request budget updated", map[string]any{
 				"source_id": session.sourceID,
-				"budget":    snapshot,
+				"budget":    update.Snapshot,
 				"request":   requestURL,
 				"attempt":   attempt,
+				"delay_ms":  delay.Milliseconds(),
 			})
 		}
 		return nil, domain.AuthStateAuthenticated, delay, fmt.Errorf("Patreon rate limited request with status %d for %s", resp.StatusCode, requestURL)
@@ -814,21 +815,21 @@ func retryDelay(header string, attempt int) time.Duration {
 	header = strings.TrimSpace(header)
 	if header != "" {
 		if seconds, err := strconv.Atoi(header); err == nil && seconds >= 0 {
-			return clampRetryDelay(time.Duration(seconds) * time.Second)
+			return time.Duration(seconds) * time.Second
 		}
 		if when, err := http.ParseTime(header); err == nil {
-			return clampRetryDelay(time.Until(when))
+			return max(0, time.Until(when))
 		}
 	}
-	return clampRetryDelay(backoffDelay(attempt))
+	return clampBackoffDelay(backoffDelay(attempt))
 }
 
-func clampRetryDelay(delay time.Duration) time.Duration {
+func clampBackoffDelay(delay time.Duration) time.Duration {
 	if delay <= 0 {
 		return 0
 	}
-	if delay > patreonRetryMaxDelay {
-		return patreonRetryMaxDelay
+	if delay > patreonRetryMaxBackoff {
+		return patreonRetryMaxBackoff
 	}
 	return delay
 }
@@ -840,8 +841,8 @@ func backoffDelay(attempt int) time.Duration {
 	delay := patreonRetryBaseDelay
 	for remaining := 1; remaining < attempt; remaining++ {
 		delay *= 2
-		if delay >= patreonRetryMaxDelay {
-			return patreonRetryMaxDelay
+		if delay >= patreonRetryMaxBackoff {
+			return patreonRetryMaxBackoff
 		}
 	}
 	return delay

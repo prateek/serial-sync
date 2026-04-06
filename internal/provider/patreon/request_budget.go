@@ -19,12 +19,20 @@ type requestBudget struct {
 	limit         int
 	inFlight      int
 	successStreak int
+	blockedUntil  time.Time
 }
 
 type requestBudgetSnapshot struct {
-	Limit         int `json:"limit"`
-	InFlight      int `json:"in_flight"`
-	SuccessStreak int `json:"success_streak"`
+	Limit         int    `json:"limit"`
+	InFlight      int    `json:"in_flight"`
+	SuccessStreak int    `json:"success_streak"`
+	CooldownUntil string `json:"cooldown_until,omitempty"`
+}
+
+type rateLimitUpdate struct {
+	LimitReduced     bool
+	CooldownExtended bool
+	Snapshot         requestBudgetSnapshot
 }
 
 func newRequestBudget() *requestBudget {
@@ -32,21 +40,26 @@ func newRequestBudget() *requestBudget {
 }
 
 func (b *requestBudget) acquire(ctx context.Context) (requestBudgetSnapshot, error) {
-	ticker := time.NewTicker(patreonRequestLimitPollInterval)
-	defer ticker.Stop()
 	for {
 		b.mu.Lock()
-		if b.inFlight < b.limit {
+		now := time.Now()
+		switch {
+		case b.blockedUntil.After(now):
+			wait := time.Until(b.blockedUntil)
+			b.mu.Unlock()
+			if err := sleepWithContext(ctx, wait); err != nil {
+				return requestBudgetSnapshot{}, err
+			}
+		case b.inFlight < b.limit:
 			b.inFlight++
 			snapshot := b.snapshotLocked()
 			b.mu.Unlock()
 			return snapshot, nil
-		}
-		b.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return requestBudgetSnapshot{}, ctx.Err()
-		case <-ticker.C:
+		default:
+			b.mu.Unlock()
+			if err := sleepWithContext(ctx, patreonRequestLimitPollInterval); err != nil {
+				return requestBudgetSnapshot{}, err
+			}
 		}
 	}
 }
@@ -71,16 +84,25 @@ func (b *requestBudget) markSuccess() (bool, requestBudgetSnapshot) {
 	return false, b.snapshotLocked()
 }
 
-func (b *requestBudget) markRateLimit() (bool, requestBudgetSnapshot) {
+func (b *requestBudget) markRateLimit(delay time.Duration) rateLimitUpdate {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.successStreak = 0
+	update := rateLimitUpdate{}
 	next := max(patreonRequestLimitMin, (b.limit+1)/2)
-	if next == b.limit {
-		return false, b.snapshotLocked()
+	if next != b.limit {
+		b.limit = next
+		update.LimitReduced = true
 	}
-	b.limit = next
-	return true, b.snapshotLocked()
+	if delay > 0 {
+		until := time.Now().Add(delay)
+		if until.After(b.blockedUntil) {
+			b.blockedUntil = until
+			update.CooldownExtended = true
+		}
+	}
+	update.Snapshot = b.snapshotLocked()
+	return update
 }
 
 func (b *requestBudget) workerCeiling(total int) int {
@@ -91,9 +113,13 @@ func (b *requestBudget) workerCeiling(total int) int {
 }
 
 func (b *requestBudget) snapshotLocked() requestBudgetSnapshot {
-	return requestBudgetSnapshot{
+	snapshot := requestBudgetSnapshot{
 		Limit:         b.limit,
 		InFlight:      b.inFlight,
 		SuccessStreak: b.successStreak,
 	}
+	if b.blockedUntil.After(time.Now()) {
+		snapshot.CooldownUntil = b.blockedUntil.UTC().Format(time.RFC3339Nano)
+	}
+	return snapshot
 }
