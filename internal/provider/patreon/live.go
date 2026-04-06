@@ -608,6 +608,69 @@ func (c *Client) fetchPostDocument(ctx context.Context, session *liveSession, so
 	}, domain.AuthStateAuthenticated, nil
 }
 
+func (c *Client) HydrateDumpReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, docs []provider.ReleaseDocument, fixtureDir string) ([]provider.ReleaseDocument, domain.AuthState, error) {
+	if source.FixtureDir != "" || len(docs) == 0 {
+		return docs, domain.AuthStateAuthenticated, nil
+	}
+	attachmentCount := 0
+	for _, doc := range docs {
+		for _, attachment := range doc.Normalized.Attachments {
+			if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
+				continue
+			}
+			attachmentCount++
+		}
+	}
+	if attachmentCount == 0 {
+		return docs, domain.AuthStateAuthenticated, nil
+	}
+	session, authState, err := c.newLiveDownloadSession(auth, source)
+	if err != nil {
+		return docs, authState, err
+	}
+	startedAt := time.Now()
+	lastProgress := startedAt
+	completed := 0
+	reportSourceProgress(ctx, source.ID, "info", "Patreon dump attachment hydration started", map[string]any{
+		"source_id":         source.ID,
+		"posts":             len(docs),
+		"total_attachments": attachmentCount,
+		"fixture_dir":       fixtureDir,
+	})
+	for docIndex := range docs {
+		for attachmentIndex := range docs[docIndex].Normalized.Attachments {
+			attachment := docs[docIndex].Normalized.Attachments[attachmentIndex]
+			if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
+				continue
+			}
+			targetPath := fixtureAttachmentPath(fixtureDir, docs[docIndex].Normalized.ProviderReleaseID, attachment.FileName)
+			authState, err = c.downloadLiveAttachmentToPath(ctx, session, source, &docs[docIndex].Normalized, attachmentIndex, targetPath)
+			if err != nil {
+				return docs, authState, err
+			}
+			completed++
+			if completed == attachmentCount || completed%liveFetchProgressEvery == 0 || time.Since(lastProgress) >= 10*time.Second {
+				lastProgress = time.Now()
+				reportSourceProgress(ctx, source.ID, "info", "Patreon dump attachment hydration progress", map[string]any{
+					"source_id":         source.ID,
+					"posts":             len(docs),
+					"completed":         completed,
+					"total_attachments": attachmentCount,
+					"duration_ms":       elapsedMillis(startedAt),
+				})
+			}
+		}
+	}
+	reportSourceProgress(ctx, source.ID, "info", "Patreon dump attachment hydration complete", map[string]any{
+		"source_id":         source.ID,
+		"posts":             len(docs),
+		"completed":         completed,
+		"total_attachments": attachmentCount,
+		"duration_ms":       elapsedMillis(startedAt),
+	})
+	return docs, domain.AuthStateAuthenticated, nil
+}
+
 func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision) (provider.ReleaseDocument, domain.AuthState, error) {
 	switch decision.ContentStrategy {
 	case domain.ContentStrategyAttachmentPreferred, domain.ContentStrategyAttachmentOnly:
@@ -627,25 +690,32 @@ func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile
 		strings.TrimSpace(doc.Normalized.Attachments[index].FileName) == "" {
 		return doc, domain.AuthStateAuthenticated, nil
 	}
-	bundle, err := loadSessionBundle(auth.SessionPath)
+	session, authState, err := c.newLiveDownloadSession(auth, source)
 	if err != nil {
-		return doc, domain.AuthStateReauthRequired, fmt.Errorf("load Patreon session: %w", err)
+		return doc, authState, err
 	}
-	client, err := httpClientFromSession()
-	if err != nil {
-		return doc, domain.AuthStateReauthRequired, err
-	}
-	session := &liveSession{
-		sourceID: source.ID,
-		bundle:   *bundle,
-		client:   client,
-		budget:   newRequestBudget(),
-	}
-	authState, err := c.downloadLiveAttachment(ctx, session, auth, source, &doc.Normalized, index)
+	authState, err = c.downloadLiveAttachment(ctx, session, auth, source, &doc.Normalized, index)
 	if err != nil {
 		return doc, authState, err
 	}
 	return doc, domain.AuthStateAuthenticated, nil
+}
+
+func (c *Client) newLiveDownloadSession(auth config.AuthProfile, source config.SourceConfig) (*liveSession, domain.AuthState, error) {
+	bundle, err := loadSessionBundle(auth.SessionPath)
+	if err != nil {
+		return nil, domain.AuthStateReauthRequired, fmt.Errorf("load Patreon session: %w", err)
+	}
+	client, err := httpClientFromSession()
+	if err != nil {
+		return nil, domain.AuthStateReauthRequired, err
+	}
+	return &liveSession{
+		sourceID: source.ID,
+		bundle:   *bundle,
+		client:   client,
+		budget:   newRequestBudget(),
+	}, domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSession, auth config.AuthProfile, source config.SourceConfig, release *domain.NormalizedRelease, index int) (domain.AuthState, error) {
@@ -656,11 +726,21 @@ func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSessio
 	if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
 		return domain.AuthStateAuthenticated, nil
 	}
-	targetDir := filepath.Join(sessionCacheRoot(auth.SessionPath), "attachments", source.ID, release.ProviderReleaseID)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+	targetPath := filepath.Join(sessionCacheRoot(auth.SessionPath), "attachments", source.ID, release.ProviderReleaseID, sanitizeAttachmentFileName(attachment.FileName))
+	return c.downloadLiveAttachmentToPath(ctx, session, source, release, index, targetPath)
+}
+
+func (c *Client) downloadLiveAttachmentToPath(ctx context.Context, session *liveSession, source config.SourceConfig, release *domain.NormalizedRelease, index int, targetPath string) (domain.AuthState, error) {
+	if index < 0 || index >= len(release.Attachments) {
+		return domain.AuthStateAuthenticated, nil
+	}
+	attachment := &release.Attachments[index]
+	if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
+		return domain.AuthStateAuthenticated, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return domain.AuthStateReauthRequired, err
 	}
-	targetPath := filepath.Join(targetDir, sanitizeAttachmentFileName(attachment.FileName))
 	if _, err := os.Stat(targetPath); err == nil {
 		attachment.LocalPath = targetPath
 		reportPatreonProgress(ctx, "info", "Patreon attachment cache hit", "release", release.ProviderReleaseID, map[string]any{

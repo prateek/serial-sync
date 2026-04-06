@@ -52,6 +52,12 @@ This writes:
 - `sources.toml`
 - `series.toml`
 - `creators/<source-id>/posts.ndjson`
+- `creators/<source-id>/posts/*.json`
+- `creators/<source-id>/attachments/<post-id>/...`
+
+`posts.ndjson` is the fast inspection surface. The raw `posts/` and `attachments/`
+folders make the dump a fuller offline capture that later replay/materialization
+work can reuse without re-fetching Patreon.
 
 Preview that series file offline:
 

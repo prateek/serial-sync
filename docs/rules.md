@@ -20,10 +20,13 @@ The series itself owns output behavior. That is where `format` and `preface_mode
 
 Matchers are applied by ascending `priority`. The first matching input wins.
 
+Prefer one `[[series]]` per reader-facing serial or franchise. Use multiple `[[series.inputs]]` when a creator splits that serial across Patreon-specific tags or collections like `Book 11`, `Book 12`, `AA1`, or `AA2`.
+
 ## Recommended Workflow
 
 1. Run `setup dump` for the authors you care about.
    If Patreon login is blocked by Cloudflare or another interactive challenge, finish `setup auth` first in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle.
+   That dump is now the canonical offline capture: normalized posts for authoring, raw post JSON, and downloaded attachments live together in the same workspace.
 2. Edit `series.toml` inside the dump workspace.
 3. Run `setup preview --show-posts` against that workspace.
 4. Tighten source-specific matchers until the fallback bucket is acceptable.
@@ -55,7 +58,7 @@ title = "The Sixth School"
 authors = ["BlaQQuill"]
 
   [series.output]
-  format = "preserve"
+  format = "epub"
   preface_mode = "prepend_post"
 
   [[series.inputs]]
@@ -109,21 +112,35 @@ title = "Main Story"
 
 Best when Patreon posts carry stable author-defined tags that are actually series-specific.
 
+When the tags are really book or arc markers for one larger serial, keep them as separate inputs under one shared `[[series]]` instead of creating one series per tag.
+
 ```toml
 [[series]]
-id = "andy-again-3"
-title = "Andy, Again 3"
+id = "andy-again"
+title = "Andy, Again"
 
   [[series.inputs]]
   source = "plum-parrot"
   priority = 10
   match_type = "tag"
-  match_value = "AA3"
+  match_value = "AA1"
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"
+  attachment_glob = ["*.epub", "*.pdf"]
+  attachment_priority = ["epub", "pdf"]
+
+  [[series.inputs]]
+  source = "plum-parrot"
+  priority = 11
+  match_type = "tag"
+  match_value = "AA2"
   release_role = "chapter"
   content_strategy = "attachment_preferred"
   attachment_glob = ["*.epub", "*.pdf"]
   attachment_priority = ["epub", "pdf"]
 ```
+
+Current implementation note: all inputs under one `[[series]]` compile to the same `track_key`. That keeps the config simple, but it means book identity is not first-class in the track itself. If downstream logic needs to know `Book 11` versus `Book 12`, read the normalized release metadata or artifact metadata, which still includes Patreon tags and collections.
 
 ### `title_regex`
 
@@ -215,6 +232,15 @@ Use when either post text or attachments are acceptable canonical sources.
 
 Use when a release should be observed and recorded but not materialized automatically.
 
+Recommended default uses:
+
+- polls and audience votes
+- Q&A, reflections, recaps, and planning posts
+- reference posts and changelogs
+- merch, scheduling, and general creator announcements
+
+Do not split those into separate series-extra buckets unless you explicitly want them to publish as part of the reading experience.
+
 ## Output Options
 
 Set output policy once per series:
@@ -229,8 +255,9 @@ Set preface behavior once per series:
 
 Recommended default:
 
-- if the creator already uploads good EPUBs, use `format = "preserve"` with `preface_mode = "prepend_post"`
-- if the creator mainly uploads PDFs and you want reader-friendly EPUB output, use `format = "epub"`
+- for story series, start with `format = "epub"` and `preface_mode = "prepend_post"`
+- keep `format = "preserve"` and `preface_mode = "none"` for manual/review buckets
+- downstream processors that care about book identity should read tags/collections from normalized or artifact metadata rather than splitting one franchise into separate series just to preserve `Book 11` versus `Book 12`
 
 That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
 

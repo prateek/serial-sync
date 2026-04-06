@@ -36,6 +36,8 @@ type SourceDumpCreator struct {
 	Directory      string `json:"directory"`
 	SourceFile     string `json:"source_file"`
 	PostsFile      string `json:"posts_file"`
+	RawPostsDir    string `json:"raw_posts_dir,omitempty"`
+	AttachmentsDir string `json:"attachments_dir,omitempty"`
 	Configured     bool   `json:"configured"`
 	ExistingSource string `json:"existing_source_id,omitempty"`
 }
@@ -97,6 +99,10 @@ type dumpPostRecord struct {
 
 type seriesFileConfig struct {
 	Series []config.SeriesConfig `toml:"series"`
+}
+
+type dumpReleaseHydrater interface {
+	HydrateDumpReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, docs []provider.ReleaseDocument, fixtureDir string) ([]provider.ReleaseDocument, domain.AuthState, error)
 }
 
 const sourceDumpWorkerLimit = 2
@@ -174,7 +180,7 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 		return result, err
 	}
 	manifest := dumpManifest{
-		Version:        1,
+		Version:        2,
 		GeneratedAt:    time.Now().UTC(),
 		Provider:       discovered.Provider,
 		AuthProfileID:  auth.ID,
@@ -282,10 +288,21 @@ func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, clie
 	}
 	sourceFile := filepath.Join(sourceDir, "source.json")
 	postsFile := filepath.Join(sourceDir, "posts.ndjson")
+	rawPostsDir := filepath.Join(sourceDir, "posts")
+	attachmentsDir := filepath.Join(sourceDir, "attachments")
+	if hydrater, ok := client.(dumpReleaseHydrater); ok {
+		listResult.Documents, _, err = hydrater.HydrateDumpReleases(ctx, auth, suggestion.Source, listResult.Documents, sourceDir)
+		if err != nil {
+			return dumpCreatorResult{Index: index, Err: err}
+		}
+	}
 	if err := writeJSONFile(sourceFile, suggestion); err != nil {
 		return dumpCreatorResult{Index: index, Err: err}
 	}
 	if err := writeDumpPosts(postsFile, listResult.Documents); err != nil {
+		return dumpCreatorResult{Index: index, Err: err}
+	}
+	if err := writeDumpRawPosts(rawPostsDir, listResult.Documents); err != nil {
 		return dumpCreatorResult{Index: index, Err: err}
 	}
 	return dumpCreatorResult{
@@ -300,6 +317,8 @@ func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, clie
 			Directory:      sourceDir,
 			SourceFile:     sourceFile,
 			PostsFile:      postsFile,
+			RawPostsDir:    rawPostsDir,
+			AttachmentsDir: attachmentsDir,
 			Configured:     suggestion.AlreadyConfigured,
 			ExistingSource: suggestion.ExistingSourceID,
 		},
@@ -459,6 +478,26 @@ func writeDumpPosts(path string, docs []provider.ReleaseDocument) error {
 	return writer.Flush()
 }
 
+func writeDumpRawPosts(path string, docs []provider.ReleaseDocument) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	for _, doc := range docs {
+		postID := strings.TrimSpace(doc.Normalized.ProviderReleaseID)
+		if postID == "" {
+			return fmt.Errorf("dump post is missing provider_release_id")
+		}
+		if len(doc.RawJSON) == 0 {
+			return fmt.Errorf("dump post %s is missing raw JSON", postID)
+		}
+		postPath := filepath.Join(path, postID+".json")
+		if err := os.WriteFile(postPath, doc.RawJSON, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func loadDumpPosts(path string) ([]domain.NormalizedRelease, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -566,11 +605,15 @@ func workspaceReadme(path string) string {
 	return strings.TrimSpace(fmt.Sprintf(`
 # serial-sync series workspace
 
-This directory is a local series-authoring workspace.
+This directory is a local series-authoring workspace and full Patreon dump.
 
 - Edit series in %s
+- Inspect normalized posts in creators/<source-id>/posts.ndjson
+- Raw Patreon post payloads live in creators/<source-id>/posts/
+- Downloaded source attachments live in creators/<source-id>/attachments/
 - Preview those series definitions offline with:
   serial-sync setup preview --workspace %s --show-posts
+- Creator directories are fixture-compatible captures for later offline replay/materialization work.
 - Merge the resulting sources from sources.toml and series from series.toml into your main config when you are happy with the results.
 `, filepath.Base(filepath.Join(path, "series.toml")), path)) + "\n"
 }
@@ -591,8 +634,8 @@ const defaultSeriesScaffold = `# Add [[series]] entries here, then run:
 # authors = ["Author Name"]
 #
 #   [series.output]
-#   format = "preserve"
-#   preface_mode = "none"
+#   format = "epub"
+#   preface_mode = "prepend_post"
 #
 #   [[series.inputs]]
 #   source = "creator-id"

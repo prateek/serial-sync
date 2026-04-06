@@ -262,15 +262,11 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 			if attrs.FileName == "" {
 				continue
 			}
-			localPath := filepath.Join(fixtureDir, "attachments", envelope.Data.ID, attrs.FileName)
-			if _, err := os.Stat(localPath); err != nil {
-				localPath = ""
-			}
 			attachments = append(attachments, domain.Attachment{
 				FileName:    attrs.FileName,
 				MIMEType:    attrs.MIMEType,
 				DownloadURL: attrs.DownloadURL,
-				LocalPath:   localPath,
+				LocalPath:   fixtureAttachmentLocalPath(fixtureDir, envelope.Data.ID, attrs.FileName),
 			})
 		}
 	}
@@ -314,6 +310,25 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 		CreatorName:       creatorName,
 		SourceType:        "creator_feed",
 	}, nil
+}
+
+func fixtureAttachmentLocalPath(fixtureDir, postID, fileName string) string {
+	if strings.TrimSpace(fixtureDir) == "" || strings.TrimSpace(postID) == "" || strings.TrimSpace(fileName) == "" {
+		return ""
+	}
+	for _, candidate := range []string{
+		filepath.Join(fixtureDir, "attachments", postID, fileName),
+		fixtureAttachmentPath(fixtureDir, postID, fileName),
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func fixtureAttachmentPath(fixtureDir, postID, fileName string) string {
+	return filepath.Join(fixtureDir, "attachments", postID, sanitizeAttachmentFileName(fileName))
 }
 
 type postEnvelopeIncluded struct {

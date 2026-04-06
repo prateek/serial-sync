@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,10 +42,43 @@ func TestDumpSourcesWritesWorkspace(t *testing.T) {
 	if !stub.lastDiscoverOptions.MetadataOnly {
 		t.Fatal("expected dump discovery to use metadata-only mode")
 	}
-	for _, path := range []string{result.ManifestFile, result.SourcesFile, result.SeriesFile, result.Creators[0].SourceFile, result.Creators[0].PostsFile} {
+	for _, path := range []string{
+		result.ManifestFile,
+		result.SourcesFile,
+		result.SeriesFile,
+		result.Creators[0].SourceFile,
+		result.Creators[0].PostsFile,
+		result.Creators[0].RawPostsDir,
+		result.Creators[0].AttachmentsDir,
+		filepath.Join(result.Creators[0].RawPostsDir, "a1.json"),
+		filepath.Join(result.Creators[0].AttachmentsDir, "a1", "alpha-saga-1.epub"),
+	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
 		}
+	}
+	postLines := strings.Split(strings.TrimSpace(string(mustReadFile(t, result.Creators[0].PostsFile))), "\n")
+	if len(postLines) != 3 {
+		t.Fatalf("expected 3 posts in %s, got %d", result.Creators[0].PostsFile, len(postLines))
+	}
+	var record struct {
+		Normalized domain.NormalizedRelease `json:"normalized"`
+	}
+	foundHydratedAttachment := false
+	for _, line := range postLines {
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("unmarshal dumped post: %v", err)
+		}
+		if len(record.Normalized.Attachments) == 0 {
+			continue
+		}
+		if record.Normalized.Attachments[0].LocalPath != "" {
+			foundHydratedAttachment = true
+			break
+		}
+	}
+	if !foundHydratedAttachment {
+		t.Fatal("expected dumped normalized posts to keep hydrated attachment local_path")
 	}
 }
 
@@ -163,12 +197,53 @@ func newStubRuleAuthoringProvider() *stubRuleAuthoringProvider {
 		},
 		docs: map[string][]provider.ReleaseDocument{
 			"alpha": {
-				{Normalized: domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "a1", Title: "Alpha Saga - Chapter 1", PublishedAt: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), TextHTML: "<p>One</p>"}},
-				{Normalized: domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "a2", Title: "Alpha Saga - Chapter 2", PublishedAt: time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC), TextHTML: "<p>Two</p>"}},
-				{Normalized: domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "a3", Title: "Alpha note", PublishedAt: time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC), TextHTML: ""}},
+				{
+					Normalized: domain.NormalizedRelease{
+						Provider:          "patreon",
+						ProviderReleaseID: "a1",
+						Title:             "Alpha Saga - Chapter 1",
+						PublishedAt:       time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+						TextHTML:          "<p>One</p>",
+						Attachments: []domain.Attachment{{
+							FileName:    "alpha-saga-1.epub",
+							MIMEType:    "application/epub+zip",
+							DownloadURL: "https://example.invalid/a1.epub",
+						}},
+					},
+					RawJSON: []byte(`{"id":"a1","title":"Alpha Saga - Chapter 1"}`),
+				},
+				{
+					Normalized: domain.NormalizedRelease{
+						Provider:          "patreon",
+						ProviderReleaseID: "a2",
+						Title:             "Alpha Saga - Chapter 2",
+						PublishedAt:       time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC),
+						TextHTML:          "<p>Two</p>",
+					},
+					RawJSON: []byte(`{"id":"a2","title":"Alpha Saga - Chapter 2"}`),
+				},
+				{
+					Normalized: domain.NormalizedRelease{
+						Provider:          "patreon",
+						ProviderReleaseID: "a3",
+						Title:             "Alpha note",
+						PublishedAt:       time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC),
+						TextHTML:          "",
+					},
+					RawJSON: []byte(`{"id":"a3","title":"Alpha note"}`),
+				},
 			},
 			"beta": {
-				{Normalized: domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "b1", Title: "Beta Story 1", PublishedAt: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), TextHTML: "<p>Beta</p>"}},
+				{
+					Normalized: domain.NormalizedRelease{
+						Provider:          "patreon",
+						ProviderReleaseID: "b1",
+						Title:             "Beta Story 1",
+						PublishedAt:       time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+						TextHTML:          "<p>Beta</p>",
+					},
+					RawJSON: []byte(`{"id":"b1","title":"Beta Story 1"}`),
+				},
 			},
 		},
 	}
@@ -229,6 +304,33 @@ func (s *stubRuleAuthoringProvider) ListReleases(_ context.Context, _ config.Aut
 
 func (s *stubRuleAuthoringProvider) PrepareRelease(_ context.Context, _ config.AuthProfile, _ config.SourceConfig, doc provider.ReleaseDocument, _ domain.TrackDecision) (provider.ReleaseDocument, domain.AuthState, error) {
 	return doc, domain.AuthStateAuthenticated, nil
+}
+
+func (s *stubRuleAuthoringProvider) HydrateDumpReleases(_ context.Context, _ config.AuthProfile, _ config.SourceConfig, docs []provider.ReleaseDocument, fixtureDir string) ([]provider.ReleaseDocument, domain.AuthState, error) {
+	for docIndex := range docs {
+		for attachmentIndex := range docs[docIndex].Normalized.Attachments {
+			attachment := &docs[docIndex].Normalized.Attachments[attachmentIndex]
+			targetPath := filepath.Join(fixtureDir, "attachments", docs[docIndex].Normalized.ProviderReleaseID, attachment.FileName)
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return nil, domain.AuthStateReauthRequired, err
+			}
+			if err := os.WriteFile(targetPath, []byte("epub bytes"), 0o644); err != nil {
+				return nil, domain.AuthStateReauthRequired, err
+			}
+			attachment.LocalPath = targetPath
+		}
+	}
+	return docs, domain.AuthStateAuthenticated, nil
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
 }
 
 func newRuleAuthoringService(t *testing.T, stub *stubRuleAuthoringProvider) *app.Service {

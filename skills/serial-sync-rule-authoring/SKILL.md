@@ -37,6 +37,8 @@ serial-sync --config ./config.toml setup dump \
 
 This defaults to all paid creators. Use `--creator <value>` only when you want to refresh or inspect a narrower subset.
 
+The dump is the canonical local capture. It includes normalized posts for fast authoring, raw Patreon post JSON, and downloaded attachments in the same workspace.
+
 Preview series definitions offline:
 
 ```sh
@@ -55,6 +57,8 @@ The dump writes:
 - `series.toml`
 - `creators/<source-id>/source.json`
 - `creators/<source-id>/posts.ndjson`
+- `creators/<source-id>/posts/*.json`
+- `creators/<source-id>/attachments/<post-id>/...`
 
 `posts.ndjson` contains one normalized post per line. That is the primary inspection surface.
 
@@ -89,6 +93,10 @@ Prefer these match types in roughly this order:
 
 Avoid generic tags like `Fantasy`, `Magic`, `story`, `update`, `news`, or anything that spans unrelated series.
 
+Prefer one `[[series]]` per actual franchise/serial, not one per upstream Patreon tag or one per book, unless the user explicitly wants separate publish buckets. If a creator uses tags or collections like `AA1`, `AA2`, `VOT 11`, and `VOT 12`, keep those as multiple `[[series.inputs]]` under a single series whenever they all belong to the same reader-facing serial.
+
+Important current limitation: every input under one `[[series]]` compiles to the same `track_key`. That means book identity does not become first-class track metadata today. It still survives in the normalized release payload and artifact metadata via Patreon tags and collections, so downstream processors should read those fields when they need `Book 11` or `Book 12`.
+
 Use these priority bands:
 
 - `10-40` for specific series rules
@@ -97,11 +105,13 @@ Use these priority bands:
 
 Use `manual` on a fallback when you want unmatched posts visible but not materialized automatically.
 
+By default, keep polls, Q&A posts, reflections, recaps, reference posts, changelogs, merch posts, and broad announcements in `manual` review buckets. Do not create series-extra buckets for those unless the user explicitly asks for them to materialize as part of the series.
+
 For output settings:
 
-- prefer `format = "preserve"` when the creator already uploads usable EPUBs or PDFs
-- add `preface_mode = "prepend_post"` when the source EPUB should get a rendered author-note/front-matter page
-- use `format = "epub"` when the creator mainly uploads PDFs or HTML/text posts and the user wants EPUB output
+- default story series to `format = "epub"` and `preface_mode = "prepend_post"`
+- keep manual/review buckets at `format = "preserve"` and `preface_mode = "none"`
+- `prepend_post` only matters when the release materializes from an attachment and the Patreon post has note text; plain text-post chapters stay plain converted content
 
 ## Iteration loop
 

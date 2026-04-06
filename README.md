@@ -35,6 +35,10 @@ docker run --rm \
   serial-sync setup preview --workspace /work/serial-sync-rule-workspace --series-file /work/serial-sync-rule-workspace/series.toml --show-posts
 ```
 
+That dump workspace keeps both the fast authoring view (`posts.ndjson`) and the
+full capture (`creators/<source-id>/posts/*.json` plus `attachments/`) so later
+offline replay/materialization work can reuse the same dump without re-fetching Patreon.
+
 ## What It Does
 
 - syncs releases from provider-backed sources
@@ -49,6 +53,7 @@ docker run --rm \
 - live Patreon `username_password` bootstrap, TOTP-assisted login, session import, and persisted session reuse are implemented
 - Patreon membership-driven source dumping is implemented through `setup dump`
 - dump-first series authoring is implemented through `setup dump` and `setup preview`
+- `setup dump` now captures normalized posts, raw Patreon post JSON, and downloaded attachments into the same workspace
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
 - the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
