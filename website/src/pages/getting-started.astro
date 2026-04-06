@@ -1,0 +1,103 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="Getting Started | serial-sync"
+  description="Docker-first first-success path for serial-sync."
+  currentPath="/getting-started/"
+>
+  <div class="page">
+    <section class="section">
+      <p class="eyebrow">Getting Started</p>
+      <h1>Get from zero to one successful sync path.</h1>
+      <p class="lede">
+        The intended runtime is Docker. Use the container path first, then keep the config and
+        series authoring loop local and repeatable.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>1. Build the image</h2>
+      <div class="command-block">
+        <pre><code>docker build -t serial-sync .</code></pre>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>2. Create credentials and bootstrap auth</h2>
+      <p>
+        Use the auth profile declared in your config. Keep credentials in an env file and let the
+        container perform the first login.
+      </p>
+      <div class="command-block">
+        <pre><code>printf 'PATREON_USERNAME=%s\nPATREON_PASSWORD=%s\n' "you@example.com" "your-password" &gt; patreon.env
+docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync setup auth --auth-profile patreon-default</code></pre>
+      </div>
+      <p>
+        On a headless server, use the bundled noVNC auth service instead of a host-local browser:
+        `docker compose -f ./examples/docker-compose.yml --profile auth-ui up --build serial-sync-auth`
+        then open `http://&lt;host&gt;:8080/vnc.html?autoconnect=true&resize=scale`.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>3. Dump paid creators into a local workspace</h2>
+      <p>
+        This is the authoring shortcut. Dump all paid memberships once, then refine the generated
+        series file offline.
+      </p>
+      <div class="command-block">
+        <pre><code>docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  -v "$PWD:/work" \
+  serial-sync setup dump \
+    --auth-profile patreon-default \
+    --path /work/serial-sync-rule-workspace \
+    --force</code></pre>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>4. Preview the series offline</h2>
+      <div class="command-block">
+        <pre><code>docker run --rm \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  -v "$PWD/serial-sync-rule-workspace:/work" \
+  serial-sync setup preview \
+    --workspace /work \
+    --series-file /work/series.toml \
+    --show-posts</code></pre>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>5. Dry-run, then run for real</h2>
+      <div class="command-block">
+        <pre><code>docker run --rm \
+  --env-file ./patreon.env \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync run --dry-run --source example-creator</code></pre>
+      </div>
+      <p>
+        Once the dry-run looks right, drop `--dry-run` and keep the same source and target filters.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>What success looks like</h2>
+      <ul class="note-list">
+        <li>The auth session is reused instead of forcing you through the browser every time.</li>
+        <li>The dump workspace contains posts and a starter `series.toml` you can actually edit.</li>
+        <li>The first dry-run shows the right source and the right series boundaries.</li>
+      </ul>
+    </section>
+  </div>
+</BaseLayout>

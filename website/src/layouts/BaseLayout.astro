@@ -1,0 +1,66 @@
+---
+import '../styles/global.css';
+import { withBase } from '../lib/site';
+
+const {
+  title,
+  description,
+  currentPath = '/',
+} = Astro.props;
+
+const navItems = [
+  { href: '/', label: 'Home' },
+  { href: '/getting-started/', label: 'Getting Started' },
+  { href: '/rules/', label: 'Authoring Rules' },
+  { href: '/production/', label: 'Production' },
+  { href: '/reference/', label: 'Reference' },
+  { href: '/troubleshooting/', label: 'Troubleshooting' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="site-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">SS</div>
+          <div>
+            <p class="brand-kicker">Patreon-first sync utility</p>
+            <p class="brand-title">serial-sync</p>
+          </div>
+        </div>
+        <p class="topbar-note">Public CLI: `setup`, `run`, `debug`</p>
+      </header>
+      <div class="frame">
+        <aside class="nav-rail" aria-label="Primary">
+          <nav>
+            {navItems.map((item) => (
+              <a
+                aria-current={currentPath === item.href ? 'page' : undefined}
+                class:list={{ 'nav-link': true, active: currentPath === item.href }}
+                href={withBase(item.href)}
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+          <div class="rail-card">
+            <p class="rail-card__label">Intended runtime</p>
+            <p class="rail-card__body">Docker containers with Chrome, Xvfb, optional noVNC auth, and Calibre available when needed.</p>
+          </div>
+        </aside>
+        <main id="main" class="content">
+          <slot />
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

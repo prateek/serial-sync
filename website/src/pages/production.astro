@@ -1,0 +1,87 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="Running In Production | serial-sync"
+  description="How to operate serial-sync safely in production."
+  currentPath="/production/"
+>
+  <div class="page">
+    <section class="section">
+      <p class="eyebrow">Production</p>
+      <h1>Operate it like a containerized sync system, not a browser script.</h1>
+      <p class="lede">
+        The runtime model is simple: Docker is the intended execution environment, Patreon sessions
+        are reused when possible, and live HTTP stays behind the shared request-budget path.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>What steady state looks like</h2>
+      <div class="grid-3">
+        <article class="card">
+          <p class="card__label">State</p>
+          <h3>SQLite tracks runs</h3>
+          <p>One row per run. Durable catalog state stays in SQLite; bulky payloads stay on disk.</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Logs</p>
+          <h3>Run logs land in state</h3>
+          <p>Each run writes human-readable and JSONL logs under the configured log root.</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Recovery</p>
+          <h3>Support bundles are first-class</h3>
+          <p>Use debug bundles to capture run context, logs, and payload references when something shifts.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Production loop</h2>
+      <ol class="steps">
+        <li>Keep the config declarative and source-driven.</li>
+        <li>Reuse the saved Patreon session instead of bootstrapping every cycle.</li>
+        <li>Keep live HTTP behind the request-budget and cooldown path.</li>
+        <li>Publish only after the sync plan and materialized output look right.</li>
+        <li>Inspect failures with `debug run`, `debug events`, and `debug bundle`.</li>
+      </ol>
+    </section>
+
+    <section class="section">
+      <h2>Operator commands</h2>
+      <div class="command-block">
+        <pre><code>serial-sync run --dry-run --source example-creator
+serial-sync run --source example-creator --target local-files
+serial-sync debug runs
+serial-sync debug run &lt;run-id&gt;
+serial-sync debug events &lt;run-id&gt; --component publish
+serial-sync debug bundle &lt;run-id&gt;</code></pre>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Production guardrails</h2>
+      <div class="grid-2">
+        <article class="callout">
+          <h3>Do</h3>
+          <p>Use Docker, saved sessions, dry-runs, and support bundles as the normal operator loop.</p>
+        </article>
+        <article class="callout">
+          <h3>Don’t</h3>
+          <p>Bypass the request budget, reintroduce ad hoc browser dependence, or treat browser auth as steady state.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>When auth breaks</h2>
+      <p>
+        If Patreon forces reauth, complete the challenge in the dedicated Chromium profile next to
+        the session file or import a fresh session bundle. If the challenge is a TOTP step, configure
+        `totp_secret_env` and retry.
+      </p>
+    </section>
+  </div>
+</BaseLayout>

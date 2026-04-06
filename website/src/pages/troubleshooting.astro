@@ -1,0 +1,76 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="Troubleshooting | serial-sync"
+  description="Recovery guidance for auth, classification, and publishing."
+  currentPath="/troubleshooting/"
+>
+  <div class="page">
+    <section class="section">
+      <p class="eyebrow">Troubleshooting</p>
+      <h1>Recover from auth, classification, and publish failures without guessing.</h1>
+      <p class="lede">
+        The goal is to make failure mode obvious and the next step small. When something breaks,
+        the debug commands and support bundles should tell you what changed.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>`challenge_required`</h2>
+      <p>
+        Patreon presented an interactive step the current MVP does not solve automatically. If the
+        challenge is a TOTP code, set `totp_secret_env` in your auth profile and retry. Otherwise,
+        complete the challenge in a visible browser, the bundled noVNC auth flow, or import a
+        fresh session bundle.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>`reauth_required`</h2>
+      <ul class="note-list">
+        <li>Confirm the configured Patreon credentials are present.</li>
+        <li>Check that the creator URL in the source is correct.</li>
+        <li>Verify that the saved session file still exists and is valid.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>No releases are publishing</h2>
+      <ul class="note-list">
+        <li>Run `debug run &lt;run-id&gt;` to inspect the plan and materialization details.</li>
+        <li>Run `debug events &lt;run-id&gt; --component publish` to see publish decisions.</li>
+        <li>Check whether the canonical artifact hash already exists at the target.</li>
+        <li>Inspect the `publish/` directory if you are using the filesystem publisher.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>A release matched the wrong series</h2>
+      <p>
+        Rules are applied in ascending priority. Tighten the specific matcher, move generic
+        fallbacks lower, and keep broad tags out of the main path.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>I want an offline demo</h2>
+      <p>
+        Use the fixture demo configuration or the bundled fixtures under `testdata/fixtures`.
+        The offline path should be enough to validate structure before any live Patreon fetch.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>What to run when you are stuck</h2>
+      <div class="command-block">
+        <pre><code>serial-sync setup check
+serial-sync setup dump --auth-profile patreon-default --path ./serial-sync-rule-workspace --force
+serial-sync setup preview --workspace ./serial-sync-rule-workspace --series-file ./serial-sync-rule-workspace/series.toml --show-posts
+serial-sync debug runs
+serial-sync debug bundle &lt;run-id&gt;</code></pre>
+      </div>
+    </section>
+  </div>
+</BaseLayout>

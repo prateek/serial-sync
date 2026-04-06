@@ -1,0 +1,134 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="Authoring Rules | serial-sync"
+  description="How to model Patreon creators as series and tune matcher rules offline."
+  currentPath="/rules/"
+>
+  <div class="page">
+    <section class="section">
+      <p class="eyebrow">Authoring Rules</p>
+      <h1>Model Patreon creators as series, not as raw feeds.</h1>
+      <p class="lede">
+        The dump-first loop keeps rule authoring cheap. `setup dump` gives you a local workspace,
+        `setup preview` lets you test series logic offline, and `series.output` keeps artifact
+        policy where it belongs.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>Core mental model</h2>
+      <div class="grid-3">
+        <article class="card">
+          <p class="card__label">Layer 1</p>
+          <h3>`[[sources]]`</h3>
+          <p>Defines how to fetch a Patreon creator feed or collection.</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Layer 2</p>
+          <h3>`[[series]]`</h3>
+          <p>The actual story or serial you care about.</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Layer 3</p>
+          <h3>`[[series.inputs]]`</h3>
+          <p>Source-specific matchers that decide which releases belong to that series.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Match types that matter</h2>
+      <div class="grid-2">
+        <article class="panel">
+          <h3>`collection`</h3>
+          <p>Best when the creator keeps a dedicated Patreon collection per serial.</p>
+        </article>
+        <article class="panel">
+          <h3>`tag`</h3>
+          <p>Best when the tag is stable and clearly series-specific.</p>
+        </article>
+        <article class="panel">
+          <h3>`title_regex`</h3>
+          <p>Best when the release title follows a predictable prefix or chapter pattern.</p>
+        </article>
+        <article class="panel">
+          <h3>`attachment_filename_regex`</h3>
+          <p>Best when attachment names are stable and titles are noisy.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Preferred priority shape</h2>
+      <blockquote>
+        Specific matchers first, broad source defaults next, explicit cleanup fallbacks last.
+      </blockquote>
+      <ul class="note-list">
+        <li><code>10-40</code> for specific series rules.</li>
+        <li><code>100+</code> for broad source defaults.</li>
+        <li><code>1000+</code> for cleanup fallbacks.</li>
+      </ul>
+      <p>
+        Avoid generic tags like `story`, `news`, or other labels that cross series boundaries.
+        Fallback should stay visible, not become the main matcher.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>Output policy belongs on the series</h2>
+      <div class="grid-2">
+        <article class="callout">
+          <h3>`format = "preserve"`</h3>
+          <p>Keep the creator’s source format when it is already usable.</p>
+        </article>
+        <article class="callout">
+          <h3>`format = "epub"`</h3>
+          <p>Emit EPUB output when you want PDF and text sources normalized for reading.</p>
+        </article>
+        <article class="callout">
+          <h3>`preface_mode = "prepend_post"`</h3>
+          <p>Wrap EPUB attachments with a front-matter page when the author note matters.</p>
+        </article>
+        <article class="callout">
+          <h3>`preface_mode = "none"`</h3>
+          <p>Use it when the source artifact should pass through unchanged.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Example shape</h2>
+      <div class="command-block">
+        <pre><code>[[series]]
+id = "andy-again-3"
+title = "Andy, Again 3"
+authors = ["Plum Parrot"]
+
+  [series.output]
+  format = "preserve"
+  preface_mode = "prepend_post"
+
+  [[series.inputs]]
+  source = "plum-parrot"
+  priority = 10
+  match_type = "tag"
+  match_value = "AA3"
+  release_role = "chapter"
+  content_strategy = "attachment_preferred"</code></pre>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Offline iteration loop</h2>
+      <ol class="steps">
+        <li>Dump the creators you care about into a local workspace.</li>
+        <li>Edit `series.toml` until the intended releases group together.</li>
+        <li>Run `setup preview --show-posts` and inspect the fallback bucket.</li>
+        <li>Tighten over-broad matchers before you merge anything into the main config.</li>
+      </ol>
+    </section>
+  </div>
+</BaseLayout>

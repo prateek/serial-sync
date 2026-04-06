@@ -1,0 +1,100 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout
+  title="Reference | serial-sync"
+  description="Command and config reference for serial-sync."
+  currentPath="/reference/"
+>
+  <div class="page">
+    <section class="section">
+      <p class="eyebrow">Reference</p>
+      <h1>Compact lookup for commands, config, and output modes.</h1>
+      <p class="lede">
+        Use this page when you need an exact command name or a quick reminder of where a piece of
+        behavior lives.
+      </p>
+    </section>
+
+    <section class="section">
+      <h2>CLI tree</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>setup init</code></td><td>Write an example config file.</td></tr>
+            <tr><td><code>setup check</code></td><td>Validate config and print loaded counts.</td></tr>
+            <tr><td><code>setup auth</code></td><td>Create, verify, or import provider session state.</td></tr>
+            <tr><td><code>setup dump</code></td><td>Dump creator posts into a local rule-authoring workspace.</td></tr>
+            <tr><td><code>setup preview</code></td><td>Preview how a series file classifies a dump.</td></tr>
+            <tr><td><code>run</code></td><td>Run the normal sync-plus-publish workflow.</td></tr>
+            <tr><td><code>run daemon</code></td><td>Repeat the same run pipeline on an interval.</td></tr>
+            <tr><td><code>debug runs</code></td><td>List recent runs.</td></tr>
+            <tr><td><code>debug run</code></td><td>Summarize one run for operator forensics.</td></tr>
+            <tr><td><code>debug events</code></td><td>List filtered events for a run.</td></tr>
+            <tr><td><code>debug publishes</code></td><td>List publish records.</td></tr>
+            <tr><td><code>debug publish</code></td><td>Inspect a publish record.</td></tr>
+            <tr><td><code>debug bundle</code></td><td>Export a support bundle for a run.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Config sections</h2>
+      <div class="grid-2">
+        <article class="panel">
+          <h3>`[runtime]`</h3>
+          <p>Logs, store, artifact, and support roots.</p>
+        </article>
+        <article class="panel">
+          <h3>`[scheduler]`</h3>
+          <p>Daemon interval, lease, and health settings.</p>
+        </article>
+        <article class="panel">
+          <h3>`[[auth_profiles]]`</h3>
+          <p>Auth bootstrap and session persistence references.</p>
+        </article>
+        <article class="panel">
+          <h3>`[[publishers]]`</h3>
+          <p>Filesystem or exec targets for downstream publishing.</p>
+        </article>
+        <article class="panel">
+          <h3>`[[sources]]`</h3>
+          <p>Upstream Patreon feeds or collections.</p>
+        </article>
+        <article class="panel">
+          <h3>`[[series]]` and `[[series.inputs]]`</h3>
+          <p>Canonical serial definitions and source-specific matchers.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Output modes</h2>
+      <ul class="note-list">
+        <li><code>format = "preserve"</code> keeps the source format when possible.</li>
+        <li><code>format = "epub"</code> emits EPUB output, including PDF conversion via Calibre when needed.</li>
+        <li><code>preface_mode = "prepend_post"</code> adds a front-matter page before EPUB attachment content.</li>
+        <li><code>preface_mode = "none"</code> leaves the source artifact unchanged.</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>Matcher types</h2>
+      <ul class="note-list">
+        <li><code>tag</code></li>
+        <li><code>collection</code></li>
+        <li><code>title_regex</code></li>
+        <li><code>attachment_filename_regex</code></li>
+        <li><code>fallback</code></li>
+      </ul>
+    </section>
+  </div>
+</BaseLayout>

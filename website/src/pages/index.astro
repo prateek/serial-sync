@@ -1,0 +1,96 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { withBase } from '../lib/site';
+---
+
+<BaseLayout
+  title="serial-sync | Patreon-first sync utility"
+  description="A workflow site for serial-sync, the dump-first Patreon sync utility."
+  currentPath="/"
+>
+  <div class="page">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Patreon-first. Dump-first. Docker-first.</p>
+        <h1>Turn paid creator feeds into durable serial artifacts.</h1>
+        <p class="lede">
+          serial-sync keeps the public CLI intentionally small: `setup`, `run`, and `debug`.
+          Use `setup dump` to build an offline authoring workspace, refine series rules without
+          re-hitting Patreon, then run production syncs through the intended container runtime.
+        </p>
+        <div class="hero-actions">
+          <a class="button" href={withBase('/getting-started/')}>Get started</a>
+          <a class="button-secondary" href={withBase('/rules/')}>Author rules</a>
+        </div>
+        <div class="meta-row">
+          <span class="chip">CLI: `setup` `run` `debug`</span>
+          <span class="chip">Output modes: `preserve` and `epub`</span>
+          <span class="chip">Auth: saved Patreon session reuse</span>
+        </div>
+      </div>
+      <div class="proof-panel">
+        <div class="proof-panel__label">First success loop</div>
+        <pre><code>serial-sync setup auth --source example-creator
+serial-sync setup dump --auth-profile patreon-default --path ./serial-sync-rule-workspace --force
+serial-sync setup preview --workspace ./serial-sync-rule-workspace --series-file ./serial-sync-rule-workspace/series.toml --show-posts
+serial-sync run --dry-run --source example-creator</code></pre>
+        <p>
+          The product is the loop: authenticate once, dump memberships, preview series locally,
+          then run with confidence.
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>What this repo is for</h2>
+      <p>
+        `serial-sync` is a Patreon-first sync utility. It fetches paid creator content, classifies
+        releases into series, materializes canonical artifacts, and publishes them through simple
+        downstream targets.
+      </p>
+      <div class="grid-3">
+        <article class="card">
+          <p class="card__label">1. Source</p>
+          <h3>Authenticate and discover</h3>
+          <p>Use Patreon credentials or a saved session to discover creators, collections, and memberships.</p>
+        </article>
+        <article class="card">
+          <p class="card__label">2. Author</p>
+          <h3>Dump and refine rules offline</h3>
+          <p>Write series rules against a local workspace until fallback only catches true miscellany.</p>
+        </article>
+        <article class="card">
+          <p class="card__label">3. Operate</p>
+          <h3>Run, debug, and recover</h3>
+          <p>Production syncs stay inspectable through logs, events, publish records, and support bundles.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Route map</h2>
+      <div class="grid-2">
+        <article class="panel">
+          <h3>Getting started</h3>
+          <p>One Docker-first path from config to first dry-run.</p>
+          <a class="button-secondary" href={withBase('/getting-started/')}>Open the guide</a>
+        </article>
+        <article class="panel">
+          <h3>Authoring rules</h3>
+          <p>How to use `setup dump` and `setup preview` to shape series definitions.</p>
+          <a class="button-secondary" href={withBase('/rules/')}>Open the guide</a>
+        </article>
+        <article class="panel">
+          <h3>Production</h3>
+          <p>How the sync runs safely in a container, reuses sessions, and handles recovery.</p>
+          <a class="button-secondary" href={withBase('/production/')}>Open the guide</a>
+        </article>
+        <article class="panel">
+          <h3>Reference and troubleshooting</h3>
+          <p>Use these pages when you need exact commands or recovery paths.</p>
+          <a class="button-secondary" href={withBase('/reference/')}>Open the reference</a>
+        </article>
+      </div>
+    </section>
+  </div>
+</BaseLayout>
