@@ -96,6 +96,12 @@ Use these priority bands:
 
 Use `manual` on a fallback when you want unmatched posts visible but not materialized automatically.
 
+For output settings:
+
+- prefer `format = "preserve"` when the creator already uploads usable EPUBs or PDFs
+- add `preface_mode = "prepend_post"` when the source EPUB should get a rendered author-note/front-matter page
+- use `format = "epub"` when the creator mainly uploads PDFs or HTML/text posts and the user wants EPUB output
+
 ## Iteration loop
 
 After each edit to `series.toml`:

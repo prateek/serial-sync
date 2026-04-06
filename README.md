@@ -51,7 +51,7 @@ docker run --rm \
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- series output can preserve source attachments or emit EPUB/PDF, including an EPUB preface page rendered from the Patreon post text
+- series output can preserve source attachments or emit EPUB, including a prefaced EPUB path for attachment-backed Patreon posts
 - static binary release packaging is configured through `.goreleaser.yml`
 
 ## More

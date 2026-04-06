@@ -219,12 +219,17 @@ Use when a release should be observed and recorded but not materialized automati
 Set output policy once per series:
 
 - `format = "preserve"`: keep the source format when possible
-- `format = "epub"`: emit EPUB output
+- `format = "epub"`: emit EPUB output, including PDF-to-EPUB conversion via Calibre
 
 Set preface behavior once per series:
 
 - `preface_mode = "none"`: no extra front matter
 - `preface_mode = "prepend_post"`: when the release materializes from an EPUB attachment, render the Patreon post text as a leading EPUB page before the chapter content while leaving non-EPUB attachments in their original format
+
+Recommended default:
+
+- if the creator already uploads good EPUBs, use `format = "preserve"` with `preface_mode = "prepend_post"`
+- if the creator mainly uploads PDFs and you want reader-friendly EPUB output, use `format = "epub"`
 
 That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
 
