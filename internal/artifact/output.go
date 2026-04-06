@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,19 @@ func applyOutputProfile(track domain.StoryTrack, release domain.Release, normali
 			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), prefaceHTML)
 			if err != nil {
 				return nil, "", "", err
+			}
+			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
+		}
+		if strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(originalFileName), ".pdf") {
+			epubContent, err := convertPDFToEPUB(context.Background(), content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName))
+			if err != nil {
+				return nil, "", "", err
+			}
+			if prefaceHTML != "" {
+				epubContent, err = wrapEPUBWithPreface(epubContent, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), prefaceHTML)
+				if err != nil {
+					return nil, "", "", err
+				}
 			}
 			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
 		}
