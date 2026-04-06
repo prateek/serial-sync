@@ -112,6 +112,7 @@ For output settings:
 - default story series to `format = "epub"` and `preface_mode = "prepend_post"`
 - keep manual/review buckets at `format = "preserve"` and `preface_mode = "none"`
 - `prepend_post` only matters when the release materializes from an attachment and the Patreon post has note text; plain text-post chapters stay plain converted content
+- published artifact filenames are lowercase and dash-slugged, so sample output paths may normalize spaces and punctuation
 
 ## Iteration loop
 

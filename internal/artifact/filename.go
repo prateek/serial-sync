@@ -40,7 +40,7 @@ func canonicalFileName(track domain.StoryTrack, release domain.Release, normaliz
 			parts = append(parts, fmt.Sprintf("Bk%02d", info.Book))
 		}
 		parts = append(parts, fmt.Sprintf("Ch%05d", info.Chapter), releaseToken)
-		return strings.Join(parts, " - ") + ext
+		return joinSlugged(parts...) + ext
 	}
 
 	parts := []string{trackName}
@@ -51,7 +51,22 @@ func canonicalFileName(track domain.StoryTrack, release domain.Release, normaliz
 		parts = append(parts, titlePart)
 	}
 	parts = append(parts, releaseToken)
-	return strings.Join(parts, " - ") + ext
+	return joinSlugged(parts...) + ext
+}
+
+func joinSlugged(parts ...string) string {
+	slugged := make([]string, 0, len(parts))
+	for _, part := range parts {
+		token := slug(part)
+		if token == "" {
+			continue
+		}
+		slugged = append(slugged, token)
+	}
+	if len(slugged) == 0 {
+		return "release"
+	}
+	return strings.Join(slugged, "-")
 }
 
 func detectSequenceInfo(texts ...string) sequenceInfo {

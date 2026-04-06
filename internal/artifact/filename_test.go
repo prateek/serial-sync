@@ -18,7 +18,7 @@ func TestCanonicalFileNameUsesSortableBookAndChapter(t *testing.T) {
 		"application/epub+zip",
 	)
 
-	if want := "The Sixth School - Bk02 - Ch00058 - r154707035.epub"; name != want {
+	if want := "the-sixth-school-bk02-ch00058-r154707035.epub"; name != want {
 		t.Fatalf("unexpected canonical filename: got %q want %q", name, want)
 	}
 }
@@ -34,7 +34,7 @@ func TestCanonicalFileNameParsesWordNumberChapter(t *testing.T) {
 		"application/pdf",
 	)
 
-	if want := "The Sixth School Editing Marathon - Ch00080 - r149921323.pdf"; name != want {
+	if want := "the-sixth-school-editing-marathon-ch00080-r149921323.pdf"; name != want {
 		t.Fatalf("unexpected canonical filename: got %q want %q", name, want)
 	}
 }
@@ -53,7 +53,7 @@ func TestCanonicalFileNameFallsBackToDateAndTitle(t *testing.T) {
 		"text/html",
 	)
 
-	if want := "Announcements - 2026-04-05 - Schedule update for April - rnote-42.html"; name != want {
+	if want := "announcements-2026-04-05-schedule-update-for-april-rnote-42.html"; name != want {
 		t.Fatalf("unexpected canonical filename: got %q want %q", name, want)
 	}
 }

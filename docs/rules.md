@@ -258,6 +258,7 @@ Recommended default:
 - for story series, start with `format = "epub"` and `preface_mode = "prepend_post"`
 - keep `format = "preserve"` and `preface_mode = "none"` for manual/review buckets
 - downstream processors that care about book identity should read tags/collections from normalized or artifact metadata rather than splitting one franchise into separate series just to preserve `Book 11` versus `Book 12`
+- published filenames are lowercase and dash-slugged, so shell use and URL/path handling stay predictable
 
 That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
 

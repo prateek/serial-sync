@@ -62,6 +62,7 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
 - series output can preserve source attachments or emit EPUB, including a prefaced EPUB path for attachment-backed Patreon posts
+- published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
 - static binary release packaging is configured through `.goreleaser.yml`
 
 ## More
