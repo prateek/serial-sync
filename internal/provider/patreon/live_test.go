@@ -366,7 +366,7 @@ func TestListReleasesUsesStoredCursorLookback(t *testing.T) {
 	}
 }
 
-func TestListReleasesRespectsSingleRequestBudget(t *testing.T) {
+func TestListReleasesAdaptsToRequestBudget(t *testing.T) {
 	t.Parallel()
 
 	postIDs := []string{"8", "7", "6", "5", "4", "3", "2", "1"}
@@ -396,8 +396,8 @@ func TestListReleasesRespectsSingleRequestBudget(t *testing.T) {
 	if got, want := len(result.Documents), len(postIDs); got != want {
 		t.Fatalf("len(docs) = %d, want %d", got, want)
 	}
-	if got := atomic.LoadInt32(rateLimits); got != 0 {
-		t.Fatalf("rate limits = %d, want 0 with a single in-flight request budget", got)
+	if got := atomic.LoadInt32(rateLimits); got == 0 {
+		t.Fatal("expected adaptive budget test server to trigger at least one rate limit")
 	}
 }
 

@@ -2,93 +2,99 @@
 
 ## Question
 
-Should `serial-sync` fetch Patreon post details concurrently during live sync, or is the concurrency causing enough `429` responses that the default should be serial or nearly serial?
+At what in-flight Patreon detail-request count do live `plum-parrot` syncs start to trip real `429` rate limits, and which request-budget default gives the best end-to-end behavior?
 
 ## Method
 
-I used the new live run instrumentation from April 5, 2026 against the real `plum-parrot` source with env-only Patreon auth and a fresh runtime workspace:
+I ran a live matrix against the same real `plum-parrot` Patreon source using env-only auth, fresh runtime state for each cold sync, and the new provider progress instrumentation.
 
-- config: `/tmp/serial-sync-live-check-bl5T3t/config.toml`
-- session bundle: `/tmp/serial-sync-live-check-bl5T3t/state/sessions/patreon-default.json`
-- run id: `run_954a3b81-feb8-48a8-8953-14bf80128e0d`
+The comparison points were:
 
-I did not run a second matrix of live experiments at different worker counts because the account was already hitting rate limits hard enough that back-to-back comparison runs would mostly measure cooldown behavior instead of steady fetch capacity. The recommendation below is based on the completed instrumented run plus the product constraint that initial backfills can be slower, while steady-state incremental runs should be reliable and cheap.
+- serialized baseline `1 -> 1`
+- fixed `2 -> 2`
+- fixed `3 -> 3`
+- adaptive `2 -> 4`
 
-## Observed Behavior
+The meaningful live workspaces were:
 
-Feed pagination was not the problem.
+- `1 -> 1`: `/tmp/serial-sync-live-e2e-serial.U9xwjM`
+- `2 -> 2`: `/tmp/serial-sync-live-e2e-fixed2.Zi1HJX`
+- `3 -> 3`: `/tmp/serial-sync-live-e2e-fixed3.iGtOwT`
+- adaptive `2 -> 4`: `/tmp/serial-sync-live-e2e-adaptive.NOOJIO`
 
-- `29` feed pages fetched
-- `572` post ids discovered
-- feed pagination duration: `30.4s`
+## Results
 
-The detail-fetch phase was the problem.
+### `1 -> 1`
 
-- detail fetch started immediately after feed pagination
-- first `429` arrived on the first retry attempt with `Retry-After: 60`
-- worker limit in this run: `4`
-- total detail-progress checkpoints emitted: `23`
-- total `429` backoff events emitted: `344`
-- total post-detail failures emitted: `81`
-- run finished failed after about `4m11s`
+- full sync succeeded
+- sync duration: about `3m56s`
+- `429` events: `0`
+- immediate incremental rerun: about `10.9s`
 
-The important shape is:
+### `2 -> 2`
 
-1. the feed scan completed cleanly
-2. detail fetch progressed quickly at first
-3. after enough concurrent detail requests accumulated, the provider entered a heavy `429` regime
-4. retries/backoff dominated the rest of the run and the run still failed
+- full sync succeeded
+- sync duration: about `2m23s`
+- `429` events: `0`
 
-## Follow-up Validation
+This is the fastest clean run in the matrix.
 
-After the adaptive-budget experiment, I reran the same live `plum-parrot` path with the request budget hard-capped to a single in-flight Patreon request:
+### `3 -> 3`
 
-- fresh runtime workspace: `/tmp/serial-sync-live-e2e-serial.U9xwjM`
-- `setup auth`: succeeded
-- first `run sync`: succeeded in `3m56s`
-- first `run publish`: succeeded in `0.19s`
-- immediate second `run sync`: succeeded in `10.9s`
-- immediate second `run publish`: succeeded in `0.006s`
+- full sync succeeded
+- sync duration: about `2m32s`
+- `429` events: `1`
+- Patreon returned `Retry-After: 60`
 
-The first full-history run completed without the earlier `429` storm:
+The exact `429` payload shows the request was rate-limited while there were `3` detail requests in flight:
 
-- `572` posts discovered
-- `572` releases classified
-- `25` artifacts materialized
-- `25` artifacts published
-- no detail-fetch failures
+```json
+{
+  "budget": {
+    "limit": 2,
+    "in_flight": 3
+  },
+  "delay_ms": 60000,
+  "retry_after": "60",
+  "status": 429
+}
+```
 
-The immediate second run stayed incremental:
+Important nuance: the snapshot is captured after the budget reduction, so the run had already reached `3` in flight when Patreon pushed back.
 
-- `25` posts discovered
-- `0` changed
-- `25` unchanged
-- `0` artifacts materialized
-- `0` artifacts published
+### Adaptive `2 -> 4`
+
+- full sync succeeded
+- sync duration: about `4m43s`
+- `429` events: `3`
+- each `429` carried `Retry-After: 60`
+
+The first recorded `429` happened after the client had already ramped up to `4` in-flight detail requests.
 
 ## Interpretation
 
-For Patreon, the important product requirement is reliability, not maximizing cold-sync throughput.
+For this source and account, the boundary is clear enough:
 
-The validated behavior is:
+- `2` concurrent detail requests completed cleanly
+- `3` concurrent detail requests can already trigger real `429`s
+- `4` concurrent detail requests make the rate limiting materially worse
 
-- a single in-flight request is reliable for full-history fetches
-- incremental runs are already fast enough without concurrency
-- the earlier adaptive policy still climbed back into a bad `429` regime on real traffic
+So the answer is:
 
-So the question is no longer theoretical. We have an end-to-end live result showing that the serialized client works acceptably for both:
+- no, we did not see rate limiting at `2`
+- yes, we did see rate limiting at `3`
+- and `4` is clearly worse than `3`
 
-- first-run backfills
-- steady-state incremental syncs
+`3 -> 3` still completed, but it only did so by paying a full one-minute server cooldown. That made it slower than `2 -> 2`, even though its pre-rate-limit fetch speed was higher.
 
 ## Recommendation
 
-Keep the Patreon live client serialized for now:
+Use a fixed Patreon request budget of:
 
-- initial request budget: `1`
+- initial request budget: `2`
 - minimum request budget: `1`
-- maximum request budget: `1`
+- maximum request budget: `2`
 
-That is intentionally conservative, but it matches the behavior we have actually validated against the live source.
+This is the highest clean setting validated so far. It improves cold full-history sync time significantly over `1 -> 1` without entering the `429` regime that starts at `3`.
 
-If we revisit higher concurrency later, it should only happen behind another real live validation pass with explicit pacing/cooldown controls, not by re-enabling optimistic budget growth by default.
+If we revisit higher concurrency later, it should be behind another explicit live experiment, not as an adaptive default.

@@ -8,8 +8,8 @@ import (
 
 const (
 	patreonRequestLimitMin              = 1
-	patreonRequestLimitInitial          = 1
-	patreonRequestLimitMax              = 1
+	patreonRequestLimitInitial          = 2
+	patreonRequestLimitMax              = 2
 	patreonRequestLimitSuccessThreshold = 32
 	patreonRequestLimitPollInterval     = 25 * time.Millisecond
 )
