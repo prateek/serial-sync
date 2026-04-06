@@ -213,7 +213,9 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 	if len(suggestions) == 0 {
 		return nil, nil
 	}
-	workerCount := min(len(suggestions), sourceDumpWorkerLimit)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workerCount := min(len(suggestions), dumpWorkerLimit(client))
 	jobs := make(chan int)
 	results := make(chan dumpCreatorResult, len(suggestions))
 	var wg sync.WaitGroup
@@ -222,15 +224,24 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
+				if err := ctx.Err(); err != nil {
+					return
+				}
 				results <- s.dumpCreator(ctx, auth, client, creatorsDir, index, suggestions[index])
 			}
 		}()
 	}
 	go func() {
+		defer close(jobs)
 		for index := range len(suggestions) {
-			jobs <- index
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- index:
+			}
 		}
-		close(jobs)
+	}()
+	go func() {
 		wg.Wait()
 		close(results)
 	}()
@@ -239,6 +250,7 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 	for item := range results {
 		if item.Err != nil && firstErr == nil {
 			firstErr = item.Err
+			cancel()
 		}
 		ordered[item.Index] = item
 	}
@@ -246,6 +258,17 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 		return nil, firstErr
 	}
 	return ordered, nil
+}
+
+func dumpWorkerLimit(client provider.Client) int {
+	// Patreon uses per-session request budgeting inside each live client. Running
+	// multiple creator dumps in parallel stacks those budgets and reintroduces
+	// account-level 429s during one-shot authoring dumps, so keep creator dumps
+	// serialized for that provider.
+	if client != nil && client.Name() == "patreon" {
+		return 1
+	}
+	return sourceDumpWorkerLimit
 }
 
 func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, client provider.Client, creatorsDir string, index int, suggestion provider.SourceSuggestion) dumpCreatorResult {
