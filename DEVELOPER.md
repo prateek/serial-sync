@@ -21,6 +21,8 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml setup auth
 go run ./cmd/serial-sync --config ./examples/config.demo.toml setup dump --auth-profile patreon-default --path ./serial-sync-rule-workspace --force
 ```
 
+The `internal/artifact` tests shell out to `epubcheck` and Calibre's `ebook-convert`, so both must be on `PATH`. On macOS, `brew install epubcheck` and install Calibre; on Linux, `scripts/install-epubcheck` installs the same pinned EPUBCheck release the Docker image and CI use.
+
 ## Generated Assets
 
 ```sh

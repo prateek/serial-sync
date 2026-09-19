@@ -16,12 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     calibre \
     chromium \
     chromium-sandbox \
+    default-jre-headless \
     fluxbox \
     fonts-liberation \
     gosu \
     gnupg \
     novnc \
     tini \
+    unzip \
     websockify \
     wget \
     x11vnc \
@@ -37,6 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && groupadd --gid 10001 serialsync \
   && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/serialsync --shell /bin/bash serialsync \
   && mkdir -p /config /state /work
+COPY scripts/install-epubcheck /tmp/install-epubcheck
+RUN /tmp/install-epubcheck && rm /tmp/install-epubcheck
 WORKDIR /work
 COPY --from=build /out/serial-sync /usr/local/bin/serial-sync
 COPY scripts/container/google-chrome /usr/local/bin/google-chrome

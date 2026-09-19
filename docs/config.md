@@ -111,7 +111,7 @@ Notes:
 
 - `session_path` stores the persisted Patreon cookie bundle.
 - `log_root` stores per-run text logs, JSONL logs, and event payload files.
-- `totp_secret_env` is optional and only needed when Patreon asks for an authenticator-app code that can be satisfied with TOTP.
+- `totp_secret_env` is optional and only needed when Patreon asks for an authenticator-app code that can be satisfied with TOTP. The variable can hold the bare base32 secret or a full `otpauth://totp/...` URI, such as the one `op read` returns for a 1Password one-time password field. A URI's `period`, `digits`, and `algorithm` parameters are honored.
 - live bootstrap also keeps a dedicated Chromium profile beside that session file for reauth and challenge retries.
 - `lease_ttl` controls how long a daemon source lease survives if the worker crashes before it can release it.
 - `health_addr` controls the daemon’s local `/healthz`, `/status`, and `/metrics` listener.
@@ -124,9 +124,11 @@ Notes:
 - if Patreon presents a Cloudflare or other interactive challenge, complete `setup auth` in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle before returning to the Docker run path.
 - `format = "preserve"` keeps the source format when possible.
 - `format = "preserve"` plus `preface_mode = "prepend_post"` wraps existing EPUB attachments with a front-matter page while leaving non-EPUB attachments in their original format.
-- `format = "epub"` emits EPUB output for EPUB attachments, HTML/text sources, and PDF attachments via Calibre's `ebook-convert`.
+- `format = "epub"` emits EPUB output for HTML/text sources and PDF attachments via Calibre's `ebook-convert`; existing EPUB attachments are passed through unless `preface_mode = "prepend_post"` wraps them.
+- `format = "epub"` plus `preface_mode = "prepend_post"` adds the Patreon post text to EPUB attachments and to PDF attachments after conversion.
+- EPUBs generated, converted, or wrapped by serial-sync are checked as ZIP/OCF/package documents during planning and must pass EPUBCheck before they are stored. Unchanged pass-through attachments stay byte-preserving. Native, non-Docker runs that produce EPUB output need `epubcheck` on `PATH`. Use `scripts/validate-epubs <published-root> <report-dir>` when you want a full EPUBCheck pass over a published folder.
 - published artifact filenames are lowercase, dash-slugged, and derived from track name, sequence/date, and release id.
 
-For a full runnable example, use [config.demo.toml](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/examples/config.demo.toml).
+For a full runnable example, use [config.demo.toml](../examples/config.demo.toml).
 
-For real-world rule patterns, use [rules.md](/Users/prateek/code/experiments/2026-04-03-calibre-setup/serial-sync/docs/rules.md).
+For real-world rule patterns, use [rules.md](rules.md).

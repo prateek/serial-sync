@@ -1304,3 +1304,45 @@ func writeTestSessionBundle(t *testing.T, path string, baseURL string) {
 		t.Fatalf("saveSessionBundle() error = %v", err)
 	}
 }
+
+func TestGenerateTOTPCodeAcceptsSecretOrOTPAuthURI(t *testing.T) {
+	t.Parallel()
+
+	// RFC 6238 / RFC 4226 reference secrets, base32-encoded.
+	const sha1Secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+	const sha256Secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA"
+	at := time.Unix(59, 0).UTC()
+
+	check := func(value, want string) {
+		t.Helper()
+		got, err := generateTOTPCode(value, at)
+		if err != nil {
+			t.Fatalf("generateTOTPCode(%q) error = %v", value, err)
+		}
+		if got != want {
+			t.Fatalf("generateTOTPCode(%q) = %q, want %q", value, got, want)
+		}
+	}
+	check(sha1Secret, "287082")
+	check("otpauth://totp/Patreon:reader@example.com?secret="+sha1Secret+"&issuer=Patreon", "287082")
+	check("otpauth://totp/Patreon?secret="+sha1Secret+"&digits=8", "94287082")
+	check("otpauth://totp/Patreon?secret="+sha256Secret+"&algorithm=SHA256&digits=8", "46119246")
+	check("otpauth://totp/Patreon?secret="+sha1Secret+"&period=60", "755224")
+
+	checkErr := func(value, wantSubstring string) {
+		t.Helper()
+		_, err := generateTOTPCode(value, at)
+		if err == nil {
+			t.Fatalf("generateTOTPCode(%q) error = nil, want error containing %q", value, wantSubstring)
+		}
+		if !strings.Contains(err.Error(), wantSubstring) {
+			t.Fatalf("generateTOTPCode(%q) error = %q, want it to contain %q", value, err, wantSubstring)
+		}
+		if strings.Contains(err.Error(), "LEAKCANARY") {
+			t.Fatalf("generateTOTPCode(%q) error leaks the secret: %q", value, err)
+		}
+	}
+	checkErr("otpauth://hotp/Patreon?secret="+sha1Secret+"&counter=0", "totp")
+	checkErr("otpauth://totp/Patreon?issuer=Patreon", "secret")
+	checkErr("otpauth://totp/%zz?secret=LEAKCANARY", "otpauth")
+}

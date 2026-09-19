@@ -34,7 +34,7 @@ docker run --rm \
   serial-sync setup auth
 ```
 
-The image includes Chromium and Xvfb. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
+The image includes Chromium, Xvfb, Calibre, and EPUBCheck. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
 
 The browser still runs as the unprivileged `serialsync` user inside the container. By default the bundled image keeps Chromium on `--no-sandbox` because many container runtimes block the namespace sandbox. If your runtime supports Chromium's sandbox cleanly, override `SERIAL_SYNC_CHROME_NO_SANDBOX=false`.
 

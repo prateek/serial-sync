@@ -19,6 +19,7 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
 	"github.com/prateek/serial-sync/internal/classify"
@@ -1180,9 +1181,9 @@ func maybeCompleteTOTPChallenge(ctx context.Context, auth config.AuthProfile) (b
 	if secret == "" {
 		return false, nil
 	}
-	code, err := totp.GenerateCode(secret, time.Now().UTC())
+	code, err := generateTOTPCode(secret, time.Now().UTC())
 	if err != nil {
-		return false, fmt.Errorf("generate Patreon TOTP code: %w", err)
+		return false, fmt.Errorf("generate Patreon TOTP code from %s: %w", auth.TOTPSecretEnv, err)
 	}
 	if err := chromedp.Run(ctx,
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
@@ -1198,6 +1199,31 @@ func maybeCompleteTOTPChallenge(ctx context.Context, auth config.AuthProfile) (b
 		}
 	}
 	return true, nil
+}
+
+// generateTOTPCode accepts a bare base32 secret or an otpauth://totp URI, the
+// form password managers such as 1Password export, and honors the URI's period,
+// digits, and algorithm.
+func generateTOTPCode(value string, now time.Time) (string, error) {
+	if !strings.HasPrefix(strings.ToLower(value), "otpauth://") {
+		return totp.GenerateCode(value, now)
+	}
+	key, err := otp.NewKeyFromURL(value)
+	if err != nil {
+		// url.Parse errors quote the input, which would leak the secret.
+		return "", errors.New("TOTP value is not a valid otpauth:// URI")
+	}
+	if !strings.EqualFold(key.Type(), "totp") {
+		return "", fmt.Errorf("otpauth URI type %q is not supported; use a totp URI", key.Type())
+	}
+	if key.Secret() == "" {
+		return "", errors.New("otpauth URI has no secret parameter")
+	}
+	return totp.GenerateCodeCustom(key.Secret(), now, totp.ValidateOpts{
+		Period:    uint(key.Period()),
+		Digits:    key.Digits(),
+		Algorithm: key.Algorithm(),
+	})
 }
 
 func resolveChromiumBinary() string {

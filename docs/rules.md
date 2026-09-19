@@ -43,7 +43,7 @@ serial-sync --config ./config.toml setup dump \
 
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --series-file ./serial-sync-rule-workspace/series.toml \
+  --series-file series.toml \
   --show-posts
 ```
 
@@ -246,12 +246,12 @@ Do not split those into separate series-extra buckets unless you explicitly want
 Set output policy once per series:
 
 - `format = "preserve"`: keep the source format when possible
-- `format = "epub"`: emit EPUB output, including PDF-to-EPUB conversion via Calibre
+- `format = "epub"`: emit EPUB output for HTML/text sources and PDF attachments via Calibre; existing EPUB attachments are passed through unless wrapped
 
 Set preface behavior once per series:
 
 - `preface_mode = "none"`: no extra front matter
-- `preface_mode = "prepend_post"`: when the release materializes from an EPUB attachment, render the Patreon post text as a leading EPUB page before the chapter content while leaving non-EPUB attachments in their original format
+- `preface_mode = "prepend_post"`: render the Patreon post text as a leading EPUB page for attachment-backed EPUB output. With `format = "preserve"`, only existing EPUB attachments are wrapped; with `format = "epub"`, EPUB attachments are wrapped and PDF attachments are converted first, then wrapped.
 
 Recommended default:
 
@@ -259,6 +259,14 @@ Recommended default:
 - keep `format = "preserve"` and `preface_mode = "none"` for manual/review buckets
 - downstream processors that care about book identity should read tags/collections from normalized or artifact metadata rather than splitting one franchise into separate series just to preserve `Book 11` versus `Book 12`
 - published filenames are lowercase and dash-slugged, so shell use and URL/path handling stay predictable
+
+EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Unchanged pass-through EPUB attachments stay byte-preserving.
+
+For a full EPUBCheck sweep after publishing, run:
+
+```sh
+scripts/validate-epubs ~/.local/state/serial-sync/published/<source-id> ~/.local/state/serial-sync/support/epubcheck-<source-id>
+```
 
 That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
 
@@ -277,7 +285,7 @@ Keep related matchers spaced apart so inserting a more specific one later does n
 Useful commands:
 
 ```sh
-serial-sync --config ./config.toml setup preview --workspace ./serial-sync-rule-workspace --series-file ./serial-sync-rule-workspace/series.toml --show-posts
+serial-sync --config ./config.toml setup preview --workspace ./serial-sync-rule-workspace --series-file series.toml --show-posts
 serial-sync --config ./config.toml run --dry-run --source example-creator
 serial-sync --config ./config.toml debug run <run-id>
 serial-sync --config ./config.toml debug events <run-id> --component classify

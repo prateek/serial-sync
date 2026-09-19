@@ -78,7 +78,8 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 	default:
 		return domain.ArtifactPlan{}, fmt.Errorf("unsupported content strategy %q", decision.ContentStrategy)
 	}
-	content, originalFileName, mimeType, err = applyOutputProfile(track, release, normalized, decision, content, originalFileName, mimeType, selectedAttachment)
+	validateEPUBCheck := false
+	content, originalFileName, mimeType, validateEPUBCheck, err = applyOutputProfile(track, release, normalized, decision, content, originalFileName, mimeType, selectedAttachment)
 	if err != nil {
 		return domain.ArtifactPlan{}, err
 	}
@@ -86,14 +87,15 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 	kind = attachmentKind(fileName, mimeType)
 	sum := sha256.Sum256(content)
 	return domain.ArtifactPlan{
-		ArtifactKind:    kind,
-		Filename:        fileName,
-		MIMEType:        mimeType,
-		SHA256:          hex.EncodeToString(sum[:]),
-		SelectedContent: content,
-		MetadataJSON:    metadataJSON,
-		NormalizedJSON:  normalizedJSON,
-		RawJSON:         append([]byte(nil), rawJSON...),
+		ArtifactKind:      kind,
+		Filename:          fileName,
+		MIMEType:          mimeType,
+		SHA256:            hex.EncodeToString(sum[:]),
+		ValidateEPUBCheck: validateEPUBCheck,
+		SelectedContent:   content,
+		MetadataJSON:      metadataJSON,
+		NormalizedJSON:    normalizedJSON,
+		RawJSON:           append([]byte(nil), rawJSON...),
 	}, nil
 }
 
@@ -112,6 +114,11 @@ func (m *Materializer) Materialize(ctx context.Context, source domain.Source, tr
 	metadataPath := filepath.Join(dir, baseName+".metadata.json")
 	normalizedPath := filepath.Join(dir, baseName+".normalized.json")
 	rawPath := filepath.Join(dir, baseName+".raw.json")
+	if plan.ValidateEPUBCheck {
+		if err := validateEPUBArchive(plan.SelectedContent); err != nil {
+			return domain.Artifact{}, err
+		}
+	}
 	if err := os.WriteFile(artifactPath, plan.SelectedContent, 0o644); err != nil {
 		return domain.Artifact{}, err
 	}

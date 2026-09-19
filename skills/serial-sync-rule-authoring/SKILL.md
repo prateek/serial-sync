@@ -44,7 +44,7 @@ Preview series definitions offline:
 ```sh
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --series-file ./serial-sync-rule-workspace/series.toml \
+  --series-file series.toml \
   --show-posts
 ```
 
@@ -111,8 +111,10 @@ For output settings:
 
 - default story series to `format = "epub"` and `preface_mode = "prepend_post"`
 - keep manual/review buckets at `format = "preserve"` and `preface_mode = "none"`
-- `prepend_post` only matters when the release materializes from an attachment and the Patreon post has note text; plain text-post chapters stay plain converted content
+- `prepend_post` only matters when the release materializes from an attachment and the Patreon post has note text; in `format = "epub"` it wraps EPUB attachments and PDF attachments after Calibre conversion, while plain text-post chapters stay plain converted content
 - published artifact filenames are lowercase and dash-slugged, so sample output paths may normalize spaces and punctuation
+- generated, converted, and wrapped EPUBs must pass EPUBCheck before storage; unchanged pass-through EPUB attachments stay byte-preserving
+- after publishing EPUB output, run `scripts/validate-epubs <published-source-root> <report-dir>` when you need a report over the whole published folder
 
 ## Iteration loop
 

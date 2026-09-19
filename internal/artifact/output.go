@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
-func applyOutputProfile(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, content []byte, originalFileName, mimeType string, selectedAttachment bool) ([]byte, string, string, error) {
+func applyOutputProfile(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, content []byte, originalFileName, mimeType string, selectedAttachment bool) ([]byte, string, string, bool, error) {
 	outputFormat := decision.OutputFormat
 	if outputFormat == "" {
 		outputFormat = domain.OutputFormatPreserve
@@ -20,37 +22,40 @@ func applyOutputProfile(track domain.StoryTrack, release domain.Release, normali
 		if shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized) &&
 			(strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub")) {
 			prefaceHTML := renderPrefaceHTML(track, release, normalized)
-			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), prefaceHTML)
+			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), prefaceHTML)
 			if err != nil {
-				return nil, "", "", err
+				return nil, "", "", false, err
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
+			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
 		}
-		return content, originalFileName, mimeType, nil
+		return content, originalFileName, mimeType, false, nil
 	case domain.OutputFormatEPUB:
 		prefaceHTML := ""
 		if shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized) {
 			prefaceHTML = renderPrefaceHTML(track, release, normalized)
 		}
 		if strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub") {
-			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), prefaceHTML)
-			if err != nil {
-				return nil, "", "", err
+			if prefaceHTML == "" {
+				return content, forceExtension(originalFileName, ".epub"), "application/epub+zip", false, nil
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
+			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), prefaceHTML)
+			if err != nil {
+				return nil, "", "", false, err
+			}
+			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
 		}
 		if strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(originalFileName), ".pdf") {
-			epubContent, err := convertPDFToEPUB(context.Background(), content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName))
+			epubContent, err := convertPDFToEPUB(context.Background(), content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release))
 			if err != nil {
-				return nil, "", "", err
+				return nil, "", "", false, err
 			}
 			if prefaceHTML != "" {
-				epubContent, err = wrapEPUBWithPreface(epubContent, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), prefaceHTML)
+				epubContent, err = wrapEPUBWithPreface(epubContent, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), prefaceHTML)
 				if err != nil {
-					return nil, "", "", err
+					return nil, "", "", false, err
 				}
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
+			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
 		}
 		if strings.EqualFold(strings.TrimSpace(mimeType), "text/html") {
 			chapters := []epubChapter{{
@@ -65,15 +70,15 @@ func applyOutputProfile(track domain.StoryTrack, release domain.Release, normali
 					BodyHTML: prefaceHTML,
 				}}, chapters...)
 			}
-			epubContent, err := buildSimpleEPUB(track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), chapters)
+			epubContent, err := buildSimpleEPUB(track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), chapters)
 			if err != nil {
-				return nil, "", "", err
+				return nil, "", "", false, err
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", nil
+			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
 		}
-		return nil, "", "", fmt.Errorf("output format %q is only supported for EPUB attachments or HTML/text sources", outputFormat)
+		return nil, "", "", false, fmt.Errorf("output format %q is only supported for EPUB attachments or HTML/text sources", outputFormat)
 	default:
-		return nil, "", "", fmt.Errorf("unsupported output format %q", outputFormat)
+		return nil, "", "", false, fmt.Errorf("unsupported output format %q", outputFormat)
 	}
 }
 
@@ -97,7 +102,7 @@ func renderPrefaceHTML(track domain.StoryTrack, release domain.Release, normaliz
 	}
 	heading := escapeHTML(firstNonEmptyString(track.TrackName, normalized.Title))
 	subheading := escapeHTML(release.Title)
-	return "<!doctype html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta charset=\"utf-8\"/><title>Preface</title></head><body><section><h1>" + heading + "</h1><h2>" + subheading + "</h2>" + body + "</section></body></html>\n"
+	return "<section><h1>" + heading + "</h1><h2>" + subheading + "</h2>" + body + "</section>"
 }
 
 func forceExtension(fileName, ext string) string {
@@ -115,4 +120,37 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func epubIdentifierForRelease(release domain.Release, title string) string {
+	seed := firstNonEmptyString(
+		scopedReleaseIdentity("provider", release.SourceID, release.ProviderReleaseID),
+		scopedReleaseIdentity("url", release.SourceID, release.URL),
+		release.ID,
+		title,
+		"serial-sync-release",
+	)
+	return "urn:uuid:" + uuid.NewSHA1(uuid.NameSpaceURL, []byte("serial-sync:"+seed)).String()
+}
+
+func scopedReleaseIdentity(kind, sourceID, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return kind + ":" + value
+	}
+	return kind + ":" + sourceID + ":" + value
+}
+
+func epubModifiedForRelease(release domain.Release) time.Time {
+	if !release.EditedAt.IsZero() {
+		return release.EditedAt.UTC()
+	}
+	if !release.PublishedAt.IsZero() {
+		return release.PublishedAt.UTC()
+	}
+	return time.Unix(0, 0).UTC()
 }

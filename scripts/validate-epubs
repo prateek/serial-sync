@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "usage: scripts/validate-epubs <epub-root> [report-dir]" >&2
+  exit 2
+fi
+
+if ! command -v epubcheck >/dev/null 2>&1; then
+  echo "epubcheck is required; install it before validating EPUB output" >&2
+  exit 127
+fi
+if command -v shasum >/dev/null 2>&1; then
+  HASH_TOOL=$(command -v shasum)
+  HASH_ARGS="-a 256"
+elif command -v sha256sum >/dev/null 2>&1; then
+  HASH_TOOL=$(command -v sha256sum)
+  HASH_ARGS=""
+else
+  echo "shasum or sha256sum is required to name validation reports" >&2
+  exit 127
+fi
+
+ROOT=${1%/}
+if [[ ! -d "$ROOT" ]]; then
+  echo "epub root does not exist: $ROOT" >&2
+  exit 1
+fi
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+REPORT=${2:-"${TMPDIR:-/tmp}/serial-sync-epubcheck-$STAMP"}
+JOBS=${JOBS:-8}
+RESULT_DIR="$REPORT/results.d"
+FILE_LIST="$REPORT/files.list"
+
+rm -rf "$RESULT_DIR"
+mkdir -p "$REPORT/json" "$REPORT/logs" "$RESULT_DIR"
+
+find "$ROOT" -type f -name '*.epub' -print0 > "$FILE_LIST"
+if [[ ! -s "$FILE_LIST" ]]; then
+  {
+    echo "report=$REPORT"
+    echo "checked=0"
+    echo "passed=0"
+    echo "failed=0"
+  } > "$REPORT/summary.txt"
+  cat "$REPORT/summary.txt"
+  echo "no EPUB files found under $ROOT" >&2
+  exit 1
+fi
+
+export ROOT REPORT RESULT_DIR HASH_TOOL HASH_ARGS
+xargs -0 -n1 -P "$JOBS" sh -c '
+    epub=$1
+    rel=${epub#"$ROOT"/}
+    # shellcheck disable=SC2086
+    hash=$(printf "%s" "$rel" | "$HASH_TOOL" $HASH_ARGS | awk "{print \$1}")
+    json="$REPORT/json/$hash.json"
+    log="$REPORT/logs/$hash.out"
+    if epubcheck "$epub" --json "$json" >"$log" 2>&1; then
+      status=ok
+    else
+      status=fail
+    fi
+    printf "%s\t%s\t%s\t%s\n" "$status" "$rel" "$json" "$log" > "$RESULT_DIR/$hash.tsv"
+  ' sh < "$FILE_LIST"
+
+RESULTS="$REPORT/results.tsv"
+if compgen -G "$RESULT_DIR/*.tsv" >/dev/null; then
+  cat "$RESULT_DIR"/*.tsv | sort -k2 > "$RESULTS"
+else
+  : > "$RESULTS"
+fi
+rm -rf "$RESULT_DIR"
+
+checked=$(wc -l < "$RESULTS" | tr -d ' ')
+failed=$(awk 'BEGIN { FS = "\t" } $1 != "ok" { count++ } END { print count + 0 }' "$RESULTS")
+passed=$((checked - failed))
+
+{
+  echo "report=$REPORT"
+  echo "checked=$checked"
+  echo "passed=$passed"
+  echo "failed=$failed"
+} > "$REPORT/summary.txt"
+
+cat "$REPORT/summary.txt"
+
+if [[ "$failed" -ne 0 ]]; then
+  exit 1
+fi

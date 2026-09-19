@@ -18,7 +18,7 @@ Default bootstrap path:
 ```sh
 export PATREON_USERNAME='you@example.com'
 export PATREON_PASSWORD='your-password'
-export PATREON_TOTP_SECRET='OPTIONAL-BASE32-SECRET'
+export PATREON_TOTP_SECRET='OPTIONAL-BASE32-SECRET-OR-OTPAUTH-URI'
 serial-sync --config ./config.toml setup auth --source example-creator
 ```
 
@@ -64,7 +64,7 @@ Preview that series file offline:
 ```sh
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --series-file ./serial-sync-rule-workspace/series.toml \
+  --series-file series.toml \
   --show-posts
 ```
 
@@ -125,6 +125,6 @@ Then rerun:
 ```sh
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
-  --series-file ./serial-sync-rule-workspace/series.toml \
+  --series-file series.toml \
   --show-posts
 ```

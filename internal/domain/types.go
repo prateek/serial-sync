@@ -233,15 +233,16 @@ type TrackDecision struct {
 }
 
 type ArtifactPlan struct {
-	ArtifactKind    string `json:"artifact_kind"`
-	Filename        string `json:"filename"`
-	MIMEType        string `json:"mime_type"`
-	SHA256          string `json:"sha256"`
-	SelectedPath    string `json:"selected_path"`
-	SelectedContent []byte `json:"-"`
-	MetadataJSON    []byte `json:"-"`
-	NormalizedJSON  []byte `json:"-"`
-	RawJSON         []byte `json:"-"`
+	ArtifactKind      string `json:"artifact_kind"`
+	Filename          string `json:"filename"`
+	MIMEType          string `json:"mime_type"`
+	SHA256            string `json:"sha256"`
+	SelectedPath      string `json:"selected_path"`
+	ValidateEPUBCheck bool   `json:"validate_epub_check,omitempty"`
+	SelectedContent   []byte `json:"-"`
+	MetadataJSON      []byte `json:"-"`
+	NormalizedJSON    []byte `json:"-"`
+	RawJSON           []byte `json:"-"`
 }
 
 type SyncItemPlan struct {

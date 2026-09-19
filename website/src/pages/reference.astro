@@ -80,8 +80,8 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       <h2>Output modes</h2>
       <ul class="note-list">
         <li><code>format = "preserve"</code> keeps the source format when possible.</li>
-        <li><code>format = "epub"</code> emits EPUB output, including PDF conversion via Calibre when needed.</li>
-        <li><code>preface_mode = "prepend_post"</code> adds a front-matter page before EPUB attachment content.</li>
+        <li><code>format = "epub"</code> emits EPUB output for text and PDF sources; serial-sync-generated EPUBs must pass EPUBCheck before storage.</li>
+        <li><code>preface_mode = "prepend_post"</code> adds a front-matter page before EPUB attachments, and before PDFs after conversion when <code>format = "epub"</code>.</li>
         <li><code>preface_mode = "none"</code> leaves the source artifact unchanged.</li>
       </ul>
     </section>

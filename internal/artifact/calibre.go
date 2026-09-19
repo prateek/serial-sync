@@ -6,9 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
-func convertPDFToEPUB(ctx context.Context, pdfContent []byte, title, author string) ([]byte, error) {
+func convertPDFToEPUB(ctx context.Context, pdfContent []byte, title, author, identifier string, modified time.Time) ([]byte, error) {
 	converterPath, err := exec.LookPath("ebook-convert")
 	if err != nil {
 		return nil, fmt.Errorf("ebook-convert is required for PDF to EPUB conversion: %w", err)
@@ -33,6 +34,9 @@ func convertPDFToEPUB(ctx context.Context, pdfContent []byte, title, author stri
 		outputPath,
 		"--title", title,
 		"--authors", author,
+		"--epub-version", "3",
+		"--no-default-epub-cover",
+		"--timestamp", formatEPUBModified(modified),
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -43,5 +47,5 @@ func convertPDFToEPUB(ctx context.Context, pdfContent []byte, title, author stri
 	if err != nil {
 		return nil, err
 	}
-	return epubContent, nil
+	return normalizeEPUBMetadata(epubContent, title, author, identifier, modified)
 }

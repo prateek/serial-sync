@@ -56,12 +56,12 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 - `setup dump` now captures normalized posts, raw Patreon post JSON, and downloaded attachments into the same workspace
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
-- the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
+- the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb, Calibre, EPUBCheck, and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
 - the daemon exposes `/healthz`, `/status`, and `/metrics`
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- series output can preserve source attachments or emit EPUB, including a prefaced EPUB path for attachment-backed Patreon posts
+- series output can preserve source attachments or emit EPUBCheck-validated EPUB when serial-sync generates, converts, or wraps the book
 - published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
 - static binary release packaging is configured through `.goreleaser.yml`
 
