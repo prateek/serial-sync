@@ -23,6 +23,8 @@ go run ./cmd/serial-sync --config ./examples/config.demo.toml setup dump --auth-
 
 The `internal/artifact` tests shell out to `epubcheck` and Calibre's `ebook-convert`, so both must be on `PATH`. On macOS, `brew install epubcheck` and install Calibre; on Linux, `scripts/install-epubcheck` installs the same pinned EPUBCheck release the Docker image and CI use.
 
+CI runs the suite in a `golang:1.27-trixie` container so it tests against the Calibre the Docker image ships (Debian trixie's 8.5.0). Ubuntu 24.04's packaged Calibre 7.6.0 crashes on EPUB 3 output, so the PDF conversion test fails there; see [Troubleshooting](docs/troubleshooting.md#pdf-to-epub-conversion-fails-on-ubuntu-2404).
+
 ## Generated Assets
 
 ```sh

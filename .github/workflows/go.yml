@@ -8,11 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Debian trixie like the Dockerfile, so tests run against the Calibre the image ships.
+    container: golang:1.27-trixie
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - run: sudo apt-get update && sudo apt-get install -y calibre
-      - run: sudo scripts/install-epubcheck
+      - uses: actions/checkout@v7
+      - run: apt-get update && apt-get install -y --no-install-recommends calibre default-jre-headless unzip
+      - run: scripts/install-epubcheck
       - run: go test ./...

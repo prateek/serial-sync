@@ -1,11 +1,11 @@
-FROM golang:1.25-bookworm AS build
+FROM golang:1.27-trixie AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/serial-sync ./cmd/serial-sync
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive \
     SERIAL_SYNC_BROWSER_USER=serialsync \
