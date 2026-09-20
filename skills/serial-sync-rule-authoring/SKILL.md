@@ -95,7 +95,12 @@ Avoid generic tags like `Fantasy`, `Magic`, `story`, `update`, `news`, or anythi
 
 Prefer one `[[series]]` per actual franchise/serial, not one per upstream Patreon tag or one per book, unless the user explicitly wants separate publish buckets. If a creator uses tags or collections like `AA1`, `AA2`, `VOT 11`, and `VOT 12`, keep those as multiple `[[series.inputs]]` under a single series whenever they all belong to the same reader-facing serial.
 
-Important current limitation: every input under one `[[series]]` compiles to the same `track_key`. That means book identity does not become first-class track metadata today. It still survives in the normalized release payload and artifact metadata via Patreon tags and collections, so downstream processors should read those fields when they need `Book 11` or `Book 12`.
+Keep book identity within the shared series: declare `[[series.books]]` and use
+input `book_id` when tags or collections establish the book. When authoring book
+ranges, volume grouping, intentional gaps or per-release overrides, read
+[`docs/config.md`](../../docs/config.md#volume-output) for the exact syntax and
+[`docs/rules.md`](../../docs/rules.md#check-reading-order-before-bundling) for the
+preview workflow.
 
 Use these priority bands:
 
@@ -123,14 +128,21 @@ After each edit to `series.toml`:
 1. Run `setup preview --show-posts`.
 2. Check which posts still land in fallback.
 3. Check whether any specific matcher is too broad.
-4. Tighten the match.
-5. Re-run preview.
+4. Check chapter numbers, book identities and series positions. For volumes,
+   inspect expected ranges and every missing slot. Keep ambiguous duplicates and
+   unnumbered interludes as singles until an explicit mapping resolves them.
+   Check that `final_chapter` leaves later chapters as singles and that open books
+   do not overlap a later book's explicit starting position.
+5. Tighten the match or sequence mapping. Declare intentional gaps only with an
+   author-backed reason; a later chapter alone is insufficient.
+6. Re-run preview.
 
 Stop iterating when:
 
 - the intended series are grouped correctly
 - fallback is only catching true miscellany
 - materializable counts match what the user expects to publish
+- numbered posts have the intended order; open volumes explain their gaps or missing boundaries
 
 ## Finalization
 
@@ -144,3 +156,13 @@ When the series config looks right:
 serial-sync --config ./config.toml run --dry-run --source <source-id>
 serial-sync --config ./config.toml run --source <source-id> --target <publisher-id>
 ```
+
+For an existing library, use the containerized offline rebuild commands in
+[`docs/first-source.md`](../../docs/first-source.md#rebuild-stored-output). Preview
+the selected source/series/target with read-only mounts before applying output
+changes. Completed volumes and legacy output stay unchanged on normal runs.
+Rebuild and its dry-run exclude disabled sources; enable every source needed by
+the selected volume before rebuilding it.
+Validate a small Calibre and reader sample before a large migration. Exec hooks
+participating in volume replacement require protocol version 2 as documented in
+[`docs/hooks.md`](../../docs/hooks.md#version-2-publish-and-supersede).

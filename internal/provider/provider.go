@@ -86,6 +86,8 @@ type DiscoveryPreviewGroup struct {
 }
 
 type DiscoveryPreviewPost struct {
+	Sequence          *domain.Sequence       `json:"sequence,omitempty"`
+	Filename          string                 `json:"filename,omitempty"`
 	ProviderReleaseID string                 `json:"provider_release_id"`
 	Title             string                 `json:"title"`
 	PublishedAt       time.Time              `json:"published_at"`

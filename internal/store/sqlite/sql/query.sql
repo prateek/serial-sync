@@ -18,6 +18,45 @@ ON CONFLICT(id) DO UPDATE SET
   sync_cursor = excluded.sync_cursor,
   last_synced_at = excluded.last_synced_at;
 
+-- name: ListVolumeEditions :many
+SELECT * FROM volume_editions ORDER BY series_id, first_chapter, id;
+
+-- name: ListVolumeMembers :many
+SELECT release_id, content_hash, position FROM volume_members WHERE edition_id = sqlc.arg(edition_id) ORDER BY position, release_id;
+
+-- name: DeactivateVolumeGroup :exec
+UPDATE volume_editions SET active = 0 WHERE series_id = sqlc.arg(series_id) AND group_id = sqlc.arg(group_id);
+
+-- name: InsertVolumeEdition :exec
+INSERT INTO volume_editions (id, series_id, source_id, track_id, group_id, first_chapter, last_chapter, recipe_hash, artifact_id, active)
+VALUES (sqlc.arg(id), sqlc.arg(series_id), sqlc.arg(source_id), sqlc.arg(track_id), sqlc.arg(group_id), sqlc.arg(first_chapter), sqlc.arg(last_chapter), sqlc.arg(recipe_hash), sqlc.arg(artifact_id), 1)
+ON CONFLICT(id) DO UPDATE SET active = 1;
+
+-- name: InsertVolumeMember :exec
+INSERT INTO volume_members (edition_id, release_id, content_hash, position)
+VALUES (sqlc.arg(edition_id), sqlc.arg(release_id), sqlc.arg(content_hash), sqlc.arg(position))
+ON CONFLICT(edition_id, release_id) DO UPDATE SET content_hash = excluded.content_hash, position = excluded.position;
+
+-- name: ListVolumePublishRecords :many
+SELECT DISTINCT pr.* FROM publish_records pr JOIN volume_editions v ON v.artifact_id = pr.artifact_id ORDER BY pr.published_at DESC;
+
+-- name: GetPendingPublish :one
+SELECT id, target_id, payload_ref FROM pending_publishes WHERE target_id = sqlc.arg(target_id);
+
+-- name: SavePendingPublish :exec
+INSERT INTO pending_publishes (id, target_id, payload_ref) VALUES (sqlc.arg(id), sqlc.arg(target_id), sqlc.arg(payload_ref));
+
+-- name: CompletePendingPublish :exec
+DELETE FROM pending_publishes WHERE id = sqlc.arg(id);
+
+-- name: SavePublishFilename :exec
+INSERT INTO publish_filenames (artifact_id, target_id, publish_hash, filename)
+VALUES (sqlc.arg(artifact_id), sqlc.arg(target_id), sqlc.arg(publish_hash), sqlc.arg(filename))
+ON CONFLICT(artifact_id, target_id, publish_hash) DO UPDATE SET filename = excluded.filename;
+
+-- name: GetPublishFilename :one
+SELECT filename FROM publish_filenames WHERE artifact_id = sqlc.arg(artifact_id) AND target_id = sqlc.arg(target_id) AND publish_hash = sqlc.arg(publish_hash);
+
 -- name: ListSources :many
 SELECT id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at
 FROM sources
@@ -141,7 +180,7 @@ INSERT INTO artifacts (
   sqlc.arg(storage_ref), sqlc.arg(built_at), sqlc.arg(state), sqlc.arg(metadata_ref),
   sqlc.arg(normalized_ref), sqlc.arg(raw_ref)
 )
-ON CONFLICT(release_id, sha256, artifact_kind) DO UPDATE SET
+ON CONFLICT(release_id, sha256, artifact_kind, filename, track_id) DO UPDATE SET
   track_id = excluded.track_id,
   is_canonical = excluded.is_canonical,
   filename = excluded.filename,
@@ -275,20 +314,6 @@ LEFT JOIN story_tracks t ON t.id = art.track_id
 WHERE s.id = sqlc.arg(source_id)
   AND pr.target_id = sqlc.arg(target_id)
 ORDER BY pr.published_at DESC, pr.id DESC;
-
--- name: GetPublishRecordBundle :one
-SELECT
-  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
-FROM publish_records pr
-JOIN artifacts art ON art.id = pr.artifact_id
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN story_tracks t ON t.id = art.track_id
-WHERE pr.id = sqlc.arg(id);
 
 -- name: AcquireLease :execrows
 INSERT INTO leases (key, holder, expires_at, updated_at)

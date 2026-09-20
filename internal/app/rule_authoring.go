@@ -13,6 +13,8 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
+	"github.com/prateek/serial-sync/internal/artifact"
+	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/observe"
@@ -72,6 +74,7 @@ type RulesPreviewCreator struct {
 }
 
 type RulesPreviewResult struct {
+	Volumes        []domain.VolumePlan   `json:"volumes,omitempty"`
 	RunID          string                `json:"run_id"`
 	WorkspacePath  string                `json:"workspace_path"`
 	SeriesFile     string                `json:"series_file"`
@@ -353,11 +356,32 @@ func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions,
 	if !filepath.IsAbs(seriesFile) {
 		seriesFile = filepath.Join(workspacePath, seriesFile)
 	}
-	rules, err := loadSeriesFile(seriesFile)
+	series, err := loadSeriesDefinitions(seriesFile)
 	if err != nil {
 		return result, err
 	}
 	result.WorkspacePath = workspacePath
+	previewConfig := *s.Config
+	previewConfig.Series, previewConfig.Rules = series, config.CompileSeriesRules(series)
+	sourceData, err := os.ReadFile(manifest.SourcesFile)
+	if err != nil {
+		return result, err
+	}
+	var dumpedSources struct {
+		Sources []config.SourceConfig `toml:"sources"`
+	}
+	if err := toml.Unmarshal(sourceData, &dumpedSources); err != nil {
+		return result, err
+	}
+	previewConfig.Sources = dumpedSources.Sources
+	if err := previewConfig.ValidateSeries(); err != nil {
+		return result, err
+	}
+	planner := *s
+	planner.Config = &previewConfig
+	rules := previewConfig.Rules
+	var candidates []domain.PublishCandidate
+	inputs := map[string]domain.NormalizedRelease{}
 	result.SeriesFile = seriesFile
 	for _, creator := range manifest.Creators {
 		if !matchesDumpCreatorFilters(creator, options.CreatorFilters) {
@@ -368,6 +392,25 @@ func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions,
 			return result, err
 		}
 		preview := rulepreview.Build(creator.SourceID, releases, filterRulesBySource(rules, creator.SourceID), options.ShowPosts)
+		for _, release := range releases {
+			decision := planner.numberedDecision(creator.SourceID, release, classify.Decide(creator.SourceID, release, filterRulesBySource(rules, creator.SourceID)))
+			track := domain.StoryTrack{ID: creator.SourceID + "/" + decision.TrackKey, TrackKey: decision.TrackKey, TrackName: decision.TrackName}
+			stored := domain.Release{ID: creator.SourceID + "/" + release.ProviderReleaseID, ProviderReleaseID: release.ProviderReleaseID, PublishedAt: release.PublishedAt, Title: release.Title}
+			filename := artifact.PreviewFilename(track, stored, release, decision)
+			for i := range preview.Posts {
+				if preview.Posts[i].ProviderReleaseID == release.ProviderReleaseID {
+					preview.Posts[i].Sequence, preview.Posts[i].Filename = decision.Sequence, filename
+				}
+			}
+			if classify.CanMaterialize(release, decision) {
+				mime := "text/html"
+				if decision.OutputFormat == domain.OutputFormatEPUB {
+					mime = "application/epub+zip"
+				}
+				candidates = append(candidates, domain.PublishCandidate{Source: domain.Source{ID: creator.SourceID}, Track: track, Release: stored, Assignment: domain.ReleaseAssignment{ReleaseRole: decision.ReleaseRole}, Artifact: domain.Artifact{Filename: filename, MIMEType: mime}})
+				inputs[stored.ID] = release
+			}
+		}
 		result.TotalPosts += len(releases)
 		result.Materializable += preview.Materializable
 		result.FallbackPosts += preview.FallbackPosts
@@ -383,6 +426,10 @@ func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions,
 	}
 	if len(result.Creators) == 0 {
 		return result, fmt.Errorf("no dumped creators matched the provided filters")
+	}
+	result.Volumes, _, err = planner.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs})
+	if err != nil {
+		return result, err
 	}
 	summary := fmt.Sprintf("creators=%d posts=%d materializable=%d fallback=%d", len(result.Creators), result.TotalPosts, result.Materializable, result.FallbackPosts)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
@@ -427,10 +474,23 @@ func FormatRulesPreviewResult(result RulesPreviewResult, showPosts bool) string 
 					label += ":" + post.MatchValue
 				}
 				lines = append(lines, fmt.Sprintf("    * %s [%s %s materializable=%t] %s", post.TrackKey, label, post.ContentStrategy, post.Materializable, post.Title))
+				if post.Materializable {
+					lines = append(lines, "      output: "+post.Filename)
+					if seq := post.Sequence; seq != nil {
+						lines = append(lines, fmt.Sprintf("      sequence: book=%s chapter=%d position=%d origin=%s matched=%q %s", seq.BookID, seq.Chapter, seq.Position, seq.Origin, seq.MatchedText, seq.Reason))
+					}
+				}
 			}
 		}
 	}
+	for _, volume := range result.Volumes {
+		lines = append(lines, formatVolumePlan(volume))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func formatVolumePlan(plan domain.VolumePlan) string {
+	return fmt.Sprintf("volume %s %s [%s] expected=%d..%d present=%v missing=%v intentional=%v output=%s %s", plan.SeriesID, plan.GroupID, plan.Status, plan.First, plan.Last, plan.Present, plan.Missing, plan.IntentionalGaps, plan.Filename, plan.Reason)
 }
 
 func resolveWorkspacePath(path string) (string, error) {
@@ -536,16 +596,19 @@ func loadDumpManifest(path string) (dumpManifest, error) {
 	return manifest, nil
 }
 
-func loadSeriesFile(path string) ([]config.RuleConfig, error) {
+func loadSeriesDefinitions(path string) ([]config.SeriesConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var fileConfig seriesFileConfig
+	if err := config.ValidateExplicitOutputFields(data); err != nil {
+		return nil, err
+	}
 	if err := toml.Unmarshal(data, &fileConfig); err != nil {
 		return nil, err
 	}
-	return config.CompileSeriesRules(fileConfig.Series), nil
+	return fileConfig.Series, nil
 }
 
 func filterRulesBySource(rules []config.RuleConfig, sourceID string) []config.RuleConfig {

@@ -32,6 +32,19 @@ type Lease struct {
 	UpdatedAt string
 }
 
+type PendingPublish struct {
+	ID         string
+	TargetID   string
+	PayloadRef string
+}
+
+type PublishFilename struct {
+	ArtifactID  string
+	TargetID    string
+	PublishHash string
+	Filename    string
+}
+
 type PublishRecord struct {
 	ID          string
 	ArtifactID  string
@@ -103,4 +116,24 @@ type StoryTrack struct {
 	OutputPolicy    string
 	CreatedAt       string
 	UpdatedAt       string
+}
+
+type VolumeEdition struct {
+	ID           string
+	SeriesID     string
+	SourceID     string
+	TrackID      string
+	GroupID      string
+	FirstChapter int64
+	LastChapter  int64
+	RecipeHash   string
+	ArtifactID   string
+	Active       int64
+}
+
+type VolumeMember struct {
+	EditionID   string
+	ReleaseID   string
+	ContentHash string
+	Position    int64
 }

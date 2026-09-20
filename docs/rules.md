@@ -16,7 +16,7 @@ Each `[[series.inputs]]` matcher answers:
 2. What role should those releases have?
 3. Which content strategy should the sync use?
 
-The series itself owns output behavior. That is where `format` and `preface_mode` live.
+The series owns output behavior: `format`, `preface_mode`, and optional `bundling`.
 
 Matchers are applied by ascending `priority`. The first matching input wins.
 
@@ -140,7 +140,10 @@ title = "Andy, Again"
   attachment_priority = ["epub", "pdf"]
 ```
 
-Current implementation note: all inputs under one `[[series]]` compile to the same `track_key`. That keeps the config simple, but it means book identity is not first-class in the track itself. If downstream logic needs to know `Book 11` versus `Book 12`, read the normalized release metadata or artifact metadata, which still includes Patreon tags and collections.
+Keep one series identity across books. Declare `[[series.books]]` and put a
+`book_id` on each book-specific input when its tag or collection establishes the
+boundary. [The config reference](config.md#volume-output) shows complete book and
+sequence-override syntax.
 
 ### `title_regex`
 
@@ -257,7 +260,7 @@ Recommended default:
 
 - for story series, start with `format = "epub"` and `preface_mode = "prepend_post"`
 - keep `format = "preserve"` and `preface_mode = "none"` for manual/review buckets
-- downstream processors that care about book identity should read tags/collections from normalized or artifact metadata rather than splitting one franchise into separate series just to preserve `Book 11` versus `Book 12`
+- use book definitions and input `book_id` for reading order within a shared series
 - published filenames are lowercase and dash-slugged, so shell use and URL/path handling stay predictable
 
 EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Unchanged pass-through EPUB attachments stay byte-preserving.
@@ -269,6 +272,35 @@ scripts/validate-epubs ~/.local/state/serial-sync/published/<source-id> ~/.local
 ```
 
 That `prepend_post` mode is meant for the exact “author note / chapter intro” workflow you described for attachment-backed releases.
+
+## Check reading order before bundling
+
+Start with singles, then inspect `setup preview --show-posts`. Each materializable
+post shows its chapter number, book mapping, scalar series position and filename.
+The matched text and its origin explain where each chapter number came from.
+Supported chapter markers include `chapter`, `chap`, `ch`, and `chaper`; number
+words such as `Chapter Twelve` also work. An attachment filename can supply a
+missing number. Detection affects ordering, not whether a post is classified as
+a chapter.
+
+With `bundling = "volume"`, preview also lists each expected range, present
+chapters, missing slots and intentional gaps. Resolve duplicate numbers with a
+sequence override; keep the extra post as a single. Mark an intentional gap only
+when the author's numbering justifies it, with a reason. A later chapter or an
+upstream fetch error does not close a gap.
+Chapters beyond `final_chapter` stay as singles; check that the endpoint matches
+the intended end of the serial.
+
+Known author books take precedence over fixed ranges. Supply an endpoint to close
+a book, and prior spans or `series_position_start` when numbers restart. Mixed
+mapped and unassigned chapters stay as singles until their book mapping is clear.
+An open book cannot reuse a later book's explicit series positions. Correct the
+range or starting position when preview reports an overlap.
+
+Normal sync preserves completed volumes. A correction to an existing member is
+captured and reported as pending rebuild; a late chapter absent from the frozen
+membership remains a single. Use the [offline rebuild workflow](first-source.md#rebuild-stored-output)
+to apply corrections or regroup an existing library.
 
 ## Choosing Priorities
 

@@ -45,7 +45,7 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 - classifies them into series
 - materializes canonical artifacts on disk
 - publishes those artifacts to filesystem or exec-hook targets
-- records runs, events, and publish history in SQLite
+- keeps the catalog, runs, and publish receipts in SQLite; detailed events and captured inputs stay on disk
 
 ## Current Scope
 
@@ -63,6 +63,9 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 - `filesystem` and `exec` publishing are implemented
 - series output can preserve source attachments or emit EPUBCheck-validated EPUB when serial-sync generates, converts, or wraps the book
 - published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
+- generated chapter EPUBs have distinct titles and Calibre/EPUB 3 series positions
+- optional volumes follow declared author books, falling back to configurable 50-chapter ranges; gaps keep chapters as singles
+- `run --rebuild` applies output changes offline from captured inputs; completed volumes remain unchanged during ordinary sync
 - static binary release packaging is configured through `.goreleaser.yml`
 
 ## More
@@ -71,6 +74,7 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 - [First source walkthrough](docs/first-source.md)
 - [Series authoring guide](docs/rules.md)
 - [Config reference](docs/config.md)
+- [Hook contracts](docs/hooks.md)
 - [Docker quickstart](docs/docker-quickstart.md)
 - [Observability guide](docs/observability.md)
 - [Troubleshooting](docs/troubleshooting.md)
@@ -86,7 +90,7 @@ The public CLI is now intentionally small:
 - `run`: the normal sync-plus-publish execution path, plus `run daemon`
 - `debug`: run forensics, publish record inspection, and support bundles
 
-Old command names are documented in the migration notes inside the guides, but the default user path is now:
+The default user path is:
 
 1. `setup init`
 2. `setup auth`
@@ -94,6 +98,25 @@ Old command names are documented in the migration notes inside the guides, but t
 4. `setup preview`
 5. `run`
 6. `debug run <run-id>` if something looks wrong
+
+## Rebuild an existing library
+
+Normal runs retain legacy filenames and completed volumes. Preview an explicit
+migration from the stored catalog before rebuilding a series:
+
+```sh
+docker run --rm --network none \
+  -v serial-sync-state:/state:ro \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync run --rebuild --dry-run --series main-story --target local-files
+```
+
+Stop active runs before previewing. The preview lists replacement destinations,
+retirements and blocked inputs without changing the catalog or calling hooks.
+Preview and rebuild both exclude disabled sources and retain their published files.
+If the publisher lives outside `/state`, mount its folder too, read-only for the
+preview. See [the rebuild walkthrough](docs/first-source.md#rebuild-stored-output)
+for the writable command and a small reader sample before a larger migration.
 
 ## License
 

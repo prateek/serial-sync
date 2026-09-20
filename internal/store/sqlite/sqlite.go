@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -19,8 +21,10 @@ import (
 var schemaSQL string
 
 type Store struct {
-	db      *sql.DB
-	queries *sqldb.Queries
+	hasVolumeSchema bool
+	snapshot        io.Closer
+	db              *sql.DB
+	queries         *sqldb.Queries
 }
 
 func Open(dsn string) (*Store, error) {
@@ -33,14 +37,24 @@ func Open(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	var volumeTables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'volume_editions'`).Scan(&volumeTables); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{
-		db:      db,
-		queries: sqldb.New(db),
+		hasVolumeSchema: volumeTables > 0,
+		db:              db,
+		queries:         sqldb.New(db),
 	}, nil
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
+	err := s.db.Close()
+	if s.snapshot != nil {
+		err = errors.Join(err, s.snapshot.Close())
+	}
+	return err
 }
 
 func (s *Store) EnsureSchema(ctx context.Context) error {
@@ -51,7 +65,37 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, schemaSQL)
+	if err == nil {
+		err = s.migrateArtifactEditions(ctx)
+		s.hasVolumeSchema = true
+	}
 	return err
+}
+
+func (s *Store) migrateArtifactEditions(ctx context.Context) error {
+	var definition string
+	if err := s.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'`).Scan(&definition); err != nil {
+		return err
+	}
+	compact := strings.Join(strings.Fields(definition), "")
+	if !strings.Contains(compact, "UNIQUE(release_id,sha256,artifact_kind)") {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE artifacts RENAME TO artifacts_v1`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO artifacts SELECT * FROM artifacts_v1; DROP TABLE artifacts_v1;`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpsertSource(ctx context.Context, source domain.Source) error {
@@ -483,7 +527,18 @@ func (s *Store) HasSuccessfulPublish(ctx context.Context, artifactID, targetID, 
 }
 
 func (s *Store) UpsertPublishRecord(ctx context.Context, record domain.PublishRecord) error {
-	return s.queries.UpsertPublishRecord(ctx, sqldb.UpsertPublishRecordParams{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	q := s.queries.WithTx(tx)
+	if record.Filename != "" {
+		if err := q.SavePublishFilename(ctx, sqldb.SavePublishFilenameParams{ArtifactID: record.ArtifactID, TargetID: record.TargetID, PublishHash: record.PublishHash, Filename: record.Filename}); err != nil {
+			return err
+		}
+	}
+	if err := q.UpsertPublishRecord(ctx, sqldb.UpsertPublishRecordParams{
 		ID:          record.ID,
 		ArtifactID:  record.ArtifactID,
 		TargetID:    record.TargetID,
@@ -493,10 +548,13 @@ func (s *Store) UpsertPublishRecord(ctx context.Context, record domain.PublishRe
 		PublishedAt: formatTime(record.PublishedAt),
 		Status:      string(record.Status),
 		Message:     record.Message,
-	})
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-func (s *Store) ListPublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error) {
+func (s *Store) listReleasePublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error) {
 	switch {
 	case sourceID == "" && targetID == "":
 		rows, err := s.queries.ListPublishRecords(ctx)
@@ -545,15 +603,16 @@ func (s *Store) ListPublishRecords(ctx context.Context, sourceID, targetID strin
 }
 
 func (s *Store) GetPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error) {
-	row, err := s.queries.GetPublishRecordBundle(ctx, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+	records, err := s.ListPublishRecords(ctx, "", "")
 	if err != nil {
 		return nil, err
 	}
-	item := publishRecordBundleFromGetRow(row)
-	return &item, nil
+	for _, record := range records {
+		if record.Record.ID == id {
+			return &record, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Store) AcquireLease(ctx context.Context, key, holder string, ttl time.Duration) (bool, error) {
@@ -790,67 +849,6 @@ func publishCandidateFromRowBySource(row sqldb.ListPublishCandidatesBySourceRow)
 			RawRef:        row.RawRef,
 		}),
 	}
-}
-
-func publishRecordBundleFromGetRow(row sqldb.GetPublishRecordBundleRow) domain.PublishRecordBundle {
-	return buildPublishRecordBundle(publishRecordBundleFields{
-		recordID:             row.ID,
-		artifactID:           row.ArtifactID,
-		targetID:             row.TargetID,
-		targetKind:           row.TargetKind,
-		targetRef:            row.TargetRef,
-		publishHash:          row.PublishHash,
-		publishedAt:          row.PublishedAt,
-		publishStatus:        row.Status,
-		publishMessage:       row.Message,
-		artID:                row.ID_2,
-		artReleaseID:         row.ReleaseID,
-		artTrackID:           row.TrackID,
-		artKind:              row.ArtifactKind,
-		artCanonical:         row.IsCanonical,
-		artFilename:          row.Filename,
-		artMIME:              row.MimeType,
-		artSHA:               row.Sha256,
-		artStorage:           row.StorageRef,
-		artBuiltAt:           row.BuiltAt,
-		artState:             row.State,
-		artMetadataRef:       row.MetadataRef,
-		artNormalizedRef:     row.NormalizedRef,
-		artRawRef:            row.RawRef,
-		releaseID:            row.ID_3,
-		releaseSourceID:      row.SourceID,
-		providerReleaseID:    row.ProviderReleaseID,
-		releaseURL:           row.Url,
-		releaseTitle:         row.Title,
-		releasePublishedAt:   row.PublishedAt_2,
-		releaseEditedAt:      row.EditedAt,
-		releasePostType:      row.PostType,
-		releaseVisibility:    row.VisibilityState,
-		releaseNormalizedRef: row.NormalizedPayloadRef,
-		releaseRawRef:        row.RawPayloadRef,
-		releaseHash:          row.ContentHash,
-		releaseDiscoveredAt:  row.DiscoveredAt,
-		releaseStatus:        row.Status_2,
-		sourceID:             row.ID_4,
-		sourceProvider:       row.Provider,
-		sourceURL:            row.SourceUrl,
-		sourceType:           row.SourceType,
-		creatorID:            row.CreatorID,
-		creatorName:          row.CreatorName,
-		authProfileID:        row.AuthProfileID,
-		sourceEnabled:        row.Enabled,
-		sourceSyncCursor:     row.SyncCursor,
-		sourceLastSyncedAt:   row.LastSyncedAt,
-		trackID:              row.ID_5,
-		trackSourceID:        row.SourceID_2,
-		trackKey:             row.TrackKey,
-		trackName:            row.TrackName,
-		canonicalAuthor:      row.CanonicalAuthor,
-		seriesMeta:           row.SeriesMeta,
-		outputPolicy:         row.OutputPolicy,
-		createdAt:            row.CreatedAt,
-		updatedAt:            row.UpdatedAt,
-	})
 }
 
 func publishRecordBundleFromListRow(row sqldb.ListPublishRecordsRow) domain.PublishRecordBundle {

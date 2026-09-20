@@ -58,11 +58,12 @@ type AuthProfile struct {
 }
 
 type PublisherConfig struct {
-	ID      string   `toml:"id"`
-	Kind    string   `toml:"kind"`
-	Path    string   `toml:"path"`
-	Command []string `toml:"command"`
-	Enabled bool     `toml:"enabled"`
+	ProtocolVersion int      `toml:"protocol_version"`
+	ID              string   `toml:"id"`
+	Kind            string   `toml:"kind"`
+	Path            string   `toml:"path"`
+	Command         []string `toml:"command"`
+	Enabled         bool     `toml:"enabled"`
 }
 
 type SourceConfig struct {
@@ -75,19 +76,49 @@ type SourceConfig struct {
 }
 
 type SeriesConfig struct {
-	ID      string             `toml:"id"`
-	Title   string             `toml:"title"`
-	Authors []string           `toml:"authors"`
-	Output  SeriesOutputConfig `toml:"output"`
-	Inputs  []SeriesInputConfig `toml:"inputs"`
+	SequenceOverrides []SequenceOverride  `toml:"sequence_overrides"`
+	ID                string              `toml:"id"`
+	Title             string              `toml:"title"`
+	Authors           []string            `toml:"authors"`
+	Output            SeriesOutputConfig  `toml:"output"`
+	Inputs            []SeriesInputConfig `toml:"inputs"`
+	Books             []BookConfig        `toml:"books"`
+}
+
+type SequenceOverride struct {
+	Source     string `toml:"source"`
+	ReleaseID  string `toml:"release_id"`
+	BookID     string `toml:"book_id"`
+	Chapter    int    `toml:"chapter"`
+	KeepSingle bool   `toml:"keep_single"`
+}
+
+type BookConfig struct {
+	IntentionalGaps     []ChapterGap `toml:"intentional_gaps"`
+	ID                  string       `toml:"id"`
+	Number              int          `toml:"number"`
+	Title               string       `toml:"title"`
+	FirstChapter        int          `toml:"first_chapter"`
+	LastChapter         int          `toml:"last_chapter"`
+	SeriesPositionStart int          `toml:"series_position_start"`
+}
+
+type ChapterGap struct {
+	Chapter int    `toml:"chapter" json:"chapter"`
+	Reason  string `toml:"reason" json:"reason"`
 }
 
 type SeriesOutputConfig struct {
-	Format      string `toml:"format"`
-	PrefaceMode string `toml:"preface_mode"`
+	FinalChapter      int          `toml:"final_chapter"`
+	IntentionalGaps   []ChapterGap `toml:"intentional_gaps"`
+	Format            string       `toml:"format"`
+	PrefaceMode       string       `toml:"preface_mode"`
+	Bundling          string       `toml:"bundling"`
+	ChaptersPerVolume int          `toml:"chapters_per_volume"`
 }
 
 type SeriesInputConfig struct {
+	BookID             string   `toml:"book_id"`
 	Source             string   `toml:"source"`
 	Priority           int      `toml:"priority"`
 	MatchType          string   `toml:"match_type"`
@@ -96,10 +127,11 @@ type SeriesInputConfig struct {
 	ContentStrategy    string   `toml:"content_strategy"`
 	AttachmentGlob     []string `toml:"attachment_glob"`
 	AttachmentPriority []string `toml:"attachment_priority"`
-	AnthologyMode      bool     `toml:"anthology_mode"`
+	AnthologyMode      *bool    `toml:"anthology_mode"`
 }
 
 type RuleConfig struct {
+	BookID             string   `toml:"book_id"`
 	SeriesID           string   `toml:"series_id"`
 	Source             string   `toml:"source"`
 	Priority           int      `toml:"priority"`
@@ -114,7 +146,7 @@ type RuleConfig struct {
 	PrefaceMode        string   `toml:"preface_mode"`
 	AttachmentGlob     []string `toml:"attachment_glob"`
 	AttachmentPriority []string `toml:"attachment_priority"`
-	AnthologyMode      bool     `toml:"anthology_mode"`
+	AnthologyMode      *bool    `toml:"anthology_mode"`
 }
 
 type Roots struct {
@@ -182,6 +214,9 @@ func Load(path string) (*Config, Roots, error) {
 		return nil, Roots{}, err
 	}
 	var cfg Config
+	if err := ValidateExplicitOutputFields(data); err != nil {
+		return nil, Roots{}, err
+	}
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, Roots{}, err
 	}
@@ -270,7 +305,6 @@ func (c *Config) Validate() error {
 	sourceIDs := map[string]struct{}{}
 	authIDs := map[string]struct{}{}
 	publisherIDs := map[string]struct{}{}
-	seriesIDs := map[string]struct{}{}
 	for _, auth := range c.AuthProfiles {
 		if auth.ID == "" {
 			return errors.New("auth profile id is required")
@@ -337,7 +371,66 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if err := c.ValidateSeries(); err != nil {
+		return err
+	}
+	for _, publisher := range c.Publishers {
+		if publisher.ProtocolVersion < 0 || publisher.ProtocolVersion > 2 {
+			return fmt.Errorf("publisher %q protocol_version must be 1 or 2", publisher.ID)
+		}
+		if publisher.ID == "" {
+			return errors.New("publisher id is required")
+		}
+		if _, exists := publisherIDs[publisher.ID]; exists {
+			return fmt.Errorf("duplicate publisher id %q", publisher.ID)
+		}
+		publisherIDs[publisher.ID] = struct{}{}
+		switch normalizePublisherKind(publisher.Kind) {
+		case "filesystem":
+			if publisher.Path == "" {
+				return fmt.Errorf("publisher %q path is required for filesystem targets", publisher.ID)
+			}
+		case "exec":
+			if len(publisher.Command) == 0 {
+				return fmt.Errorf("publisher %q command is required for exec targets", publisher.ID)
+			}
+		default:
+			return fmt.Errorf("publisher %q has unsupported kind %q", publisher.ID, publisher.Kind)
+		}
+	}
+	for _, rule := range c.Rules {
+		if rule.AnthologyMode != nil && *rule.AnthologyMode {
+			return fmt.Errorf("anthology_mode = true is unsupported; use series.output bundling = volume with format = epub")
+		}
+		if rule.Source == "" {
+			return errors.New("rule source is required")
+		}
+		if _, ok := sourceIDs[rule.Source]; !ok {
+			return fmt.Errorf("rule references unknown source %q", rule.Source)
+		}
+		if rule.TrackKey == "" {
+			return fmt.Errorf("rule for source %q must set track_key", rule.Source)
+		}
+		if err := validateOutputFormat(rule.OutputFormat); err != nil {
+			return fmt.Errorf("rule for source %q output_format %q is invalid: %w", rule.Source, rule.OutputFormat, err)
+		}
+		if err := validatePrefaceMode(rule.PrefaceMode); err != nil {
+			return fmt.Errorf("rule for source %q preface_mode %q is invalid: %w", rule.Source, rule.PrefaceMode, err)
+		}
+	}
+	return nil
+}
+
+func (c *Config) ValidateSeries() error {
+	sourceIDs := map[string]struct{}{}
+	for _, source := range c.Sources {
+		sourceIDs[source.ID] = struct{}{}
+	}
+	seriesIDs := map[string]struct{}{}
 	for _, series := range c.Series {
+		if err := validateReaderOutput(series, sourceIDs); err != nil {
+			return fmt.Errorf("series %q: %w", series.ID, err)
+		}
 		if strings.TrimSpace(series.ID) == "" {
 			return errors.New("series id is required")
 		}
@@ -367,44 +460,6 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(input.MatchType) == "" {
 				return fmt.Errorf("series %q input for source %q must set match_type", series.ID, input.Source)
 			}
-		}
-	}
-	for _, publisher := range c.Publishers {
-		if publisher.ID == "" {
-			return errors.New("publisher id is required")
-		}
-		if _, exists := publisherIDs[publisher.ID]; exists {
-			return fmt.Errorf("duplicate publisher id %q", publisher.ID)
-		}
-		publisherIDs[publisher.ID] = struct{}{}
-		switch normalizePublisherKind(publisher.Kind) {
-		case "filesystem":
-			if publisher.Path == "" {
-				return fmt.Errorf("publisher %q path is required for filesystem targets", publisher.ID)
-			}
-		case "exec":
-			if len(publisher.Command) == 0 {
-				return fmt.Errorf("publisher %q command is required for exec targets", publisher.ID)
-			}
-		default:
-			return fmt.Errorf("publisher %q has unsupported kind %q", publisher.ID, publisher.Kind)
-		}
-	}
-	for _, rule := range c.Rules {
-		if rule.Source == "" {
-			return errors.New("rule source is required")
-		}
-		if _, ok := sourceIDs[rule.Source]; !ok {
-			return fmt.Errorf("rule references unknown source %q", rule.Source)
-		}
-		if rule.TrackKey == "" {
-			return fmt.Errorf("rule for source %q must set track_key", rule.Source)
-		}
-		if err := validateOutputFormat(rule.OutputFormat); err != nil {
-			return fmt.Errorf("rule for source %q output_format %q is invalid: %w", rule.Source, rule.OutputFormat, err)
-		}
-		if err := validatePrefaceMode(rule.PrefaceMode); err != nil {
-			return fmt.Errorf("rule for source %q preface_mode %q is invalid: %w", rule.Source, rule.PrefaceMode, err)
 		}
 	}
 	return nil
@@ -439,6 +494,12 @@ func (c *Config) RulesForSource(sourceID string) []RuleConfig {
 }
 
 func SeriesOutputDefaults(output SeriesOutputConfig) SeriesOutputConfig {
+	if output.Bundling == "" {
+		output.Bundling = "none"
+	}
+	if output.ChaptersPerVolume == 0 {
+		output.ChaptersPerVolume = 50
+	}
 	if strings.TrimSpace(output.Format) == "" {
 		output.Format = "preserve"
 	}
@@ -459,6 +520,7 @@ func CompileSeriesRules(series []SeriesConfig) []RuleConfig {
 				priority = 10 + (inputIndex * 10)
 			}
 			rules = append(rules, RuleConfig{
+				BookID:             input.BookID,
 				SeriesID:           item.ID,
 				Source:             input.Source,
 				Priority:           priority,

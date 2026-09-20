@@ -70,6 +70,7 @@ const (
 	PublishStatusPublishing PublishStatus = "publishing"
 	PublishStatusPublished  PublishStatus = "published"
 	PublishStatusFailed     PublishStatus = "failed"
+	PublishStatusSuperseded PublishStatus = "superseded"
 )
 
 type Source struct {
@@ -156,6 +157,7 @@ type Artifact struct {
 }
 
 type PublishRecord struct {
+	Filename    string        `json:"filename,omitempty"`
 	ID          string        `json:"id"`
 	ArtifactID  string        `json:"artifact_id"`
 	TargetID    string        `json:"target_id"`
@@ -191,6 +193,7 @@ type EventRecord struct {
 }
 
 type Attachment struct {
+	SHA256      string `json:"sha256,omitempty"`
 	FileName    string `json:"file_name"`
 	MIMEType    string `json:"mime_type"`
 	DownloadURL string `json:"download_url"`
@@ -217,6 +220,8 @@ type NormalizedRelease struct {
 }
 
 type TrackDecision struct {
+	BookID             string          `json:"book_id,omitempty"`
+	Sequence           *Sequence       `json:"sequence,omitempty"`
 	TrackKey           string          `json:"track_key"`
 	TrackName          string          `json:"track_name"`
 	SeriesID           string          `json:"series_id,omitempty"`
@@ -230,6 +235,17 @@ type TrackDecision struct {
 	AttachmentPriority []string        `json:"attachment_priority"`
 	AnthologyMode      bool            `json:"anthology_mode"`
 	Matched            bool            `json:"matched"`
+}
+
+type Sequence struct {
+	MatchedText string `json:"matched_text,omitempty"`
+	KeepSingle  bool   `json:"keep_single,omitempty"`
+	Book        int    `json:"book,omitempty"`
+	BookID      string `json:"book_id,omitempty"`
+	Chapter     int    `json:"chapter,omitempty"`
+	Position    int    `json:"position,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type ArtifactPlan struct {
@@ -273,6 +289,41 @@ type PublishCandidate struct {
 	Release    Release           `json:"release"`
 	Assignment ReleaseAssignment `json:"assignment"`
 	Artifact   Artifact          `json:"artifact"`
+	Volume     *VolumeEdition    `json:"volume,omitempty"`
+}
+
+type VolumeMember struct {
+	ReleaseID   string `json:"release_id"`
+	ContentHash string `json:"content_hash"`
+	Position    int    `json:"position"`
+}
+
+type VolumeEdition struct {
+	Notes      []string       `json:"notes,omitempty"`
+	ID         string         `json:"id"`
+	SeriesID   string         `json:"series_id"`
+	SourceID   string         `json:"source_id"`
+	TrackID    string         `json:"track_id"`
+	GroupID    string         `json:"group_id"`
+	First      int            `json:"first"`
+	Last       int            `json:"last"`
+	RecipeHash string         `json:"recipe_hash"`
+	Active     bool           `json:"active"`
+	Artifact   Artifact       `json:"artifact"`
+	Members    []VolumeMember `json:"members"`
+}
+
+type VolumePlan struct {
+	Present         []int  `json:"present,omitempty"`
+	IntentionalGaps []int  `json:"intentional_gaps,omitempty"`
+	SeriesID        string `json:"series_id"`
+	GroupID         string `json:"group_id"`
+	First           int    `json:"first"`
+	Last            int    `json:"last"`
+	Missing         []int  `json:"missing,omitempty"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	Filename        string `json:"filename,omitempty"`
 }
 
 type PublishItemResult struct {
@@ -285,6 +336,7 @@ type PublishItemResult struct {
 }
 
 type PublishResult struct {
+	Volumes   []VolumePlan        `json:"volumes,omitempty"`
 	RunID     string              `json:"run_id"`
 	Published int                 `json:"published"`
 	Skipped   int                 `json:"skipped"`
@@ -300,6 +352,12 @@ type PublishRecordBundle struct {
 	Release  Release       `json:"release"`
 	Source   Source        `json:"source"`
 	Track    StoryTrack    `json:"track"`
+}
+
+type PendingPublish struct {
+	ID         string
+	TargetID   string
+	PayloadRef string
 }
 
 type Lease struct {

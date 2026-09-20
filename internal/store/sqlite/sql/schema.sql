@@ -1,3 +1,17 @@
+CREATE TABLE IF NOT EXISTS publish_filenames (
+  artifact_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  publish_hash TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  PRIMARY KEY(artifact_id, target_id, publish_hash)
+);
+
+CREATE TABLE IF NOT EXISTS pending_publishes (
+  id TEXT NOT NULL UNIQUE,
+  target_id TEXT PRIMARY KEY,
+  payload_ref TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sources (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,
@@ -65,7 +79,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   metadata_ref TEXT NOT NULL,
   normalized_ref TEXT NOT NULL,
   raw_ref TEXT NOT NULL,
-  UNIQUE(release_id, sha256, artifact_kind)
+  UNIQUE(release_id, sha256, artifact_kind, filename, track_id)
 );
 
 CREATE TABLE IF NOT EXISTS publish_records (
@@ -97,4 +111,25 @@ CREATE TABLE IF NOT EXISTS leases (
   holder TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS volume_editions (
+  id TEXT PRIMARY KEY,
+  series_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  track_id TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  first_chapter INTEGER NOT NULL,
+  last_chapter INTEGER NOT NULL,
+  recipe_hash TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  active INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS volume_members (
+  edition_id TEXT NOT NULL,
+  release_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (edition_id, release_id)
 );

@@ -128,3 +128,60 @@ serial-sync --config ./config.toml setup preview \
   --series-file series.toml \
   --show-posts
 ```
+
+## Rebuild stored output
+
+Use `run --rebuild` after changing output settings or when a completed volume
+reports a pending correction. It reads the catalog's captured normalized posts,
+raw payloads and attachments. It makes no provider requests and preserves sync
+cursors. Missing inputs are reported by release and path; the related old output
+stays in place.
+
+Stop active runs, then preview one series with state mounted read-only:
+
+```sh
+docker run --rm --network none \
+  -v serial-sync-state:/state:ro \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync run --rebuild --dry-run --series main-story --target local-files
+```
+
+Check the additions, replacements and retirements. An open range is informational;
+a blocked replacement or ownership conflict needs attention. Use `--source` only
+when the selected replacement can be built entirely from that source. A volume
+with members from an excluded source stays intact and the command returns nonzero.
+Both preview and rebuild exclude disabled sources. Enable every source needed by
+a shared volume before rebuilding it.
+
+The JSON includes the selected `scope`. If `pending_deliveries` is present, those
+saved editions must finish before the current output plan. Changed target settings
+or a narrower scope are reported as blocked. Restore the pending target's settings
+and retry its original scope first. Preview uses an in-memory catalog snapshot;
+an active, uncheckpointed catalog is rejected without changing state.
+
+Rebuild the chosen scope with writable state:
+
+```sh
+docker run --rm --network none \
+  -v serial-sync-state:/state \
+  -v "$PWD/config.toml:/config/config.toml:ro" \
+  serial-sync run --rebuild --series main-story --target local-files
+```
+
+Mount any publisher directory outside `/state` in both commands, read-only during
+preview and writable during rebuild. Repeating an unchanged rebuild reuses stored
+validated output. Pending deliveries resume from their saved plan before later
+changes are delivered; a failed target leaves successful targets intact.
+
+If regrouping reports a cyclic same-path replacement, give the series a distinct
+output title for that rebuild. This lets all replacement files arrive before old
+paths are retired. A later rebuild can restore the preferred title.
+The dependency graph is checked before saving new delivery work. An undelivered
+cyclic plan saved by an older version is replanned automatically on retry.
+
+Before migrating a large library, import a small rebuilt series into Calibre and
+read it on the intended device. Check chapter titles, author notes and series
+order. Replacing a delivered volume may affect the reader's saved position.
+Previous artifacts remain archived in state; only covered, owned published files
+are retired after their replacements succeed. Legacy libraries keep their old
+output on ordinary runs until this explicit migration.

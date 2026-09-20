@@ -8,17 +8,30 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
 var filenameTokenPattern = regexp.MustCompile(`[A-Za-z0-9]+`)
 
-type sequenceInfo struct {
-	Book    int
-	Chapter int
+type sequenceInfo = domain.Sequence
+
+func DetectSequence(texts ...string) domain.Sequence { return detectSequenceInfo(texts...) }
+
+func PreviewFilename(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision) string {
+	name, mime := "chapter.html", "text/html"
+	if decision.ContentStrategy != domain.ContentStrategyTextPost {
+		if attachment, ok := classify.SelectAttachment(normalized, decision); ok {
+			name, mime = attachment.FileName, attachment.MIMEType
+		}
+	}
+	if decision.OutputFormat == domain.OutputFormatEPUB {
+		name, mime = forceExtension(name, ".epub"), "application/epub+zip"
+	}
+	return canonicalFileName(track, release, normalized, name, mime, decision.Sequence)
 }
 
-func canonicalFileName(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, originalFileName, mimeType string) string {
+func canonicalFileName(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, originalFileName, mimeType string, override ...*domain.Sequence) string {
 	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(originalFileName)))
 	if ext == "" {
 		ext = extensionForMime(mimeType)
@@ -33,13 +46,15 @@ func canonicalFileName(track domain.StoryTrack, release domain.Release, normaliz
 	}
 
 	info := detectSequenceInfo(normalized.Title, originalFileName)
-	releaseToken := releaseFileToken(release.ProviderReleaseID)
+	if len(override) > 0 && override[0] != nil {
+		info = *override[0]
+	}
 	if info.Chapter > 0 {
 		parts := []string{trackName}
 		if info.Book > 0 {
 			parts = append(parts, fmt.Sprintf("Bk%02d", info.Book))
 		}
-		parts = append(parts, fmt.Sprintf("Ch%05d", info.Chapter), releaseToken)
+		parts = append(parts, fmt.Sprintf("Ch%04d", info.Chapter))
 		return joinSlugged(parts...) + ext
 	}
 
@@ -50,7 +65,6 @@ func canonicalFileName(track domain.StoryTrack, release domain.Release, normaliz
 	if titlePart := normalizeFileComponent(normalized.Title); titlePart != "" && !strings.EqualFold(titlePart, trackName) {
 		parts = append(parts, titlePart)
 	}
-	parts = append(parts, releaseToken)
 	return joinSlugged(parts...) + ext
 }
 
@@ -78,6 +92,7 @@ func detectSequenceInfo(texts ...string) sequenceInfo {
 		}
 		if info.Chapter == 0 && parsed.Chapter > 0 {
 			info.Chapter = parsed.Chapter
+			info.MatchedText = parsed.MatchedText
 		}
 		if info.Book > 0 && info.Chapter > 0 {
 			return info
@@ -87,7 +102,11 @@ func detectSequenceInfo(texts ...string) sequenceInfo {
 }
 
 func parseSequenceInfo(text string) sequenceInfo {
-	tokens := filenameTokenPattern.FindAllString(strings.ToLower(text), -1)
+	spans := filenameTokenPattern.FindAllStringIndex(text, -1)
+	tokens := make([]string, len(spans))
+	for i, span := range spans {
+		tokens[i] = strings.ToLower(text[span[0]:span[1]])
+	}
 	info := sequenceInfo{}
 	for idx, token := range tokens {
 		switch token {
@@ -96,14 +115,15 @@ func parseSequenceInfo(text string) sequenceInfo {
 				info.Book = number
 				idx += consumed
 			}
-		case "chapter", "chap", "ch":
-			if idx > 0 {
+		case "chapter", "chap", "ch", "chaper":
+			if number, consumed, ok := parseNumberTokens(tokens[idx+1:]); ok && info.Chapter == 0 {
+				info.Chapter = number
+				info.MatchedText = text[spans[idx][0]:spans[idx+consumed][1]]
+			} else if idx > 0 {
 				if number, ok := parseSimpleNumber(tokens[idx-1]); ok && info.Chapter == 0 {
 					info.Chapter = number
+					info.MatchedText = text[spans[idx-1][0]:spans[idx][1]]
 				}
-			}
-			if number, _, ok := parseNumberTokens(tokens[idx+1:]); ok && info.Chapter == 0 {
-				info.Chapter = number
 			}
 		}
 	}

@@ -30,6 +30,7 @@ func Explain(sourceID string, release domain.NormalizedRelease, rules []config.R
 			copied := rule
 			return ExplainedDecision{
 				Decision: domain.TrackDecision{
+					BookID:             rule.BookID,
 					TrackKey:           rule.TrackKey,
 					TrackName:          fallback(rule.TrackName, rule.TrackKey),
 					SeriesID:           fallback(rule.SeriesID, rule.TrackKey),
@@ -41,7 +42,6 @@ func Explain(sourceID string, release domain.NormalizedRelease, rules []config.R
 					CanonicalAuthor:    rule.CanonicalAuthor,
 					AttachmentGlob:     append([]string(nil), rule.AttachmentGlob...),
 					AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
-					AnthologyMode:      rule.AnthologyMode,
 					Matched:            true,
 				},
 				Rule: &copied,

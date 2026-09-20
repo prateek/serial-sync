@@ -30,11 +30,12 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 		return domain.ArtifactPlan{}, errors.New("release does not produce a materializable canonical artifact")
 	}
 	meta := map[string]any{
-		"source":     source,
-		"track":      track,
-		"release":    release,
-		"decision":   decision,
-		"normalized": normalized,
+		"output_version": 2,
+		"source":         source,
+		"track":          track,
+		"release":        release,
+		"decision":       decision,
+		"normalized":     normalized,
 	}
 	metadataJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -83,7 +84,21 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 	if err != nil {
 		return domain.ArtifactPlan{}, err
 	}
-	fileName := canonicalFileName(track, release, normalized, originalFileName, mimeType)
+	if validateEPUBCheck {
+		sequence := detectSequenceInfo(normalized.Title, originalFileName)
+		position := sequence.Chapter
+		if decision.Sequence != nil {
+			position = decision.Sequence.Position
+		}
+		content, err = withPublicationMetadata(content, publicationMetadata{
+			Title: release.Title, Author: firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName),
+			Series: track.TrackName, Position: position, PublishedAt: release.PublishedAt,
+		})
+		if err != nil {
+			return domain.ArtifactPlan{}, err
+		}
+	}
+	fileName := canonicalFileName(track, release, normalized, originalFileName, mimeType, decision.Sequence)
 	kind = attachmentKind(fileName, mimeType)
 	sum := sha256.Sum256(content)
 	return domain.ArtifactPlan{
@@ -105,7 +120,7 @@ func (m *Materializer) Materialize(ctx context.Context, source domain.Source, tr
 		return domain.Artifact{}, ctx.Err()
 	default:
 	}
-	dir := filepath.Join(m.Root, source.ID, track.TrackKey, release.ProviderReleaseID)
+	dir := filepath.Join(m.Root, source.ID, track.TrackKey, release.ProviderReleaseID, plan.SHA256)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return domain.Artifact{}, err
 	}

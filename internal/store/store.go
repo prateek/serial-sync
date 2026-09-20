@@ -36,6 +36,8 @@ type Repository interface {
 	GetArtifact(ctx context.Context, id string) (*domain.Artifact, error)
 	ListArtifactsByReleaseID(ctx context.Context, releaseID string) ([]domain.Artifact, error)
 	SaveSyncSnapshot(ctx context.Context, snapshot SyncSnapshot) error
+	ListVolumeEditions(ctx context.Context) ([]domain.VolumeEdition, error)
+	ReplaceVolumes(ctx context.Context, seriesID string, volumes []domain.VolumeEdition, deactivatedGroups []string) error
 
 	StartRun(ctx context.Context, run domain.RunRecord) error
 	FinishRun(ctx context.Context, runID string, status domain.RunStatus, summary string) error
@@ -48,6 +50,9 @@ type Repository interface {
 	UpsertPublishRecord(ctx context.Context, record domain.PublishRecord) error
 	ListPublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error)
 	GetPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error)
+	GetPendingPublish(ctx context.Context, targetID string) (*domain.PendingPublish, error)
+	SavePendingPublish(ctx context.Context, pending domain.PendingPublish) error
+	CompletePendingPublish(ctx context.Context, id string) error
 
 	AcquireLease(ctx context.Context, key, holder string, ttl time.Duration) (bool, error)
 	ReleaseLease(ctx context.Context, key, holder string) error

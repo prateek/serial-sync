@@ -3,6 +3,7 @@ package publish
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,9 +17,11 @@ import (
 )
 
 type ExecTarget struct {
-	ID      string
-	Command []string
-	RunID   string
+	ProtocolVersion int
+	ID              string
+	Command         []string
+	RunID           string
+	EventScope      string
 }
 
 type execPayload struct {
@@ -51,6 +54,14 @@ func PublishExec(ctx context.Context, target ExecTarget, candidate domain.Publis
 	if err != nil {
 		return domain.PublishRecord{}, err
 	}
+	if target.ProtocolVersion == 2 {
+		event := hookEvent{Version: 2, Action: "publish", TargetID: target.ID, PublishCandidate: &candidate}
+		event.EventID = hookEventID(target, "publish", candidate.Artifact.ID, candidate.Artifact.SHA256, candidate.Artifact.Filename)
+		payload, err = json.Marshal(event)
+		if err != nil {
+			return domain.PublishRecord{}, err
+		}
+	}
 
 	cmd := exec.CommandContext(ctx, target.Command[0], target.Command[1:]...)
 	cmd.Env = append(os.Environ(), execEnv(target, candidate)...)
@@ -66,16 +77,66 @@ func PublishExec(ctx context.Context, target ExecTarget, candidate domain.Publis
 	}
 
 	return domain.PublishRecord{
+		Filename:    candidate.Artifact.Filename,
 		ID:          "pub_" + uuid.NewString(),
 		ArtifactID:  candidate.Artifact.ID,
 		TargetID:    target.ID,
 		TargetKind:  "exec",
 		TargetRef:   ExecTargetRef(target.Command),
-		PublishHash: PublishHash(target.ID, candidate.Artifact.SHA256, ExecTargetSignature(target.Command)),
+		PublishHash: PublishHash(target.ID, candidate.Artifact.SHA256, ExecPublishSignature(target, candidate)),
 		PublishedAt: time.Now().UTC(),
 		Status:      domain.PublishStatusPublished,
 		Message:     combinedExecOutput(&stdout, &stderr),
 	}, nil
+}
+
+func ExecPublishSignature(target ExecTarget, candidate domain.PublishCandidate) string {
+	signature := ExecTargetSignature(target.Command)
+	if target.ProtocolVersion == 2 {
+		signature += "\x00v2\x00" + candidate.Artifact.Filename
+	}
+	return signature
+}
+
+type hookEvent struct {
+	Version  int    `json:"version"`
+	EventID  string `json:"event_id"`
+	Action   string `json:"action"`
+	TargetID string `json:"target_id"`
+	*domain.PublishCandidate
+	Previous     *domain.PublishRecordBundle `json:"previous,omitempty"`
+	Replacements []domain.PublishCandidate   `json:"replacements,omitempty"`
+}
+
+func hookEventID(target ExecTarget, parts ...string) string {
+	if target.EventScope != "" {
+		parts = append([]string{target.EventScope}, parts...)
+	}
+	parts = append([]string{target.ID, ExecTargetSignature(target.Command)}, parts...)
+	return fmt.Sprintf("evt_%x", sha256.Sum256([]byte(strings.Join(parts, "\x00"))))
+}
+
+func SupersedeExec(ctx context.Context, target ExecTarget, previous domain.PublishRecordBundle, replacements []domain.PublishCandidate) error {
+	if target.ProtocolVersion != 2 {
+		return fmt.Errorf("exec publisher %q requires protocol_version = 2 for retirement", target.ID)
+	}
+	parts := []string{"supersede", previous.Record.PublishHash, previous.Artifact.ID}
+	for _, replacement := range replacements {
+		parts = append(parts, replacement.Artifact.ID, replacement.Artifact.SHA256, replacement.Artifact.Filename)
+	}
+	event := hookEvent{Version: 2, EventID: hookEventID(target, parts...), Action: "supersede", TargetID: target.ID, Previous: &previous, Replacements: replacements}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, target.Command[0], target.Command[1:]...)
+	cmd.Stdin = bytes.NewReader(payload)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("exec publisher %q supersede failed: %w%s", target.ID, err, formatExecOutput(&stdout, &stderr))
+	}
+	return nil
 }
 
 func ExecTargetRef(command []string) string {

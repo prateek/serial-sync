@@ -52,6 +52,15 @@ func (q *Queries) ClearCanonicalArtifactsForRelease(ctx context.Context, release
 	return err
 }
 
+const completePendingPublish = `-- name: CompletePendingPublish :exec
+DELETE FROM pending_publishes WHERE id = ?1
+`
+
+func (q *Queries) CompletePendingPublish(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, completePendingPublish, id)
+	return err
+}
+
 const countSuccessfulPublishRecords = `-- name: CountSuccessfulPublishRecords :one
 SELECT COUNT(1)
 FROM publish_records
@@ -78,6 +87,20 @@ func (q *Queries) CountSuccessfulPublishRecords(ctx context.Context, arg CountSu
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const deactivateVolumeGroup = `-- name: DeactivateVolumeGroup :exec
+UPDATE volume_editions SET active = 0 WHERE series_id = ?1 AND group_id = ?2
+`
+
+type DeactivateVolumeGroupParams struct {
+	SeriesID string
+	GroupID  string
+}
+
+func (q *Queries) DeactivateVolumeGroup(ctx context.Context, arg DeactivateVolumeGroupParams) error {
+	_, err := q.db.ExecContext(ctx, deactivateVolumeGroup, arg.SeriesID, arg.GroupID)
+	return err
 }
 
 const getArtifact = `-- name: GetArtifact :one
@@ -138,142 +161,32 @@ func (q *Queries) GetCanonicalArtifactByReleaseID(ctx context.Context, releaseID
 	return i, err
 }
 
-const getPublishRecordBundle = `-- name: GetPublishRecordBundle :one
-SELECT
-  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
-FROM publish_records pr
-JOIN artifacts art ON art.id = pr.artifact_id
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN story_tracks t ON t.id = art.track_id
-WHERE pr.id = ?1
+const getPendingPublish = `-- name: GetPendingPublish :one
+SELECT id, target_id, payload_ref FROM pending_publishes WHERE target_id = ?1
 `
 
-type GetPublishRecordBundleRow struct {
-	ID                   string
-	ArtifactID           string
-	TargetID             string
-	TargetKind           string
-	TargetRef            string
-	PublishHash          string
-	PublishedAt          string
-	Status               string
-	Message              string
-	ID_2                 string
-	ReleaseID            string
-	TrackID              string
-	ArtifactKind         string
-	IsCanonical          int64
-	Filename             string
-	MimeType             string
-	Sha256               string
-	StorageRef           string
-	BuiltAt              string
-	State                string
-	MetadataRef          string
-	NormalizedRef        string
-	RawRef               string
-	ID_3                 string
-	SourceID             string
-	ProviderReleaseID    string
-	Url                  string
-	Title                string
-	PublishedAt_2        string
-	EditedAt             string
-	PostType             string
-	VisibilityState      string
-	NormalizedPayloadRef string
-	RawPayloadRef        string
-	ContentHash          string
-	DiscoveredAt         string
-	Status_2             string
-	ID_4                 string
-	Provider             string
-	SourceUrl            string
-	SourceType           string
-	CreatorID            string
-	CreatorName          string
-	AuthProfileID        string
-	Enabled              int64
-	SyncCursor           string
-	LastSyncedAt         string
-	ID_5                 sql.NullString
-	SourceID_2           sql.NullString
-	TrackKey             sql.NullString
-	TrackName            sql.NullString
-	CanonicalAuthor      sql.NullString
-	SeriesMeta           sql.NullString
-	OutputPolicy         sql.NullString
-	CreatedAt            sql.NullString
-	UpdatedAt            sql.NullString
+func (q *Queries) GetPendingPublish(ctx context.Context, targetID string) (PendingPublish, error) {
+	row := q.db.QueryRowContext(ctx, getPendingPublish, targetID)
+	var i PendingPublish
+	err := row.Scan(&i.ID, &i.TargetID, &i.PayloadRef)
+	return i, err
 }
 
-func (q *Queries) GetPublishRecordBundle(ctx context.Context, id string) (GetPublishRecordBundleRow, error) {
-	row := q.db.QueryRowContext(ctx, getPublishRecordBundle, id)
-	var i GetPublishRecordBundleRow
-	err := row.Scan(
-		&i.ID,
-		&i.ArtifactID,
-		&i.TargetID,
-		&i.TargetKind,
-		&i.TargetRef,
-		&i.PublishHash,
-		&i.PublishedAt,
-		&i.Status,
-		&i.Message,
-		&i.ID_2,
-		&i.ReleaseID,
-		&i.TrackID,
-		&i.ArtifactKind,
-		&i.IsCanonical,
-		&i.Filename,
-		&i.MimeType,
-		&i.Sha256,
-		&i.StorageRef,
-		&i.BuiltAt,
-		&i.State,
-		&i.MetadataRef,
-		&i.NormalizedRef,
-		&i.RawRef,
-		&i.ID_3,
-		&i.SourceID,
-		&i.ProviderReleaseID,
-		&i.Url,
-		&i.Title,
-		&i.PublishedAt_2,
-		&i.EditedAt,
-		&i.PostType,
-		&i.VisibilityState,
-		&i.NormalizedPayloadRef,
-		&i.RawPayloadRef,
-		&i.ContentHash,
-		&i.DiscoveredAt,
-		&i.Status_2,
-		&i.ID_4,
-		&i.Provider,
-		&i.SourceUrl,
-		&i.SourceType,
-		&i.CreatorID,
-		&i.CreatorName,
-		&i.AuthProfileID,
-		&i.Enabled,
-		&i.SyncCursor,
-		&i.LastSyncedAt,
-		&i.ID_5,
-		&i.SourceID_2,
-		&i.TrackKey,
-		&i.TrackName,
-		&i.CanonicalAuthor,
-		&i.SeriesMeta,
-		&i.OutputPolicy,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+const getPublishFilename = `-- name: GetPublishFilename :one
+SELECT filename FROM publish_filenames WHERE artifact_id = ?1 AND target_id = ?2 AND publish_hash = ?3
+`
+
+type GetPublishFilenameParams struct {
+	ArtifactID  string
+	TargetID    string
+	PublishHash string
+}
+
+func (q *Queries) GetPublishFilename(ctx context.Context, arg GetPublishFilenameParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPublishFilename, arg.ArtifactID, arg.TargetID, arg.PublishHash)
+	var filename string
+	err := row.Scan(&filename)
+	return filename, err
 }
 
 const getRelease = `-- name: GetRelease :one
@@ -482,6 +395,62 @@ func (q *Queries) InsertRunRecord(ctx context.Context, arg InsertRunRecordParams
 		arg.Summary,
 		arg.SourceScope,
 		arg.DryRun,
+	)
+	return err
+}
+
+const insertVolumeEdition = `-- name: InsertVolumeEdition :exec
+INSERT INTO volume_editions (id, series_id, source_id, track_id, group_id, first_chapter, last_chapter, recipe_hash, artifact_id, active)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+ON CONFLICT(id) DO UPDATE SET active = 1
+`
+
+type InsertVolumeEditionParams struct {
+	ID           string
+	SeriesID     string
+	SourceID     string
+	TrackID      string
+	GroupID      string
+	FirstChapter int64
+	LastChapter  int64
+	RecipeHash   string
+	ArtifactID   string
+}
+
+func (q *Queries) InsertVolumeEdition(ctx context.Context, arg InsertVolumeEditionParams) error {
+	_, err := q.db.ExecContext(ctx, insertVolumeEdition,
+		arg.ID,
+		arg.SeriesID,
+		arg.SourceID,
+		arg.TrackID,
+		arg.GroupID,
+		arg.FirstChapter,
+		arg.LastChapter,
+		arg.RecipeHash,
+		arg.ArtifactID,
+	)
+	return err
+}
+
+const insertVolumeMember = `-- name: InsertVolumeMember :exec
+INSERT INTO volume_members (edition_id, release_id, content_hash, position)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(edition_id, release_id) DO UPDATE SET content_hash = excluded.content_hash, position = excluded.position
+`
+
+type InsertVolumeMemberParams struct {
+	EditionID   string
+	ReleaseID   string
+	ContentHash string
+	Position    int64
+}
+
+func (q *Queries) InsertVolumeMember(ctx context.Context, arg InsertVolumeMemberParams) error {
+	_, err := q.db.ExecContext(ctx, insertVolumeMember,
+		arg.EditionID,
+		arg.ReleaseID,
+		arg.ContentHash,
+		arg.Position,
 	)
 	return err
 }
@@ -1653,6 +1622,114 @@ func (q *Queries) ListTracksBySource(ctx context.Context, sourceID string) ([]St
 	return items, nil
 }
 
+const listVolumeEditions = `-- name: ListVolumeEditions :many
+SELECT id, series_id, source_id, track_id, group_id, first_chapter, last_chapter, recipe_hash, artifact_id, active FROM volume_editions ORDER BY series_id, first_chapter, id
+`
+
+func (q *Queries) ListVolumeEditions(ctx context.Context) ([]VolumeEdition, error) {
+	rows, err := q.db.QueryContext(ctx, listVolumeEditions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VolumeEdition
+	for rows.Next() {
+		var i VolumeEdition
+		if err := rows.Scan(
+			&i.ID,
+			&i.SeriesID,
+			&i.SourceID,
+			&i.TrackID,
+			&i.GroupID,
+			&i.FirstChapter,
+			&i.LastChapter,
+			&i.RecipeHash,
+			&i.ArtifactID,
+			&i.Active,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVolumeMembers = `-- name: ListVolumeMembers :many
+SELECT release_id, content_hash, position FROM volume_members WHERE edition_id = ?1 ORDER BY position, release_id
+`
+
+type ListVolumeMembersRow struct {
+	ReleaseID   string
+	ContentHash string
+	Position    int64
+}
+
+func (q *Queries) ListVolumeMembers(ctx context.Context, editionID string) ([]ListVolumeMembersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listVolumeMembers, editionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVolumeMembersRow
+	for rows.Next() {
+		var i ListVolumeMembersRow
+		if err := rows.Scan(&i.ReleaseID, &i.ContentHash, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVolumePublishRecords = `-- name: ListVolumePublishRecords :many
+SELECT DISTINCT pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message FROM publish_records pr JOIN volume_editions v ON v.artifact_id = pr.artifact_id ORDER BY pr.published_at DESC
+`
+
+func (q *Queries) ListVolumePublishRecords(ctx context.Context) ([]PublishRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listVolumePublishRecords)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PublishRecord
+	for rows.Next() {
+		var i PublishRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.ArtifactID,
+			&i.TargetID,
+			&i.TargetKind,
+			&i.TargetRef,
+			&i.PublishHash,
+			&i.PublishedAt,
+			&i.Status,
+			&i.Message,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const releaseLease = `-- name: ReleaseLease :exec
 DELETE FROM leases
 WHERE key = ?1 AND holder = ?2
@@ -1665,6 +1742,44 @@ type ReleaseLeaseParams struct {
 
 func (q *Queries) ReleaseLease(ctx context.Context, arg ReleaseLeaseParams) error {
 	_, err := q.db.ExecContext(ctx, releaseLease, arg.Key, arg.Holder)
+	return err
+}
+
+const savePendingPublish = `-- name: SavePendingPublish :exec
+INSERT INTO pending_publishes (id, target_id, payload_ref) VALUES (?1, ?2, ?3)
+`
+
+type SavePendingPublishParams struct {
+	ID         string
+	TargetID   string
+	PayloadRef string
+}
+
+func (q *Queries) SavePendingPublish(ctx context.Context, arg SavePendingPublishParams) error {
+	_, err := q.db.ExecContext(ctx, savePendingPublish, arg.ID, arg.TargetID, arg.PayloadRef)
+	return err
+}
+
+const savePublishFilename = `-- name: SavePublishFilename :exec
+INSERT INTO publish_filenames (artifact_id, target_id, publish_hash, filename)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(artifact_id, target_id, publish_hash) DO UPDATE SET filename = excluded.filename
+`
+
+type SavePublishFilenameParams struct {
+	ArtifactID  string
+	TargetID    string
+	PublishHash string
+	Filename    string
+}
+
+func (q *Queries) SavePublishFilename(ctx context.Context, arg SavePublishFilenameParams) error {
+	_, err := q.db.ExecContext(ctx, savePublishFilename,
+		arg.ArtifactID,
+		arg.TargetID,
+		arg.PublishHash,
+		arg.Filename,
+	)
 	return err
 }
 
@@ -1717,7 +1832,7 @@ INSERT INTO artifacts (
   ?9, ?10, ?11, ?12,
   ?13, ?14
 )
-ON CONFLICT(release_id, sha256, artifact_kind) DO UPDATE SET
+ON CONFLICT(release_id, sha256, artifact_kind, filename, track_id) DO UPDATE SET
   track_id = excluded.track_id,
   is_canonical = excluded.is_canonical,
   filename = excluded.filename,

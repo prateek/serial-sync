@@ -11,7 +11,9 @@ Core sections:
 - `[[sources]]`: upstream sources
 - `[[series]]`: canonical story/serial definitions
 - `[[series.inputs]]`: source-specific matchers that feed each series
-- `[series.output]`: preferred output format and preface behavior for a series
+- `[series.output]`: format, preface behavior and optional volume grouping
+- `[[series.books]]`: author-book identity, expected chapter ranges and reading positions
+- `[[series.sequence_overrides]]`: explicit sequence choices for individual source releases
 
 The current MVP supports:
 
@@ -127,7 +129,93 @@ Notes:
 - `format = "epub"` emits EPUB output for HTML/text sources and PDF attachments via Calibre's `ebook-convert`; existing EPUB attachments are passed through unless `preface_mode = "prepend_post"` wraps them.
 - `format = "epub"` plus `preface_mode = "prepend_post"` adds the Patreon post text to EPUB attachments and to PDF attachments after conversion.
 - EPUBs generated, converted, or wrapped by serial-sync are checked as ZIP/OCF/package documents during planning and must pass EPUBCheck before they are stored. Unchanged pass-through attachments stay byte-preserving. Native, non-Docker runs that produce EPUB output need `epubcheck` on `PATH`. Use `scripts/validate-epubs <published-root> <report-dir>` when you want a full EPUBCheck pass over a published folder.
-- published artifact filenames are lowercase, dash-slugged, and derived from track name, sequence/date, and release id.
+- published chapter names use the series slug, optional `bkNN`, and `chNNNN` (minimum four digits). Unnumbered posts use date and title. Only colliding names receive a stable identity suffix; every member of a collision receives one.
+
+## Volume output
+
+Within a series, set:
+
+```toml
+[series.output]
+format = "epub"
+preface_mode = "prepend_post"
+bundling = "volume"
+chapters_per_volume = 50
+intentional_gaps = [{ chapter = 17, reason = "The author skipped this number" }]
+```
+
+`bundling` defaults to `"none"`; its other value is `"volume"`, which requires
+`format = "epub"`. `chapters_per_volume` defaults to 50 and must be positive.
+Without author books, expected ranges are 1–50, 51–100, and so on. All expected
+slots must be available before a volume completes. To close a short final range,
+set `final_chapter` to its inclusive endpoint. Omit it while the ending is unknown.
+Chapters beyond that endpoint remain singles until the endpoint or mapping changes.
+
+Declare author books under the same series when their boundaries are known:
+
+```toml
+[[series.books]]
+id = "book-one"
+number = 1
+title = "Main Story: Book One"
+first_chapter = 1
+last_chapter = 80
+
+[[series.books]]
+id = "book-two"
+number = 2
+first_chapter = 1
+last_chapter = 60
+series_position_start = 81
+intentional_gaps = [{ chapter = 12, reason = "Intentional author numbering gap" }]
+```
+
+Each author book becomes one volume, regardless of `chapters_per_volume`.
+`id` is stable; `number` defines book order. `first_chapter` defaults to 1.
+Omitting `last_chapter` keeps the book open. Detected book numbers match these
+definitions; an input's `book_id = "book-two"` overrides title detection.
+Keep book-specific gaps on the book definition.
+
+When numbering restarts at 1, declared prior spans determine the series position.
+In this example Book Two chapter 1 is position 81. `series_position_start` can
+supply the position when earlier books are missing from the archive. Unknown
+positions are explained in preview and omitted from chapter metadata; they block
+volume completion. Intentional gaps reserve their positions.
+Known position overlaps are rejected even when an earlier book has no endpoint.
+If a chapter in an open book reaches a later book's explicit starting position,
+it remains a single with no scalar position until the conflicting mapping is fixed.
+
+Use source-native release IDs for exceptions:
+
+```toml
+[[series.sequence_overrides]]
+source = "example-creator"
+release_id = "154807100"
+book_id = "book-two"
+chapter = 4
+
+[[series.sequence_overrides]]
+source = "example-creator"
+release_id = "154807101"
+keep_single = true
+```
+
+An override can map an interlude or ambiguous title to a slot. Use `keep_single`
+on the other release when two posts share a chapter number; duplicates otherwise
+block the group. Available chapters stay as singles until the mapping is resolved.
+
+Completed editions keep their membership and bytes during normal runs. Changed
+inputs, mappings or volume size require `run --rebuild`; disabling bundling also
+requires rebuild to replace existing volumes with singles. Missing inputs block
+the affected transition. Delivery and retirement are tracked separately per target,
+and user-modified or unrelated destination files are preserved with a conflict.
+Rebuild and its dry-run select enabled sources only. A replacement requiring a
+disabled source is blocked; enable that source before rebuilding the shared volume.
+
+`anthology_mode` is deprecated in both series inputs and legacy rules. An explicit
+`false` emits a warning; remove the field. `true` is rejected: use series-level
+`bundling = "volume"` instead. Exec targets need [protocol version 2](hooks.md)
+for volumes or retirement.
 
 For a full runnable example, use [config.demo.toml](../examples/config.demo.toml).
 

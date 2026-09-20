@@ -71,11 +71,11 @@ type SetupDumpCmd struct {
 }
 
 type SetupPreviewCmd struct {
-	Workspace string   `name:"workspace" help:"Path to a source dump workspace."`
-	SeriesFile string  `name:"series-file" help:"Path to a series TOML file. Defaults to <workspace>/series.toml."`
-	Creators  []string `name:"creator" help:"Limit preview to specific dumped creators. Repeat the flag for multiple authors."`
-	ShowPosts bool     `name:"show-posts" help:"Include per-post classification output in text mode."`
-	Format    string   `name:"format" default:"text" enum:"text,json" help:"Output format."`
+	Workspace  string   `name:"workspace" help:"Path to a source dump workspace."`
+	SeriesFile string   `name:"series-file" help:"Path to a series TOML file. Defaults to <workspace>/series.toml."`
+	Creators   []string `name:"creator" help:"Limit preview to specific dumped creators. Repeat the flag for multiple authors."`
+	ShowPosts  bool     `name:"show-posts" help:"Include per-post classification output in text mode."`
+	Format     string   `name:"format" default:"text" enum:"text,json" help:"Output format."`
 }
 
 type DebugRunsCmd struct {
@@ -103,7 +103,9 @@ type RunCmd struct {
 type RunExecCmd struct {
 	SourceID string `name:"source" help:"Limit the run to one source."`
 	TargetID string `name:"target" help:"Limit publish to one target."`
-	DryRun   bool   `name:"dry-run" help:"Show the sync plan without mutating state or publishing."`
+	DryRun   bool   `name:"dry-run" help:"Preview without publishing; with --rebuild, remain offline and read-only."`
+	Rebuild  bool   `name:"rebuild" help:"Rebuild stored output offline, without contacting a provider."`
+	SeriesID string `name:"series" help:"Limit an offline rebuild to one series."`
 }
 
 type DebugPublishesCmd struct {
@@ -335,6 +337,21 @@ func (cmd *DebugBundleCmd) Run(cli *CLI) error {
 }
 
 func (cmd *RunExecCmd) Run(cli *CLI) error {
+	if cmd.Rebuild {
+		service, cleanup, err := bootstrapMode(cli.ConfigPath, cmd.DryRun)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		result, err := service.Rebuild(context.Background(), app.RebuildOptions{SourceID: cmd.SourceID, TargetID: cmd.TargetID, SeriesID: cmd.SeriesID, DryRun: cmd.DryRun}, "run --rebuild")
+		if printErr := printJSON(result); printErr != nil {
+			return printErr
+		}
+		return err
+	}
+	if cmd.SeriesID != "" {
+		return fmt.Errorf("--series requires --rebuild")
+	}
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		if cmd.DryRun {
 			result, err := service.Sync(ctx, cmd.SourceID, true, "run --dry-run")
@@ -346,11 +363,10 @@ func (cmd *RunExecCmd) Run(cli *CLI) error {
 			return nil
 		}
 		result, err := service.RunOnce(ctx, cmd.SourceID, cmd.TargetID, "run")
-		if err != nil {
-			return err
+		if result.Sync.RunID != "" || result.Publish.RunID != "" {
+			fmt.Println(app.FormatRunOnceResult(result))
 		}
-		fmt.Println(app.FormatRunOnceResult(result))
-		return nil
+		return err
 	})
 }
 
@@ -520,20 +536,38 @@ func withServiceContext(ctx context.Context, configPath string, fn func(context.
 }
 
 func bootstrap(configPath string) (*app.Service, func(), error) {
+	return bootstrapMode(configPath, false)
+}
+
+func bootstrapMode(configPath string, readOnly bool) (*app.Service, func(), error) {
 	cfg, roots, err := config.Load(configPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := config.EnsureDirs(roots, cfg); err != nil {
-		return nil, nil, err
+	for _, rule := range cfg.Rules {
+		if rule.AnthologyMode != nil {
+			fmt.Fprintf(os.Stderr, "warning: anthology_mode is deprecated for source %s; remove it and configure series.output.bundling when needed\n", rule.Source)
+		}
 	}
-	repo, err := sqlite.Open(cfg.Runtime.StoreDSN)
+	if !readOnly {
+		if err := config.EnsureDirs(roots, cfg); err != nil {
+			return nil, nil, err
+		}
+	}
+	var repo *sqlite.Store
+	if readOnly {
+		repo, err = sqlite.OpenReadOnly(cfg.Runtime.StoreDSN)
+	} else {
+		repo, err = sqlite.Open(cfg.Runtime.StoreDSN)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := repo.EnsureSchema(context.Background()); err != nil {
-		_ = repo.Close()
-		return nil, nil, err
+	if !readOnly {
+		if err := repo.EnsureSchema(context.Background()); err != nil {
+			_ = repo.Close()
+			return nil, nil, err
+		}
 	}
 	registry := provider.NewRegistry(patreon.New())
 	path := configPath
@@ -644,15 +678,17 @@ func printRunHelp(w io.Writer) {
 	fmt.Fprint(w, `Usage: serial-sync run [flags]
        serial-sync run daemon [flags]
 
-Run the normal sync-plus-publish workflow by default. Use `+"`--dry-run`"+` to preview
-the sync classification/materialization step without mutating state or
-publishing.
+Run the normal sync-plus-publish workflow by default. Use --dry-run to preview
+sync classification without publishing. Use --rebuild to rebuild stored output
+offline; --rebuild --dry-run prints a read-only plan.
 
 Flags:
   -h, --help             Show context-sensitive help.
       --source=STRING    Limit the run to one source.
       --target=STRING    Limit publish to one target.
-      --dry-run          Show the sync plan without mutating state or publishing.
+      --series=STRING    Limit an offline rebuild to one series (requires --rebuild).
+      --rebuild          Rebuild output offline from captured inputs.
+      --dry-run          Preview without publishing; read-only with --rebuild.
 
 Commands:
   run daemon [flags]
