@@ -25,6 +25,8 @@ The `internal/artifact` tests shell out to `epubcheck` and Calibre's `ebook-conv
 
 CI runs the suite in a `golang:1.27-trixie` container so it tests against the Calibre the Docker image ships (Debian trixie's 8.5.0). Ubuntu 24.04's packaged Calibre 7.6.0 crashes on EPUB 3 output, so the PDF conversion test fails there; see [Troubleshooting](docs/troubleshooting.md#pdf-to-epub-conversion-fails-on-ubuntu-2404).
 
+CI uses `go test -timeout 20m ./...` because the app's EPUB workflows exceed Go's default ten-minute package timeout on hosted runners. Each EPUBCheck invocation still has its own two-minute timeout.
+
 ## Generated Assets
 
 ```sh
