@@ -155,6 +155,9 @@ func (pkg opfPackage) MarshalXML(encoder *xml.Encoder, start xml.StartElement) e
 				return err
 			}
 		case opfPackageChildRaw:
+			if child.Raw.isEmptyGuide() {
+				continue
+			}
 			if err := child.Raw.EncodeXML(encoder); err != nil {
 				return err
 			}
@@ -250,11 +253,47 @@ func readRawElement(decoder *xml.Decoder, start xml.StartElement) (opfRawElement
 
 func (raw opfRawElement) EncodeXML(encoder *xml.Encoder) error {
 	for _, token := range raw.Tokens {
+		if start, ok := token.(xml.StartElement); ok {
+			start.Attr = withoutXMLNamespaceDeclarations(start.Attr)
+			token = start
+		}
 		if err := encoder.EncodeToken(token); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (raw opfRawElement) isEmptyGuide() bool {
+	if len(raw.Tokens) == 0 {
+		return false
+	}
+	start, ok := raw.Tokens[0].(xml.StartElement)
+	if !ok || start.Name != (xml.Name{Space: "http://www.idpf.org/2007/opf", Local: "guide"}) {
+		return false
+	}
+	for _, token := range raw.Tokens[1:] {
+		switch value := token.(type) {
+		case xml.StartElement:
+			return false
+		case xml.CharData:
+			if strings.TrimSpace(string(value)) != "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func withoutXMLNamespaceDeclarations(attrs []xml.Attr) []xml.Attr {
+	result := make([]xml.Attr, 0, len(attrs))
+	for _, attr := range attrs {
+		if attr.Name.Space == "xmlns" || attr.Name.Space == "" && attr.Name.Local == "xmlns" {
+			continue
+		}
+		result = append(result, attr)
+	}
+	return result
 }
 
 type opfMetadata struct {
@@ -387,7 +426,7 @@ func (metadata *opfMetadata) UnmarshalXML(decoder *xml.Decoder, start xml.StartE
 
 func (metadata opfMetadata) MarshalXML(encoder *xml.Encoder, start xml.StartElement) error {
 	start.Name.Local = "metadata"
-	start.Attr = append(start.Attr, metadata.Attrs...)
+	start.Attr = append(start.Attr, withoutXMLNamespaceDeclarations(metadata.Attrs)...)
 	start.Attr = append(start.Attr, xml.Attr{Name: xml.Name{Local: "xmlns:dc"}, Value: firstNonEmptyString(metadata.DC, "http://purl.org/dc/elements/1.1/")})
 	if err := encoder.EncodeToken(start); err != nil {
 		return err
@@ -439,7 +478,7 @@ func encodeDCElements(encoder *xml.Encoder, metadata opfMetadata) error {
 		}
 		start := xml.StartElement{
 			Name: xml.Name{Local: "dc:" + element.Name},
-			Attr: element.Attrs,
+			Attr: withoutXMLNamespaceDeclarations(element.Attrs),
 		}
 		if err := encoder.EncodeElement(element.Value, start); err != nil {
 			return err

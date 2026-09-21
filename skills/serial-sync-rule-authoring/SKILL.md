@@ -127,6 +127,7 @@ For output settings:
 - `prepend_post` only matters when the release materializes from an attachment and the Patreon post has note text; in `format = "epub"` it wraps EPUB attachments and PDF attachments after Calibre conversion, while plain text-post chapters stay plain converted content
 - published artifact filenames are lowercase and dash-slugged, so sample output paths may normalize spaces and punctuation
 - generated, converted, and wrapped EPUBs must pass EPUBCheck before storage; unchanged pass-through EPUB attachments stay byte-preserving
+- when an EPUB 2 attachment fails wrapping, check the [output compatibility notes](../../docs/config.md) and preserve author attributes and populated guide links when repairing it
 - after publishing EPUB output, run `scripts/validate-epubs <published-source-root> <report-dir>` when you need a report over the whole published folder
 
 ## Iteration loop

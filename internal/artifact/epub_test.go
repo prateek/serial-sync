@@ -297,6 +297,81 @@ func TestWrappedEPUB2PassesEPUBCheck(t *testing.T) {
 	assertEPUBCheckPasses(t, path)
 }
 
+func TestWrappedEPUB2PreservesLocalNamespaces(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, old, replacement string
+	}{
+		{"creator", `<dc:creator>`, `<dc:creator xmlns:opf="http://www.idpf.org/2007/opf" opf:role="aut" opf:file-as="Author, Original">`},
+		{"guide", `<guide>`, `<guide xmlns="http://www.idpf.org/2007/opf">`},
+		{"metadata", `<metadata xmlns:dc=`, `<metadata xmlns="http://www.idpf.org/2007/opf" xmlns:dc=`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			files := unzipEntries(t, buildEPUB2Fixture(t))
+			files["content.opf"] = bytes.Replace(files["content.opf"], []byte(`<spine>`), []byte(`<spine toc="ncx">`), 1)
+			files["content.opf"] = bytes.Replace(files["content.opf"], []byte(test.old), []byte(test.replacement), 1)
+			original, err := writeEPUBArchive(files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrapped, err := wrapEPUBWithPreface(original, "Wrapped Book", "Author Name", "urn:uuid:22222222-2222-2222-2222-222222222222", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), "<p>preface</p>")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pkg struct {
+				Creator struct {
+					Role   string `xml:"http://www.idpf.org/2007/opf role,attr"`
+					FileAs string `xml:"http://www.idpf.org/2007/opf file-as,attr"`
+				} `xml:"metadata>creator"`
+				Guide struct {
+					Href string `xml:"href,attr"`
+				} `xml:"guide>reference"`
+			}
+			if err := xml.Unmarshal(unzipEntries(t, wrapped)["content.opf"], &pkg); err != nil {
+				t.Fatal(err)
+			}
+			if test.name == "creator" && (pkg.Creator.Role != "aut" || pkg.Creator.FileAs != "Author, Original") {
+				t.Fatalf("creator attributes lost: %+v", pkg.Creator)
+			}
+			if pkg.Guide.Href != "chapter.xhtml" {
+				t.Fatalf("guide link lost: %+v", pkg.Guide)
+			}
+			for name, content := range map[string][]byte{"original": original, "wrapped": wrapped} {
+				file := filepath.Join(t.TempDir(), name+".epub")
+				if err := os.WriteFile(file, content, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				assertEPUBCheckPasses(t, file)
+			}
+		})
+	}
+}
+
+func TestWrappedEPUB2DropsEmptyGuide(t *testing.T) {
+	t.Parallel()
+	files := unzipEntries(t, buildEPUB2Fixture(t))
+	files["content.opf"] = bytes.Replace(files["content.opf"], []byte(`<reference type="text" title="Chapter" href="chapter.xhtml"/>`), nil, 1)
+	original, err := writeEPUBArchive(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := wrapEPUBWithPreface(original, "Wrapped Book", "Author Name", "urn:uuid:22222222-2222-2222-2222-222222222222", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), "<p>preface</p>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := unzipEntries(t, wrapped)
+	if !bytes.Equal(got["chapter.xhtml"], files["chapter.xhtml"]) || !bytes.Equal(got["toc.ncx"], files["toc.ncx"]) {
+		t.Fatal("chapter content or navigation changed")
+	}
+	file := filepath.Join(t.TempDir(), "wrapped.epub")
+	if err := os.WriteFile(file, wrapped, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertEPUBCheckPasses(t, file)
+}
+
 func TestWrapEPUBWithPrefaceKeepsSelectedIdentifier(t *testing.T) {
 	t.Parallel()
 

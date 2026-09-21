@@ -146,6 +146,7 @@ Notes:
 - `format = "preserve"` plus `preface_mode = "prepend_post"` wraps existing EPUB attachments with a front-matter page while leaving non-EPUB attachments in their original format.
 - `format = "epub"` emits EPUB output for HTML/text sources and PDF attachments via Calibre's `ebook-convert`; existing EPUB attachments are passed through unless `preface_mode = "prepend_post"` wraps them.
 - `format = "epub"` plus `preface_mode = "prepend_post"` adds the Patreon post text to EPUB attachments and to PDF attachments after conversion.
+- EPUB 2 wrapping preserves namespaced author attributes and populated guide links. Empty guide sections are removed before validation; chapter content and NCX navigation remain intact.
 - EPUBs generated, converted, or wrapped by serial-sync are checked as ZIP/OCF/package documents during planning and must pass EPUBCheck before they are stored. Unchanged pass-through attachments stay byte-preserving. Native, non-Docker runs that produce EPUB output need `epubcheck` on `PATH`. Use `scripts/validate-epubs <published-root> <report-dir>` when you want a full EPUBCheck pass over a published folder.
 - published chapter names use the series slug, optional `bkNN`, and `chNNNN` (minimum four digits). Unnumbered posts use date and title. Only colliding names receive a stable identity suffix; every member of a collision receives one.
 

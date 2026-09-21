@@ -67,7 +67,7 @@ Both reject unknown config keys and invalid rule values before provider work.
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- series output can preserve source attachments or emit EPUBCheck-validated EPUB when serial-sync generates, converts, or wraps the book
+- series output can preserve source attachments or emit EPUBCheck-validated EPUB when serial-sync generates, converts, or wraps the book, including EPUB 2 attachments
 - published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
 - generated chapter EPUBs have distinct titles and Calibre/EPUB 3 series positions
 - optional volumes follow declared author books, falling back to configurable 50-chapter ranges; gaps keep chapters as singles

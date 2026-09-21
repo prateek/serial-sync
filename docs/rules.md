@@ -354,6 +354,8 @@ Recommended default:
 
 EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Unchanged pass-through EPUB attachments stay byte-preserving.
 
+For EPUB 2 attachments, wrapping retains author metadata and guide links while repairing empty guide sections. See the [output compatibility notes](config.md) before changing a series to pass-through output to avoid a validation failure.
+
 For a full EPUBCheck sweep after publishing, run:
 
 ```sh
