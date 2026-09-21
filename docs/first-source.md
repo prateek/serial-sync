@@ -8,8 +8,11 @@ Use `serial-sync setup init` or write a config manually. The minimum useful conf
 
 - one Patreon auth profile
 - one filesystem publisher
-- at least one enabled source
-- a series file you will refine after inspecting a dump
+- sources and series mappings after inspecting a dump
+
+You may start with only the auth profile. After authentication,
+`setup memberships --auth-profile patreon-default` lists creators and mapping
+status without fetching posts. An expired session directs you back to `setup auth`.
 
 ## 2. Provide auth
 
@@ -19,7 +22,7 @@ Default bootstrap path:
 export PATREON_USERNAME='you@example.com'
 export PATREON_PASSWORD='your-password'
 export PATREON_TOTP_SECRET='OPTIONAL-BASE32-SECRET-OR-OTPAUTH-URI'
-serial-sync --config ./config.toml setup auth --source example-creator
+serial-sync --config ./config.toml setup auth --auth-profile patreon-default
 ```
 
 If you already have a valid session bundle:
@@ -40,20 +43,23 @@ Start by dumping all paid memberships into a local workspace:
 ```sh
 serial-sync --config ./config.toml setup dump \
   --auth-profile patreon-default \
-  --path ./serial-sync-rule-workspace \
-  --force
+  --path ./serial-sync-rule-workspace
 ```
 
 If you only want one or two creators, add `--creator` filters later.
 
+A refresh uses the same command and preserves your `series.toml` and the previous
+capture on failure. Move the whole workspace when changing mounts. Check and
+preview are read-only; their config and workspace mounts can use `:ro`.
+
 This writes:
 
 - `manifest.json`
-- `sources.toml`
+- `captures/<generation>/sources.toml`
 - `series.toml`
-- `creators/<source-id>/posts.ndjson`
-- `creators/<source-id>/posts/*.json`
-- `creators/<source-id>/attachments/<post-id>/...`
+- `captures/<generation>/creators/<source-id>/posts.ndjson`
+- `captures/<generation>/creators/<source-id>/posts/*.json`
+- `captures/<generation>/creators/<source-id>/attachments/<post-id>/...`
 
 `posts.ndjson` is the fast inspection surface. The raw `posts/` and `attachments/`
 folders make the dump a fuller offline capture that later replay/materialization
@@ -70,11 +76,15 @@ serial-sync --config ./config.toml setup preview \
 
 Use the dump workspace to:
 
-- copy the suggested `[[sources]]` from `sources.toml` into your real config
+- copy the suggested `[[sources]]` from the capture file printed as `sources=` by `setup dump` into your real config
 - edit `series.toml`
 - iterate locally with `setup preview` until the grouped output looks right
 
 ## 4. Merge the dumped sources and sample safely
+
+Copy both the generated `[[sources]]` and your authored `[[series]]` into the
+main config, then run `setup check`. `run --dry-run` below is a live plan: it can
+fetch data and write diagnostics. Use workspace preview for offline iteration.
 
 ```sh
 serial-sync --config ./config.toml run --dry-run --source example-creator
@@ -185,3 +195,38 @@ order. Replacing a delivered volume may affect the reader's saved position.
 Previous artifacts remain archived in state; only covered, owned published files
 are retired after their replacements succeed. Legacy libraries keep their old
 output on ordinary runs until this explicit migration.
+
+## Revising a configured source
+
+Keep a candidate config beside the current one and replay the stored catalog:
+
+```sh
+docker compose run --rm serial-sync --config /config/config.proposed.toml \
+  setup preview --stored --compare /config/config.toml --format json
+```
+
+This reads current catalog payload references without fetching or writing state.
+Review classification and output-policy changes separately, and inspect advisory
+candidates even for already assigned posts. After promoting the config, preview
+`run --rebuild --dry-run` before applying stored-output changes with `run --rebuild`.
+See [discovery candidates](rules.md#discovery-candidates) for evidence-scoped dismissals.
+
+For a new creator, add `--suggest` to preview to print a starting config fragment.
+Choose the series names, inspect candidate members, then copy reviewed entries
+into the main config. Shared output belongs in `[defaults]`, author in
+`sources.author`, and the common source in `series.source`. Use guarded collection
+or tag lists for fiction; use `[[review]]` with a reason for administrative posts.
+Run preview again after editing, and inspect failed guards with `--show-posts`.
+
+Before promoting a candidate main config, compare it with the baseline:
+
+```sh
+serial-sync --config /config/candidate.toml setup preview --stored \
+  --compare /config/config.toml --show-posts
+```
+
+Read classification, output policy, and applied-library plans separately. Both
+plans use the same catalog; mount config, state, and destination folders read-only.
+Workspace replay cannot report delivery changes without a catalog. Once a book
+label is confirmed, `series.books.collection` or `tag` maps its identity; declare
+its chapter endpoint separately before expecting a completed volume.

@@ -20,7 +20,7 @@ func DetectSequence(texts ...string) domain.Sequence { return detectSequenceInfo
 
 func PreviewFilename(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision) string {
 	name, mime := "chapter.html", "text/html"
-	if decision.ContentStrategy != domain.ContentStrategyTextPost {
+	if classify.SelectContent(normalized, decision).Kind == "attachment" {
 		if attachment, ok := classify.SelectAttachment(normalized, decision); ok {
 			name, mime = attachment.FileName, attachment.MIMEType
 		}
@@ -49,12 +49,20 @@ func canonicalFileName(track domain.StoryTrack, release domain.Release, normaliz
 	if len(override) > 0 && override[0] != nil {
 		info = *override[0]
 	}
-	if info.Chapter > 0 {
+	if info.HasChapter() || info.Part != "" {
 		parts := []string{trackName}
 		if info.Book > 0 {
 			parts = append(parts, fmt.Sprintf("Bk%02d", info.Book))
 		}
-		parts = append(parts, fmt.Sprintf("Ch%04d", info.Chapter))
+		switch {
+		case info.ChapterLabel != "":
+			parts = append(parts, "Ch"+strings.ReplaceAll(info.ChapterLabel, "-", "minus"))
+		case info.Chapter > 0:
+			parts = append(parts, fmt.Sprintf("Ch%04d", info.Chapter))
+		}
+		if info.Part != "" {
+			parts = append(parts, "Part", info.Part)
+		}
 		return joinSlugged(parts...) + ext
 	}
 
@@ -90,18 +98,23 @@ func detectSequenceInfo(texts ...string) sequenceInfo {
 		if info.Book == 0 && parsed.Book > 0 {
 			info.Book = parsed.Book
 		}
-		if info.Chapter == 0 && parsed.Chapter > 0 {
-			info.Chapter = parsed.Chapter
-			info.MatchedText = parsed.MatchedText
+		if !info.HasChapter() && info.Part == "" && (parsed.HasChapter() || parsed.Part != "") {
+			book := info.Book
+			info = parsed
+			if book > 0 {
+				info.Book = book
+			}
 		}
-		if info.Book > 0 && info.Chapter > 0 {
-			return info
+		if info.Part == "" && parsed.Part != "" {
+			info.Part = parsed.Part
+			info.KeepSingle = true
+			info.Reason = parsed.Reason
 		}
 	}
 	return info
 }
 
-func parseSequenceInfo(text string) sequenceInfo {
+func parseWordSequence(text string) sequenceInfo {
 	spans := filenameTokenPattern.FindAllStringIndex(text, -1)
 	tokens := make([]string, len(spans))
 	for i, span := range spans {
@@ -115,7 +128,7 @@ func parseSequenceInfo(text string) sequenceInfo {
 				info.Book = number
 				idx += consumed
 			}
-		case "chapter", "chap", "ch", "chaper":
+		case "chapter", "chap", "ch", "chaper", "chaptger", "chapeter":
 			if number, consumed, ok := parseNumberTokens(tokens[idx+1:]); ok && info.Chapter == 0 {
 				info.Chapter = number
 				info.MatchedText = text[spans[idx][0]:spans[idx+consumed][1]]

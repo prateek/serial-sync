@@ -16,6 +16,12 @@ type SyncSnapshot struct {
 }
 
 type Repository interface {
+	GetReleaseEnrichment(context.Context, string, string, string) (*domain.ReleaseEnrichment, error)
+	SaveReleaseEnrichment(context.Context, string, string, domain.ReleaseEnrichment) error
+	ListLabelObservations(context.Context) ([]domain.LabelReference, error)
+	ListDiscoveryCandidates(ctx context.Context, sourceID string) ([]domain.DiscoveryCandidate, error)
+	SaveDiscoveryCandidates(ctx context.Context, candidates []domain.DiscoveryCandidate) error
+	DismissDiscoveryCandidate(ctx context.Context, id, reason string) error
 	EnsureSchema(ctx context.Context) error
 	Close() error
 

@@ -1,0 +1,1 @@
+{"version": 3, "provider": "patreon", "sources_file": "sources.toml", "series_file": "series.toml", "creators": [{"source_id": "fictional-author", "creator_name": "Fictional Author", "posts_file": "posts.ndjson"}]}

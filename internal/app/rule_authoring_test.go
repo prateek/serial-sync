@@ -3,6 +3,8 @@ package app_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,6 +164,8 @@ authors = ["Alpha Author"]
 }
 
 type stubRuleAuthoringProvider struct {
+	afterList           func()
+	afterHydrate        func()
 	suggestions         []provider.SourceSuggestion
 	docs                map[string][]provider.ReleaseDocument
 	lastDiscoverOptions provider.DiscoverOptions
@@ -296,6 +300,9 @@ func (s *stubRuleAuthoringProvider) DiscoverSources(_ context.Context, _ config.
 }
 
 func (s *stubRuleAuthoringProvider) ListReleases(_ context.Context, _ config.AuthProfile, source config.SourceConfig, _ *domain.Source) (provider.ListResult, error) {
+	if s.afterList != nil {
+		s.afterList()
+	}
 	return provider.ListResult{
 		Documents: s.docs[source.ID],
 		AuthState: domain.AuthStateAuthenticated,
@@ -319,6 +326,9 @@ func (s *stubRuleAuthoringProvider) HydrateDumpReleases(_ context.Context, _ con
 			}
 			attachment.LocalPath = targetPath
 		}
+	}
+	if s.afterHydrate != nil {
+		s.afterHydrate()
 	}
 	return docs, domain.AuthStateAuthenticated, nil
 }
@@ -369,4 +379,204 @@ func newRuleAuthoringService(t *testing.T, stub *stubRuleAuthoringProvider) *app
 		t.Fatal(err)
 	}
 	return app.New(cfg, roots, filepath.Join(tmp, "config.toml"), repo, provider.NewRegistry(stub))
+}
+
+func TestDumpRefreshPreservesAuthoringAndPreviousCapture(t *testing.T) {
+	t.Parallel()
+	stub := newStubRuleAuthoringProvider()
+	service := newRuleAuthoringService(t, stub)
+	options := app.SourceDumpOptions{Path: filepath.Join(t.TempDir(), "workspace"), CreatorFilters: []string{"alpha"}}
+	first, err := service.DumpSources(context.Background(), "patreon-default", options, "setup dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authored := []byte("# Hand-authored rules must survive refresh.\n")
+	if err := os.WriteFile(first.SeriesFile, authored, 0600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.DumpSources(context.Background(), "patreon-default", options, "setup dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mustReadFile(t, second.SeriesFile)) != string(authored) {
+		t.Fatal("refresh overwrote authored rules")
+	}
+	if second.Creators[0].PostsFile == first.Creators[0].PostsFile {
+		t.Fatal("refresh modified the previous capture generation")
+	}
+	previous := mustReadFile(t, second.ManifestFile)
+	stub.suggestions = nil
+	options.Force = true
+	if _, err := service.DumpSources(context.Background(), "patreon-default", options, "setup dump"); err == nil {
+		t.Fatal("expected no-creators failure")
+	}
+	if string(mustReadFile(t, second.ManifestFile)) != string(previous) {
+		t.Fatal("failed refresh changed the manifest")
+	}
+	if string(mustReadFile(t, second.SeriesFile)) != string(authored) {
+		t.Fatal("failed refresh overwrote authored rules")
+	}
+	mustReadFile(t, first.Creators[0].PostsFile)
+	mustReadFile(t, second.Creators[0].PostsFile)
+}
+
+func TestDumpWorkspaceRelocatesAndIgnoresIncompleteGenerations(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			service := newRuleAuthoringService(t, newStubRuleAuthoringProvider())
+			root := t.TempDir()
+			original := filepath.Join(root, "original")
+			dump, err := service.DumpSources(context.Background(), "patreon-default", app.SourceDumpOptions{Path: original, CreatorFilters: []string{"alpha"}}, "setup dump")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest map[string]any
+			if err := json.Unmarshal(mustReadFile(t, dump.ManifestFile), &manifest); err != nil {
+				t.Fatal(err)
+			}
+			if filepath.IsAbs(manifest["sources_file"].(string)) {
+				t.Fatal("capture persisted an absolute path")
+			}
+			lines := strings.Split(strings.TrimSpace(string(mustReadFile(t, dump.Creators[0].PostsFile))), "\n")
+			var first struct {
+				Normalized domain.NormalizedRelease `json:"normalized"`
+			}
+			if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+				t.Fatal(err)
+			}
+			attachmentPath := first.Normalized.Attachments[0].LocalPath
+			if !filepath.IsLocal(attachmentPath) {
+				t.Fatalf("attachment path is not portable: %s", attachmentPath)
+			}
+			if legacy {
+				manifest["version"] = 2
+				// Legacy captures placed sources.toml beside the manifest.
+				if err := os.WriteFile(filepath.Join(original, "sources.toml"), mustReadFile(t, dump.SourcesFile), 0600); err != nil {
+					t.Fatal(err)
+				}
+				manifest["sources_file"] = filepath.Join(original, "sources.toml")
+				manifest["series_file"] = dump.SeriesFile
+				for _, item := range manifest["creators"].([]any) {
+					creator := item.(map[string]any)
+					for _, field := range []string{"directory", "source_file", "posts_file", "raw_posts_dir", "attachments_dir"} {
+						creator[field] = filepath.Join(original, creator[field].(string))
+					}
+				}
+				first.Normalized.Attachments[0].LocalPath = filepath.Join(original, attachmentPath)
+				encoded, err := json.Marshal(first)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines[0] = string(encoded)
+				if err := os.WriteFile(dump.Creators[0].PostsFile, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				encoded, err = json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(dump.ManifestFile, encoded, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			moved := filepath.Join(root, "moved")
+			if err := os.CopyFS(moved, os.DirFS(original)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(moved, "captures", "interrupted-generation"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(dump.Creators[0].PostsFile, []byte("old location must not be read"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, removeOriginal := range []bool{false, true} {
+				if removeOriginal {
+					if err := os.RemoveAll(original); err != nil {
+						t.Fatal(err)
+					}
+				}
+				result, err := service.PreviewRules(context.Background(), app.RulesPreviewOptions{WorkspacePath: moved, ShowPosts: true}, "setup preview")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.TotalPosts != 3 {
+					t.Fatalf("moved preview has %d posts", result.TotalPosts)
+				}
+				if string(mustReadFile(t, filepath.Join(moved, attachmentPath))) != "epub bytes" {
+					t.Fatal("moved attachment bytes changed")
+				}
+			}
+		})
+	}
+}
+
+func TestDumpRefusesUnrecognizedDirectoriesEvenWithForce(t *testing.T) {
+	t.Parallel()
+	service := newRuleAuthoringService(t, newStubRuleAuthoringProvider())
+	path := t.TempDir()
+	sentinel := filepath.Join(path, "notes.txt")
+	if err := os.WriteFile(sentinel, []byte("authored"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.DumpSources(context.Background(), "patreon-default", app.SourceDumpOptions{Path: path, Force: true}, "setup dump")
+	if err == nil || !strings.Contains(err.Error(), "not a serial-sync dump workspace") {
+		t.Fatalf("unrecognized workspace result: %v", err)
+	}
+	if string(mustReadFile(t, sentinel)) != "authored" {
+		t.Fatal("unrecognized workspace modified")
+	}
+}
+
+func TestInterruptedDumpRefreshRetainsCommittedCapture(t *testing.T) {
+	t.Parallel()
+	stub := newStubRuleAuthoringProvider()
+	service := newRuleAuthoringService(t, stub)
+	options := app.SourceDumpOptions{Path: filepath.Join(t.TempDir(), "workspace"), CreatorFilters: []string{"alpha"}}
+	dump, err := service.DumpSources(context.Background(), "patreon-default", options, "setup dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := mustReadFile(t, dump.ManifestFile)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stub.afterHydrate = cancel
+	if _, err := service.DumpSources(ctx, "patreon-default", options, "setup dump"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted refresh: %v", err)
+	}
+	if string(mustReadFile(t, dump.ManifestFile)) != string(before) {
+		t.Fatal("interruption changed the committed manifest")
+	}
+	preview, err := service.PreviewRules(context.Background(), app.RulesPreviewOptions{WorkspacePath: options.Path}, "setup preview")
+	if err != nil || preview.TotalPosts != 3 {
+		t.Fatalf("previous capture unavailable after interruption: %+v %v", preview, err)
+	}
+	runs, err := service.ListRuns(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range runs {
+		if run.Status == domain.RunStatusRunning {
+			t.Fatal("interrupted dump left a running record")
+		}
+	}
+}
+
+func TestCanceledSyncRetainsFetchedDiscoveryEvidence(t *testing.T) {
+	stub := newStubRuleAuthoringProvider()
+	service := newRuleAuthoringService(t, stub)
+	service.Config.Sources = []config.SourceConfig{stub.suggestions[0].Source}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stub.afterList = cancel
+	result, err := service.Sync(ctx, "alpha", false, "run")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled run, got %v", err)
+	}
+	candidates, err := service.Repo.ListDiscoveryCandidates(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) == 0 || len(result.Candidates) == 0 || len(result.DiscoveryNotices) > 0 {
+		t.Fatalf("canceled sync lost fetched evidence: %+v %+v", result, candidates)
+	}
 }

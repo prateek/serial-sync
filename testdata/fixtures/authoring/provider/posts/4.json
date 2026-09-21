@@ -1,0 +1,1 @@
+{"data": {"type": "post", "id": "4", "attributes": {"title": "A notice", "content": "<p>A brief notice.</p>", "published_at": "2026-01-04T00:00:00Z"}, "relationships": {"collections": {"data": [{"type": "collection", "id": "Harbor"}]}}}, "included": [{"type": "collection", "id": "Harbor", "attributes": {"title": "Harbor"}}]}

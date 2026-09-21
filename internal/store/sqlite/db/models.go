@@ -25,6 +25,32 @@ type Artifact struct {
 	RawRef        string
 }
 
+type DiscoveryCandidate struct {
+	ID                      string
+	SourceID                string
+	Kind                    string
+	CorrelationKey          string
+	MemberReleaseIds        string
+	MemberFingerprints      string
+	FirstObserved           string
+	LastEvidenceChange      string
+	EvidenceFingerprint     string
+	ExtractorVersion        int64
+	Status                  string
+	DismissalReason         string
+	DismissedFingerprint    string
+	LastReportedFingerprint string
+	Evidence                string
+}
+
+type LabelObservation struct {
+	Provider     string
+	Campaign     string
+	ResourceType string
+	ResourceID   string
+	Name         string
+}
+
 type Lease struct {
 	Key       string
 	Holder    string
@@ -80,6 +106,13 @@ type ReleaseAssignment struct {
 	RuleID      string
 	ReleaseRole string
 	Confidence  float64
+}
+
+type ReleaseEnrichment struct {
+	SourceID           string
+	ProviderReleaseID  string
+	CaptureFingerprint string
+	Metadata           string
 }
 
 type RunRecord struct {

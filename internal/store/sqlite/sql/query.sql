@@ -358,3 +358,31 @@ LEFT JOIN release_assignments a ON a.release_id = r.id
 LEFT JOIN story_tracks t ON t.id = a.track_id
 WHERE art.is_canonical = 1 AND s.id = sqlc.arg(source_id)
 ORDER BY s.id, t.track_key, r.published_at;
+
+-- name: ListDiscoveryCandidates :many
+SELECT * FROM discovery_candidates WHERE (sqlc.arg(source_id) = '' OR source_id = sqlc.arg(source_id)) ORDER BY first_observed, id;
+
+-- name: UpsertDiscoveryCandidate :exec
+INSERT INTO discovery_candidates (id, source_id, kind, correlation_key, member_release_ids, member_fingerprints, first_observed, last_evidence_change, evidence_fingerprint, extractor_version, status, dismissal_reason, dismissed_fingerprint, last_reported_fingerprint, evidence)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  kind=excluded.kind, correlation_key=excluded.correlation_key, member_release_ids=excluded.member_release_ids, member_fingerprints=excluded.member_fingerprints,
+  last_evidence_change=excluded.last_evidence_change, evidence_fingerprint=excluded.evidence_fingerprint,
+  extractor_version=excluded.extractor_version, status=excluded.status, dismissal_reason=excluded.dismissal_reason,
+  dismissed_fingerprint=excluded.dismissed_fingerprint, last_reported_fingerprint=excluded.last_reported_fingerprint, evidence=excluded.evidence;
+
+-- name: DismissDiscoveryCandidate :execrows
+UPDATE discovery_candidates SET status='resolved', dismissal_reason=?, dismissed_fingerprint=evidence_fingerprint WHERE id=?;
+
+-- name: GetReleaseEnrichment :one
+SELECT metadata FROM release_enrichment WHERE source_id = ? AND provider_release_id = ? AND capture_fingerprint = ?;
+
+-- name: UpsertReleaseEnrichment :exec
+INSERT INTO release_enrichment (source_id, provider_release_id, capture_fingerprint, metadata) VALUES (?, ?, ?, ?)
+ON CONFLICT(source_id, provider_release_id, capture_fingerprint) DO UPDATE SET metadata = excluded.metadata;
+
+-- name: SaveLabelObservation :exec
+INSERT OR IGNORE INTO label_observations (provider, campaign, resource_type, resource_id, name) VALUES (?, ?, ?, ?, ?);
+
+-- name: ListLabelObservations :many
+SELECT * FROM label_observations ORDER BY provider, campaign, resource_type, resource_id, name;

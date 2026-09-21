@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	toml "github.com/pelletier/go-toml/v2"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/prateek/serial-sync/internal/app"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
@@ -93,7 +93,7 @@ func TestOfflinePreviewRejectsInvalidBookMappings(t *testing.T) {
 	if err := os.WriteFile(dump.SeriesFile, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PreviewRules(context.Background(), app.RulesPreviewOptions{WorkspacePath: dump.WorkspacePath}, "preview"); err == nil || !strings.Contains(err.Error(), "book_id") {
+	if _, err := s.PreviewRules(context.Background(), app.RulesPreviewOptions{WorkspacePath: dump.WorkspacePath, SeriesFile: dump.SeriesFile}, "preview"); err == nil || !strings.Contains(err.Error(), "book_id") {
 		t.Fatalf("preview accepted invalid book mapping: %v", err)
 	}
 }
@@ -841,7 +841,7 @@ func TestOfflinePreviewExplainsChapterSequenceAndVolumeGaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Providers = provider.NewRegistry()
-	preview, err := s.PreviewRules(context.Background(), app.RulesPreviewOptions{WorkspacePath: dump.WorkspacePath, ShowPosts: true}, "preview")
+	preview, err := s.PreviewRules(context.Background(), app.RulesPreviewOptions{WorkspacePath: dump.WorkspacePath, SeriesFile: dump.SeriesFile, ShowPosts: true}, "preview")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1492,4 +1492,101 @@ func newReaderService(t *testing.T) (*app.Service, *stubRuleAuthoringProvider) {
 	}}
 	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
 	return s, upstream
+}
+
+func TestBookLabelNeedsAnExplicitEndpointBeforeVolumePublication(t *testing.T) {
+	s, upstream := newReaderService(t)
+	zero := 0
+	s.Config.Defaults.MinBodyChars = &zero
+	s.Config.Series[0].Source = "alpha"
+	s.Config.Series[0].Inputs = nil
+	s.Config.Series[0].Books = []config.BookConfig{{ID: "arrival", Number: 1, Collection: &config.CollectionSelector{Name: "Arrival"}}}
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50}
+	s.Config.Rules = nil
+	s.Config.Rules = s.Config.CompileRules()
+	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
+	for i := range upstream.docs["alpha"] {
+		upstream.docs["alpha"][i].Normalized.Collections = []string{"Arrival"}
+	}
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	volumes, err := s.Repo.ListVolumeEditions(context.Background())
+	if err != nil || len(volumes) != 0 {
+		t.Fatalf("label invented a completed book: %+v %v", volumes, err)
+	}
+	if files := findFiles(t, s.Config.Publishers[0].Path, ".epub"); len(files) != 2 {
+		t.Fatalf("open book did not retain singles: %v", files)
+	}
+	s.Config.Series[0].Books[0].LastChapter = 2
+	s.Config.Rules = nil
+	s.Config.Rules = s.Config.CompileRules()
+	s.Providers = provider.NewRegistry()
+	preview, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
+	if err != nil || len(preview.Publish.Volumes) != 1 || preview.Publish.Volumes[0].Status != "complete" {
+		t.Fatalf("declared coverage did not complete: %+v %v", preview, err)
+	}
+	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "rebuild"); err != nil {
+		t.Fatal(err)
+	}
+	if files := findFiles(t, s.Config.Publishers[0].Path, ".epub"); len(files) != 1 {
+		t.Fatalf("completed book did not replace singles: %v", files)
+	}
+}
+
+func TestCapturedAttachmentIdentityIsStableInTheRebuildPlan(t *testing.T) {
+	s, upstream := newReaderService(t)
+	s.Config.Series[0].Inputs[0].ContentStrategy = "attachment_only"
+	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
+	path := filepath.Join(t.TempDir(), "Alpha Chapter 1.pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.4\nFictional captured attachment\n%%EOF"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	upstream.docs["alpha"][0].Normalized.Attachments = []domain.Attachment{{FileName: filepath.Base(path), LocalPath: path, MIMEType: "application/pdf"}}
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Publish.Items) != 1 || plan.Publish.Items[0].Action != "unchanged" {
+		t.Fatalf("capturing a digest changed the selected-content decision: %+v", plan)
+	}
+}
+
+func TestLegacyContentSelectionDoesNotInventLibraryReplacements(t *testing.T) {
+	s, _ := newReaderService(t)
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := s.Repo.ListPublishCandidates(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates {
+		raw := mustReadFile(t, candidate.Artifact.MetadataRef)
+		var meta map[string]any
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			t.Fatal(err)
+		}
+		delete(meta["decision"].(map[string]any), "selected_content")
+		raw, err = json.Marshal(meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(candidate.Artifact.MetadataRef, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range plan.Publish.Items {
+		if item.Action != "unchanged" {
+			t.Fatalf("legacy selection metadata invented a replacement: %+v", item)
+		}
+	}
 }

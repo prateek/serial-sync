@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net"
 	"net/url"
 	"os"
@@ -217,7 +218,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 	}
 	includedByID := map[string]postEnvelopeIncluded{}
 	for _, item := range envelope.Included {
-		includedByID[item.ID] = postEnvelopeIncluded{
+		includedByID[item.Type+"/"+item.ID] = postEnvelopeIncluded{
 			Type:       item.Type,
 			Attributes: item.Attributes,
 			CreatorID:  item.Relationships.Creator.Data.ID,
@@ -231,7 +232,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 		var attrs struct {
 			Value string `json:"value"`
 		}
-		if item, ok := includedByID[tagRef.ID]; ok {
+		if item, ok := includedByID["post_tag/"+tagRef.ID]; ok {
 			_ = json.Unmarshal(item.Attributes, &attrs)
 			if attrs.Value != "" {
 				tags = append(tags, attrs.Value)
@@ -243,7 +244,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 		var attrs struct {
 			Title string `json:"title"`
 		}
-		if item, ok := includedByID[collectionRef.ID]; ok {
+		if item, ok := includedByID["collection/"+collectionRef.ID]; ok {
 			_ = json.Unmarshal(item.Attributes, &attrs)
 			if attrs.Title != "" {
 				collections = append(collections, attrs.Title)
@@ -257,7 +258,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 			MIMEType    string `json:"mimetype"`
 			DownloadURL string `json:"download_url"`
 		}
-		if item, ok := includedByID[mediaRef.ID]; ok {
+		if item, ok := includedByID["media/"+mediaRef.ID]; ok {
 			_ = json.Unmarshal(item.Attributes, &attrs)
 			if attrs.FileName == "" {
 				continue
@@ -271,7 +272,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 		}
 	}
 	var creatorID, creatorName string
-	if user, ok := includedByID[envelope.Data.Relationships.User.Data.ID]; ok {
+	if user, ok := includedByID["user/"+envelope.Data.Relationships.User.Data.ID]; ok {
 		var attrs struct {
 			FullName string `json:"full_name"`
 			Vanity   string `json:"vanity"`
@@ -281,7 +282,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 		creatorName = firstNonEmpty(attrs.FullName, attrs.Vanity, creatorID)
 	}
 	if creatorName == "" {
-		if campaign, ok := includedByID[envelope.Data.Relationships.Campaign.Data.ID]; ok {
+		if campaign, ok := includedByID["campaign/"+envelope.Data.Relationships.Campaign.Data.ID]; ok {
 			var attrs struct {
 				Name string `json:"name"`
 			}
@@ -293,6 +294,7 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 		}
 	}
 	return domain.NormalizedRelease{
+		Enrichment:        collectionEnrichment(envelope),
 		Provider:          "patreon",
 		ProviderReleaseID: envelope.Data.ID,
 		URL:               envelope.Data.Attributes.URL,
@@ -422,7 +424,7 @@ func stripTags(input string) string {
 		}
 		cleaned = cleaned[:start] + cleaned[start+end+1:]
 	}
-	return strings.TrimSpace(cleaned)
+	return strings.TrimSpace(html.UnescapeString(cleaned))
 }
 
 func escapeHTML(input string) string {

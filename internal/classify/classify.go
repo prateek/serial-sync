@@ -12,8 +12,9 @@ import (
 )
 
 type ExplainedDecision struct {
-	Decision domain.TrackDecision
-	Rule     *config.RuleConfig
+	Decision    domain.TrackDecision
+	Rule        *config.RuleConfig         `json:"-"`
+	Explanation domain.DecisionExplanation `json:"explanation"`
 }
 
 func Decide(sourceID string, release domain.NormalizedRelease, rules []config.RuleConfig) domain.TrackDecision {
@@ -23,43 +24,96 @@ func Decide(sourceID string, release domain.NormalizedRelease, rules []config.Ru
 func Explain(sourceID string, release domain.NormalizedRelease, rules []config.RuleConfig) ExplainedDecision {
 	sorted := append([]config.RuleConfig(nil), rules...)
 	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Override != sorted[j].Override {
+			return sorted[i].Override
+		}
 		return sorted[i].Priority < sorted[j].Priority
 	})
+	result := ExplainedDecision{Decision: reviewDecision(sourceID)}
 	for idx, rule := range sorted {
-		if matches(rule, release) {
-			copied := rule
-			return ExplainedDecision{
-				Decision: domain.TrackDecision{
-					BookID:             rule.BookID,
-					TrackKey:           rule.TrackKey,
-					TrackName:          fallback(rule.TrackName, rule.TrackKey),
-					SeriesID:           fallback(rule.SeriesID, rule.TrackKey),
-					RuleID:             ruleID(sourceID, idx, rule),
-					ReleaseRole:        domain.ReleaseRole(rule.ReleaseRole),
-					ContentStrategy:    domain.ContentStrategy(rule.ContentStrategy),
-					OutputFormat:       domain.OutputFormat(fallback(rule.OutputFormat, string(domain.OutputFormatPreserve))),
-					PrefaceMode:        domain.PrefaceMode(fallback(rule.PrefaceMode, string(domain.PrefaceModeNone))),
-					CanonicalAuthor:    rule.CanonicalAuthor,
-					AttachmentGlob:     append([]string(nil), rule.AttachmentGlob...),
-					AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
-					Matched:            true,
-				},
-				Rule: &copied,
+		if rule.Source != sourceID {
+			continue
+		}
+		selectors := selectMatches(rule, release)
+		attempt := domain.RuleAttempt{Input: ruleID(sourceID, idx, rule), Series: fallback(rule.SeriesID, rule.TrackKey), Selectors: selectors, Reason: rule.Reason, Matched: len(selectors) > 0}
+		if attempt.Matched {
+			attempt.Guards = evaluateGuards(rule.Guards, release)
+			for _, guard := range attempt.Guards {
+				if !guard.Passed {
+					attempt.Matched = false
+				}
+			}
+		}
+
+		attempt.Selected = attempt.Matched && result.Rule == nil
+		result.Explanation.Attempts = append(result.Explanation.Attempts, attempt)
+		if !attempt.Matched {
+			continue
+		}
+		if result.Rule != nil {
+			result.Explanation.Overlaps = append(result.Explanation.Overlaps, attempt.Input)
+			continue
+		}
+		copied := rule
+		result.Rule = &copied
+		result.Decision = domain.TrackDecision{
+			BookID:             rule.BookID,
+			TrackKey:           rule.TrackKey,
+			TrackName:          fallback(rule.TrackName, rule.TrackKey),
+			SeriesID:           fallback(rule.SeriesID, rule.TrackKey),
+			RuleID:             ruleID(sourceID, idx, rule),
+			ReleaseRole:        domain.ReleaseRole(rule.ReleaseRole),
+			ContentStrategy:    domain.ContentStrategy(rule.ContentStrategy),
+			OutputFormat:       domain.OutputFormat(fallback(rule.OutputFormat, string(domain.OutputFormatPreserve))),
+			PrefaceMode:        domain.PrefaceMode(fallback(rule.PrefaceMode, string(domain.PrefaceModeNone))),
+			CanonicalAuthor:    fallback(rule.CanonicalAuthor, release.CreatorName),
+			AttachmentGlob:     append([]string(nil), rule.AttachmentGlob...),
+			AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
+			Matched:            true,
+		}
+	}
+	selection := SelectContent(release, result.Decision)
+	if result.Rule != nil && (result.Decision.ContentStrategy == domain.ContentStrategyAttachmentOnly || result.Decision.ContentStrategy == domain.ContentStrategyAttachmentPreferred) {
+		var matched []domain.Attachment
+		for _, attempt := range result.Explanation.Attempts {
+			if attempt.Selected {
+				for _, file := range release.Attachments {
+					for _, selector := range attempt.Selectors {
+						if selector.Attachment == file.FileName {
+							matched = append(matched, file)
+							break
+						}
+					}
+				}
+			}
+		}
+		if len(matched) > 0 {
+			selection = domain.ContentReference{Kind: "none"}
+			subset := release
+			subset.Attachments = matched
+			if file, ok := SelectAttachment(subset, result.Decision); ok {
+				selection = attachmentReference(release, file)
 			}
 		}
 	}
-	return ExplainedDecision{
-		Decision: domain.TrackDecision{
-			TrackKey:        "unmatched",
-			TrackName:       "Unmatched",
-			SeriesID:        "unmatched",
-			RuleID:          "fallback/" + sourceID + "/unmatched",
-			ReleaseRole:     domain.ReleaseRoleUnknown,
-			ContentStrategy: domain.ContentStrategyManual,
-			OutputFormat:    domain.OutputFormatPreserve,
-			PrefaceMode:     domain.PrefaceModeNone,
-			Matched:         false,
-		},
+	result.Decision.SelectedContent = &selection
+	if result.Rule == nil || !result.Rule.Override {
+		result.Explanation.Conflicts = decisionConflicts(result.Explanation.Attempts)
+	}
+	return result
+}
+
+func reviewDecision(sourceID string) domain.TrackDecision {
+	return domain.TrackDecision{
+		TrackKey:        "unmatched",
+		TrackName:       "Unmatched",
+		SeriesID:        "unmatched",
+		RuleID:          "fallback/" + sourceID + "/unmatched",
+		ReleaseRole:     domain.ReleaseRoleUnknown,
+		ContentStrategy: domain.ContentStrategyManual,
+		OutputFormat:    domain.OutputFormatPreserve,
+		PrefaceMode:     domain.PrefaceModeNone,
+		Matched:         false,
 	}
 }
 
@@ -104,6 +158,14 @@ func matches(rule config.RuleConfig, release domain.NormalizedRelease) bool {
 }
 
 func SelectAttachment(release domain.NormalizedRelease, decision domain.TrackDecision) (domain.Attachment, bool) {
+	if ref := decision.SelectedContent; ref != nil {
+		if ref.Kind != "attachment" || ref.AttachmentIndex < 0 || ref.AttachmentIndex >= len(release.Attachments) {
+			return domain.Attachment{}, false
+		}
+		file := release.Attachments[ref.AttachmentIndex]
+		return file, file.FileName == ref.FileName && (ref.SHA256 == "" || file.SHA256 == "" || ref.SHA256 == file.SHA256)
+	}
+
 	var candidates []domain.Attachment
 	if len(decision.AttachmentGlob) == 0 {
 		candidates = append(candidates, release.Attachments...)
@@ -139,19 +201,12 @@ func releaseHasText(release domain.NormalizedRelease) bool {
 }
 
 func CanMaterialize(release domain.NormalizedRelease, decision domain.TrackDecision) bool {
-	switch decision.ContentStrategy {
-	case domain.ContentStrategyTextPost:
-		return releaseHasText(release)
-	case domain.ContentStrategyAttachmentPreferred:
-		if _, ok := SelectAttachment(release, decision); ok {
-			return true
-		}
-		return releaseHasText(release)
-	case domain.ContentStrategyAttachmentOnly:
-		_, ok := SelectAttachment(release, decision)
-		return ok
-	case domain.ContentStrategyTextPlusAttachment:
-		return releaseHasText(release) || len(release.Attachments) > 0
+	switch SelectContent(release, decision).Kind {
+	case "body":
+		return releaseHasText(release) || decision.ContentStrategy == domain.ContentStrategyTextPlusAttachment && len(release.Attachments) > 0
+	case "attachment":
+		file, ok := SelectAttachment(release, decision)
+		return ok && (file.LocalPath != "" || file.DownloadURL != "")
 	default:
 		return false
 	}
@@ -171,7 +226,79 @@ func ruleID(sourceID string, idx int, rule config.RuleConfig) string {
 	}
 	matchType := strings.TrimSpace(rule.MatchType)
 	if matchType == "" {
-		matchType = "unknown"
+		matchType = "selectors"
+	}
+	if rule.Override {
+		return fmt.Sprintf("%s/override/%s", sourceID, rule.ReleaseID)
 	}
 	return fmt.Sprintf("%s/rule/%s/%s/%d", sourceID, key, matchType, idx)
+}
+
+func SelectContent(release domain.NormalizedRelease, decision domain.TrackDecision) domain.ContentReference {
+	if decision.SelectedContent != nil {
+		return *decision.SelectedContent
+	}
+	switch decision.ContentStrategy {
+	case domain.ContentStrategyTextPost, domain.ContentStrategyTextPlusAttachment:
+		return domain.ContentReference{Kind: "body"}
+	case domain.ContentStrategyAttachmentOnly, domain.ContentStrategyAttachmentPreferred:
+		if attachment, ok := SelectAttachment(release, decision); ok {
+			if decision.ContentStrategy == domain.ContentStrategyAttachmentPreferred && attachment.LocalPath == "" && attachment.DownloadURL == "" {
+				return domain.ContentReference{Kind: "body"}
+			}
+			return attachmentReference(release, attachment)
+		}
+		if decision.ContentStrategy == domain.ContentStrategyAttachmentPreferred {
+			return domain.ContentReference{Kind: "body"}
+		}
+	}
+	return domain.ContentReference{Kind: "none"}
+}
+
+func attachmentReference(release domain.NormalizedRelease, attachment domain.Attachment) domain.ContentReference {
+	for i, file := range release.Attachments {
+		if file == attachment {
+			return domain.ContentReference{Kind: "attachment", FileName: file.FileName, SHA256: file.SHA256, AttachmentIndex: i}
+		}
+	}
+	return domain.ContentReference{Kind: "none"}
+}
+
+func Hold(source string, explained ExplainedDecision, reasons []string) ExplainedDecision {
+	decision := reviewDecision(source)
+	decision.RuleID = explained.Decision.RuleID
+	decision.Matched = true
+	decision.SelectedContent = &domain.ContentReference{Kind: "none"}
+	explained.Decision = decision
+	explained.Explanation.HeldReasons = reasons
+	return explained
+}
+
+func decisionConflicts(attempts []domain.RuleAttempt) []domain.DecisionConflict {
+	var labels, titles []domain.RuleAttempt
+	for _, attempt := range attempts {
+		if !attempt.Matched {
+			continue
+		}
+		label, title := false, false
+		for _, selector := range attempt.Selectors {
+			label = label || selector.Kind == "collection" || selector.Kind == "tag"
+			title = title || selector.Kind == "title_regex" || selector.Kind == "attachment_filename_regex"
+		}
+		if label {
+			labels = append(labels, attempt)
+		}
+		if title {
+			titles = append(titles, attempt)
+		}
+	}
+	var conflicts []domain.DecisionConflict
+	for _, label := range labels {
+		for _, title := range titles {
+			if label.Series != title.Series {
+				conflicts = append(conflicts, domain.DecisionConflict{LabelSeries: label.Series, TitleSeries: title.Series, LabelInput: label.Input, TitleInput: title.Input})
+			}
+		}
+	}
+	return conflicts
 }

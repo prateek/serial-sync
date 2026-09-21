@@ -133,3 +133,38 @@ CREATE TABLE IF NOT EXISTS volume_members (
   position INTEGER NOT NULL,
   PRIMARY KEY (edition_id, release_id)
 );
+
+CREATE TABLE IF NOT EXISTS discovery_candidates (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  correlation_key TEXT NOT NULL,
+  member_release_ids TEXT NOT NULL,
+  member_fingerprints TEXT NOT NULL,
+  first_observed TEXT NOT NULL,
+  last_evidence_change TEXT NOT NULL,
+  evidence_fingerprint TEXT NOT NULL,
+  extractor_version INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  dismissal_reason TEXT NOT NULL,
+  dismissed_fingerprint TEXT NOT NULL,
+  last_reported_fingerprint TEXT NOT NULL,
+  evidence TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS discovery_candidates_source ON discovery_candidates(source_id);
+
+CREATE TABLE IF NOT EXISTS release_enrichment (
+  source_id TEXT NOT NULL,
+  provider_release_id TEXT NOT NULL,
+  capture_fingerprint TEXT NOT NULL,
+  metadata TEXT NOT NULL,
+  PRIMARY KEY (source_id, provider_release_id, capture_fingerprint)
+);
+CREATE TABLE IF NOT EXISTS label_observations (
+  provider TEXT NOT NULL,
+  campaign TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  PRIMARY KEY (provider, campaign, resource_type, resource_id, name)
+);

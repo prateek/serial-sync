@@ -54,11 +54,11 @@ func (s *Service) validatePublishTargets(sourceFilter, targetFilter, seriesFilte
 			continue
 		}
 		for _, series := range s.Config.Series {
-			if seriesFilter != "" && series.ID != seriesFilter || config.SeriesOutputDefaults(series.Output).Bundling != "volume" {
+			if seriesFilter != "" && series.ID != seriesFilter || s.Config.SeriesOutput(series).Bundling != "volume" {
 				continue
 			}
-			for _, input := range series.Inputs {
-				if s.sourceInScope(input.Source, sourceFilter, rebuild) {
+			for _, input := range series.AuthoringInputs() {
+				if s.sourceInScope(firstNonEmpty(input.Source, series.Source), sourceFilter, rebuild) {
 					return fmt.Errorf("exec publisher %q requires protocol_version = 2 for volume output and retirement", target.ID)
 				}
 			}

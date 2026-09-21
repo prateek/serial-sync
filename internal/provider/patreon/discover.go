@@ -32,7 +32,7 @@ func (c *Client) DiscoverSources(ctx context.Context, auth config.AuthProfile, e
 	if !options.MetadataOnly && !options.FullHistory && options.SampleLimit <= 0 {
 		options.SampleLimit = defaultDiscoverySampleLimit
 	}
-	session, user, authState, err := c.ensureDiscoverySession(ctx, auth)
+	session, user, authState, err := c.ensureDiscoverySession(ctx, auth, !options.MetadataOnly)
 	result.AuthState = authState
 	if err != nil {
 		return result, err
@@ -194,7 +194,7 @@ func matchesCreatorFilters(suggestion provider.SourceSuggestion, filters []strin
 	return false
 }
 
-func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthProfile) (*liveSession, *currentUserEnvelope, domain.AuthState, error) {
+func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthProfile, allowBootstrap bool) (*liveSession, *currentUserEnvelope, domain.AuthState, error) {
 	if auth.SessionPath == "" {
 		return nil, nil, domain.AuthStateReauthRequired, fmt.Errorf("auth profile %q must define session_path", auth.ID)
 	}
@@ -225,6 +225,9 @@ func (c *Client) ensureDiscoverySession(ctx context.Context, auth config.AuthPro
 		if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
 			return nil, nil, authState, userErr
 		}
+	}
+	if !allowBootstrap {
+		return nil, nil, domain.AuthStateReauthRequired, fmt.Errorf("saved Patreon session is unavailable or expired; run setup auth --auth-profile %s", auth.ID)
 	}
 	if c.bootstrap == nil {
 		return nil, nil, domain.AuthStateReauthRequired, fmt.Errorf("no Patreon bootstrapper configured")

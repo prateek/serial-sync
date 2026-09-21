@@ -27,7 +27,7 @@ docker run --rm \
   -v serial-sync-state:/state \
   -v "$PWD/config.toml:/config/config.toml:ro" \
   -v "$PWD:/work" \
-  serial-sync setup dump --auth-profile patreon-default --path /work/serial-sync-rule-workspace --force
+  serial-sync setup dump --auth-profile patreon-default --path /work/serial-sync-rule-workspace
 
 docker run --rm \
   -v "$PWD:/work" \
@@ -36,8 +36,13 @@ docker run --rm \
 ```
 
 That dump workspace keeps both the fast authoring view (`posts.ndjson`) and the
-full capture (`creators/<source-id>/posts/*.json` plus `attachments/`) so later
+full capture (`captures/<generation>/creators/<source-id>/posts/*.json` plus `attachments/`) so later
 offline replay/materialization work can reuse the same dump without re-fetching Patreon.
+
+Repeat `setup dump` to refresh a recognized workspace. A failed refresh retains
+the previous capture and your authored files. `setup check` and `setup preview`
+are offline and read-only; they work without writable state or a database.
+Both reject unknown config keys and invalid rule values before provider work.
 
 ## What It Does
 
@@ -52,7 +57,8 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 - Patreon is the first provider
 - live Patreon `username_password` bootstrap, TOTP-assisted login, session import, and persisted session reuse are implemented
 - Patreon membership-driven source dumping is implemented through `setup dump`
-- dump-first series authoring is implemented through `setup dump` and `setup preview`
+- dump-first series authoring uses `setup dump` and read-only `setup preview`; `--stored --compare <config>` replays catalog releases through two configs offline
+- advisory discovery reports possible new series even behind existing mappings; `setup candidates dismiss <id> --reason` dismisses current evidence
 - `setup dump` now captures normalized posts, raw Patreon post JSON, and downloaded attachments into the same workspace
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
@@ -86,7 +92,7 @@ offline replay/materialization work can reuse the same dump without re-fetching 
 
 The public CLI is now intentionally small:
 
-- `setup`: config, auth, source dumps, and series preview
+- `setup`: config, auth, source dumps, offline preview, and discovery candidates
 - `run`: the normal sync-plus-publish execution path, plus `run daemon`
 - `debug`: run forensics, publish record inspection, and support bundles
 
@@ -117,6 +123,25 @@ Preview and rebuild both exclude disabled sources and retain their published fil
 If the publisher lives outside `/state`, mount its folder too, read-only for the
 preview. See [the rebuild walkthrough](docs/first-source.md#rebuild-stored-output)
 for the writable command and a small reader sample before a larger migration.
+
+Grouped label and pattern inputs, visible-body guards, inherited defaults, and
+reasoned review/override rules keep mappings compact. Pin collection IDs to keep
+matching through renames; preview reports possible label drift and conflicts.
+`hold_candidates = true` on a broad input holds first chapters, numbering resets,
+and unknown collections for review. See the
+[authoring reference](docs/config.md#authoring-defaults-and-exceptions).
+`setup preview --suggest` prints a draft from captured discovery evidence.
+Book `collection` and `tag` selectors assign both series and book; expected chapter
+ranges still control volume completion. Decimal, suffixed, negative, and part
+numbering stays intact and remains single until explicitly assigned a chapter slot.
+`setup preview --stored --compare <baseline>` also shows library changes through
+the rebuild planner, with destination ownership checks and blocked inputs.
+
+`setup memberships` lists membership metadata using a saved session, including
+whether each creator has an enabled, mapped source. It fetches no posts and never
+opens a browser. A profile-only config is sufficient; use `setup auth` first.
+`setup enrich` adds collection identities from stored raw JSON without refetching
+posts or changing published files. Preview can enrich in memory without this step.
 
 ## License
 

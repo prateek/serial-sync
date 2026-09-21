@@ -164,7 +164,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 	result = domain.SyncResult{RunID: recorder.RunID()}
 	defer func() {
 		if err != nil {
-			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
+			_ = recorder.Finish(context.WithoutCancel(ctx), domain.RunStatusFailed, err.Error())
 		}
 	}()
 	sources := selectSources(s.Config.Sources, sourceFilter)
@@ -172,6 +172,8 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 		err = fmt.Errorf("no enabled sources match %q", sourceFilter)
 		return result, err
 	}
+	var observed []observedBatch
+	defer func() { s.reportObservedCandidates(ctx, observed, dryRun, &result) }()
 	for _, sourceCfg := range sources {
 		client, ok := s.Providers.Get(sourceCfg.Provider)
 		if !ok {
@@ -200,10 +202,14 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 				"source_id":        sourceCfg.ID,
 				"discovered_count": len(listResult.Documents),
 			})
+			observed = append(observed, observedBatch{Source: sourceCfg.ID, Documents: listResult.Documents, At: time.Now().UTC()})
+			history, historyErr := s.authoringDecisions(ctx, sourceCfg.ID, listResult.Documents)
+			if historyErr != nil {
+				return result, historyErr
+			}
 			for _, doc := range listResult.Documents {
 				result.Discovered++
-				decision := classify.Decide(sourceCfg.ID, doc.Normalized, s.Config.RulesForSource(sourceCfg.ID))
-				decision = s.numberedDecision(sourceCfg.ID, doc.Normalized, decision)
+				decision := s.authoringDecision(sourceCfg.ID, doc.Normalized, history)
 				classificationMessage := "classified release"
 				if !decision.Matched {
 					classificationMessage = "release unmatched fallback"
@@ -248,6 +254,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 					result.MaterializedArtifacts++
 				}
 			}
+
 			if !dryRun {
 				sourceState := mergeSourceSyncState(sourceCfg, storedSource, listResult.Documents, listResult.SyncCursor)
 				if sourceState != nil {
@@ -262,6 +269,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 		err = fmt.Errorf("source %q references missing auth profile %q", sourceCfg.ID, sourceCfg.AuthProfile)
 		return result, err
 	}
+
 	summary := fmt.Sprintf("discovered=%d changed=%d unchanged=%d materialized=%d", result.Discovered, result.Changed, result.Unchanged, result.MaterializedArtifacts)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
@@ -290,6 +298,15 @@ func (s *Service) BootstrapAuth(ctx context.Context, sourceFilter, authFilter st
 			}
 		}
 		sources = filtered
+	}
+	if len(s.Config.Sources) == 0 && sourceFilter == "" {
+		result, err = s.bootstrapProfile(ctx, authFilter, force, result.RunID)
+		status := domain.RunStatusSucceeded
+		if err != nil {
+			status = domain.RunStatusFailed
+		}
+		finishErr := recorder.Finish(context.WithoutCancel(ctx), status, "profile authentication")
+		return result, errors.Join(err, finishErr)
 	}
 	if len(sources) == 0 {
 		err = fmt.Errorf("no enabled sources match source=%q auth_profile=%q", sourceFilter, authFilter)
@@ -840,6 +857,15 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 	doc.Normalized, err = s.captureAttachments(source.ID, doc.Normalized, dryRun)
 	if err != nil {
 		return domain.SyncItemPlan{}, false, false, err
+	}
+	if decision.SelectedContent != nil && decision.SelectedContent.Kind == "attachment" {
+		attachment, ok := classify.SelectAttachment(doc.Normalized, decision)
+		if !ok {
+			return domain.SyncItemPlan{}, false, false, fmt.Errorf("selected attachment changed during capture")
+		}
+		selected := *decision.SelectedContent
+		selected.SHA256 = attachment.SHA256
+		decision.SelectedContent = &selected
 	}
 	normalizedJSON, err := json.Marshal(doc.Normalized)
 	if err != nil {
@@ -1484,6 +1510,7 @@ func hashBytes(input []byte) string {
 
 func hashableNormalizedRelease(release domain.NormalizedRelease) domain.NormalizedRelease {
 	cloned := release
+	cloned.Enrichment = nil
 	if len(release.Attachments) == 0 {
 		return cloned
 	}
@@ -1841,6 +1868,8 @@ func NotImplemented(feature string) error {
 func FormatSyncResult(result domain.SyncResult) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("run_id: %s", result.RunID))
+	lines = append(lines, FormatCandidates(result.Candidates))
+	lines = append(lines, result.DiscoveryNotices...)
 	lines = append(lines, fmt.Sprintf("discovered=%d changed=%d unchanged=%d materialized=%d", result.Discovered, result.Changed, result.Unchanged, result.MaterializedArtifacts))
 	for _, item := range result.Plans {
 		lines = append(lines, fmt.Sprintf("- [%s] %s -> %s (%s, %s)", item.Action, item.ProviderReleaseID, item.TrackKey, item.Strategy, item.Filename))

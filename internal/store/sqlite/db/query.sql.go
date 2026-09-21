@@ -103,6 +103,23 @@ func (q *Queries) DeactivateVolumeGroup(ctx context.Context, arg DeactivateVolum
 	return err
 }
 
+const dismissDiscoveryCandidate = `-- name: DismissDiscoveryCandidate :execrows
+UPDATE discovery_candidates SET status='resolved', dismissal_reason=?, dismissed_fingerprint=evidence_fingerprint WHERE id=?
+`
+
+type DismissDiscoveryCandidateParams struct {
+	DismissalReason string
+	ID              string
+}
+
+func (q *Queries) DismissDiscoveryCandidate(ctx context.Context, arg DismissDiscoveryCandidateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, dismissDiscoveryCandidate, arg.DismissalReason, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getArtifact = `-- name: GetArtifact :one
 SELECT id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type, sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref
 FROM artifacts
@@ -267,6 +284,23 @@ func (q *Queries) GetReleaseByProviderID(ctx context.Context, arg GetReleaseByPr
 		&i.Status,
 	)
 	return i, err
+}
+
+const getReleaseEnrichment = `-- name: GetReleaseEnrichment :one
+SELECT metadata FROM release_enrichment WHERE source_id = ? AND provider_release_id = ? AND capture_fingerprint = ?
+`
+
+type GetReleaseEnrichmentParams struct {
+	SourceID           string
+	ProviderReleaseID  string
+	CaptureFingerprint string
+}
+
+func (q *Queries) GetReleaseEnrichment(ctx context.Context, arg GetReleaseEnrichmentParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getReleaseEnrichment, arg.SourceID, arg.ProviderReleaseID, arg.CaptureFingerprint)
+	var metadata string
+	err := row.Scan(&metadata)
+	return metadata, err
 }
 
 const getRunRecord = `-- name: GetRunRecord :one
@@ -486,6 +520,82 @@ func (q *Queries) ListArtifactsByReleaseID(ctx context.Context, releaseID string
 			&i.MetadataRef,
 			&i.NormalizedRef,
 			&i.RawRef,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDiscoveryCandidates = `-- name: ListDiscoveryCandidates :many
+SELECT id, source_id, kind, correlation_key, member_release_ids, member_fingerprints, first_observed, last_evidence_change, evidence_fingerprint, extractor_version, status, dismissal_reason, dismissed_fingerprint, last_reported_fingerprint, evidence FROM discovery_candidates WHERE (?1 = '' OR source_id = ?1) ORDER BY first_observed, id
+`
+
+func (q *Queries) ListDiscoveryCandidates(ctx context.Context, sourceID interface{}) ([]DiscoveryCandidate, error) {
+	rows, err := q.db.QueryContext(ctx, listDiscoveryCandidates, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DiscoveryCandidate
+	for rows.Next() {
+		var i DiscoveryCandidate
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.Kind,
+			&i.CorrelationKey,
+			&i.MemberReleaseIds,
+			&i.MemberFingerprints,
+			&i.FirstObserved,
+			&i.LastEvidenceChange,
+			&i.EvidenceFingerprint,
+			&i.ExtractorVersion,
+			&i.Status,
+			&i.DismissalReason,
+			&i.DismissedFingerprint,
+			&i.LastReportedFingerprint,
+			&i.Evidence,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLabelObservations = `-- name: ListLabelObservations :many
+SELECT provider, campaign, resource_type, resource_id, name FROM label_observations ORDER BY provider, campaign, resource_type, resource_id, name
+`
+
+func (q *Queries) ListLabelObservations(ctx context.Context) ([]LabelObservation, error) {
+	rows, err := q.db.QueryContext(ctx, listLabelObservations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LabelObservation
+	for rows.Next() {
+		var i LabelObservation
+		if err := rows.Scan(
+			&i.Provider,
+			&i.Campaign,
+			&i.ResourceType,
+			&i.ResourceID,
+			&i.Name,
 		); err != nil {
 			return nil, err
 		}
@@ -1745,6 +1855,29 @@ func (q *Queries) ReleaseLease(ctx context.Context, arg ReleaseLeaseParams) erro
 	return err
 }
 
+const saveLabelObservation = `-- name: SaveLabelObservation :exec
+INSERT OR IGNORE INTO label_observations (provider, campaign, resource_type, resource_id, name) VALUES (?, ?, ?, ?, ?)
+`
+
+type SaveLabelObservationParams struct {
+	Provider     string
+	Campaign     string
+	ResourceType string
+	ResourceID   string
+	Name         string
+}
+
+func (q *Queries) SaveLabelObservation(ctx context.Context, arg SaveLabelObservationParams) error {
+	_, err := q.db.ExecContext(ctx, saveLabelObservation,
+		arg.Provider,
+		arg.Campaign,
+		arg.ResourceType,
+		arg.ResourceID,
+		arg.Name,
+	)
+	return err
+}
+
 const savePendingPublish = `-- name: SavePendingPublish :exec
 INSERT INTO pending_publishes (id, target_id, payload_ref) VALUES (?1, ?2, ?3)
 `
@@ -1882,6 +2015,55 @@ func (q *Queries) UpsertArtifact(ctx context.Context, arg UpsertArtifactParams) 
 	return err
 }
 
+const upsertDiscoveryCandidate = `-- name: UpsertDiscoveryCandidate :exec
+INSERT INTO discovery_candidates (id, source_id, kind, correlation_key, member_release_ids, member_fingerprints, first_observed, last_evidence_change, evidence_fingerprint, extractor_version, status, dismissal_reason, dismissed_fingerprint, last_reported_fingerprint, evidence)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  kind=excluded.kind, correlation_key=excluded.correlation_key, member_release_ids=excluded.member_release_ids, member_fingerprints=excluded.member_fingerprints,
+  last_evidence_change=excluded.last_evidence_change, evidence_fingerprint=excluded.evidence_fingerprint,
+  extractor_version=excluded.extractor_version, status=excluded.status, dismissal_reason=excluded.dismissal_reason,
+  dismissed_fingerprint=excluded.dismissed_fingerprint, last_reported_fingerprint=excluded.last_reported_fingerprint, evidence=excluded.evidence
+`
+
+type UpsertDiscoveryCandidateParams struct {
+	ID                      string
+	SourceID                string
+	Kind                    string
+	CorrelationKey          string
+	MemberReleaseIds        string
+	MemberFingerprints      string
+	FirstObserved           string
+	LastEvidenceChange      string
+	EvidenceFingerprint     string
+	ExtractorVersion        int64
+	Status                  string
+	DismissalReason         string
+	DismissedFingerprint    string
+	LastReportedFingerprint string
+	Evidence                string
+}
+
+func (q *Queries) UpsertDiscoveryCandidate(ctx context.Context, arg UpsertDiscoveryCandidateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDiscoveryCandidate,
+		arg.ID,
+		arg.SourceID,
+		arg.Kind,
+		arg.CorrelationKey,
+		arg.MemberReleaseIds,
+		arg.MemberFingerprints,
+		arg.FirstObserved,
+		arg.LastEvidenceChange,
+		arg.EvidenceFingerprint,
+		arg.ExtractorVersion,
+		arg.Status,
+		arg.DismissalReason,
+		arg.DismissedFingerprint,
+		arg.LastReportedFingerprint,
+		arg.Evidence,
+	)
+	return err
+}
+
 const upsertPublishRecord = `-- name: UpsertPublishRecord :exec
 INSERT INTO publish_records (id, artifact_id, target_id, target_kind, target_ref, publish_hash, published_at, status, message)
 VALUES (
@@ -2013,6 +2195,28 @@ func (q *Queries) UpsertReleaseAssignment(ctx context.Context, arg UpsertRelease
 		arg.RuleID,
 		arg.ReleaseRole,
 		arg.Confidence,
+	)
+	return err
+}
+
+const upsertReleaseEnrichment = `-- name: UpsertReleaseEnrichment :exec
+INSERT INTO release_enrichment (source_id, provider_release_id, capture_fingerprint, metadata) VALUES (?, ?, ?, ?)
+ON CONFLICT(source_id, provider_release_id, capture_fingerprint) DO UPDATE SET metadata = excluded.metadata
+`
+
+type UpsertReleaseEnrichmentParams struct {
+	SourceID           string
+	ProviderReleaseID  string
+	CaptureFingerprint string
+	Metadata           string
+}
+
+func (q *Queries) UpsertReleaseEnrichment(ctx context.Context, arg UpsertReleaseEnrichmentParams) error {
+	_, err := q.db.ExecContext(ctx, upsertReleaseEnrichment,
+		arg.SourceID,
+		arg.ProviderReleaseID,
+		arg.CaptureFingerprint,
+		arg.Metadata,
 	)
 	return err
 }

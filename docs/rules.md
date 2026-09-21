@@ -28,7 +28,7 @@ Prefer one `[[series]]` per reader-facing serial or franchise. Use multiple `[[s
    If Patreon login is blocked by Cloudflare or another interactive challenge, finish `setup auth` first in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle.
    That dump is now the canonical offline capture: normalized posts for authoring, raw post JSON, and downloaded attachments live together in the same workspace.
 2. Edit `series.toml` inside the dump workspace.
-3. Run `setup preview --show-posts` against that workspace.
+3. Run `setup preview --workspace <path> --series-file series.toml --show-posts` against that workspace.
 4. Tighten source-specific matchers until the fallback bucket is acceptable.
 5. Merge the resulting `[[series]]` and `[[sources]]` back into your main config.
 
@@ -38,8 +38,7 @@ Example:
 serial-sync --config ./config.toml setup dump \
   --auth-profile patreon-default \
   --creator plumparrot \
-  --path ./serial-sync-rule-workspace \
-  --force
+  --path ./serial-sync-rule-workspace
 
 serial-sync --config ./config.toml setup preview \
   --workspace ./serial-sync-rule-workspace \
@@ -47,7 +46,97 @@ serial-sync --config ./config.toml setup preview \
   --show-posts
 ```
 
+Refresh by repeating the dump command. It writes a new capture generation and
+switches the manifest only when complete; failures preserve the prior capture.
+`series.toml` and other authored files remain unchanged. An unrecognized existing
+directory is refused. `--force` remains accepted for compatibility and has the
+same safe refresh behavior.
+
+Workspace references, including attachment paths, are relative. You can move the
+whole workspace or mount it at a different container path. Preview also relocates
+older absolute-path manifests, using the opened workspace rather than the old
+location. Preview reads only the generation selected by `manifest.json`.
+
+`setup check` and workspace preview run offline without initializing state. They
+reject invalid rule fields, including standalone series files, before evaluating
+posts. The `extra` role publishes fiction as singles without filling chapter slots.
+
 For agent-driven authoring, the repo also ships a local skill at `skills/serial-sync-rule-authoring/SKILL.md`.
+
+## Replay and compare the main config
+
+Preview reads the global `--config` file by default, just like `run`. Use
+`--series-file` explicitly while drafting a standalone workspace mapping.
+`--stored` reads the current normalized payloads through the catalog; it does
+not scan old artifact directories or contact a provider.
+
+With the normal `/config` and `/state` mounts:
+
+```sh
+docker compose run --rm serial-sync --config /config/config.proposed.toml \
+  setup preview --stored --compare /config/config.toml --format json
+```
+
+`--workspace /state/rules-workspace` can replace `--stored`. Both configs use the
+same capture, including sources removed or disabled in the candidate config.
+The report separates classification changes from output-policy changes, such as
+author, format, preface, book, sequence, and publisher destinations. Per-post JSON
+includes the deciding input, matched selectors, other matching inputs, selected
+content, and eligibility. `--show-posts` adds details to text output.
+
+Config hashes, the software version and binary hash, and a capture inventory bind
+the report to its inputs. Standalone series files have a separate hash. Identical
+configs have empty change lists. Preview never creates a directory, initializes
+a schema, records a run, or modifies candidate state. An active, uncheckpointed
+catalog must be stopped/checkpointed before read-only catalog replay.
+
+With `--stored`, the applied-library section plans both configs against the same
+read-only catalog using the planner behind `run --rebuild --dry-run`. It lists
+additions, replacements, repairs, retirements, and blockers separately from
+classification and policy changes. Mount destination folders read-only so ownership
+checks can inspect them. Disabled or removed sources and publishers retain delivered
+files. Creator filters limit the planned source scope; a partial mixed-source volume
+can block replacement. Workspace-only replay reports applied state as unavailable.
+
+These plans do not run conversions or publisher hooks. After reviewing and promoting
+the candidate config, use `run --rebuild` to apply changes to stored output.
+Ordinary sync preserves output for unchanged content.
+
+## Discovery candidates
+
+Sync and preview run the same advisory detector over captured posts, including
+posts already claimed by a rule. It groups unknown collections, title families,
+first-chapter markers, numbering resets, substantial review posts, book files,
+and external chapter links. An anonymous first chapter can acquire subsequent
+numbered chapters. Declared book transitions explain numbering resets.
+
+The detector never creates a series or changes classification. `run` shows new or
+changed candidates first, then up to five unchanged unresolved candidates and a
+count. Its scope is captured posts; it makes no additional provider request.
+Preparation or materialization failures do not hide the rest of a fetched batch.
+Members not yet in the catalog remain uncertain during stored replay.
+
+```sh
+docker compose run --rm serial-sync setup candidates
+docker compose run --rm serial-sync setup candidates dismiss <id> \
+  --reason "This is an intentional repost"
+```
+
+Candidates retain their identity and first-observed time in SQLite. States are
+`possible`, `needs_decision`, and `resolved`. A dismissal applies to its evidence
+fingerprint: repeated lookbacks do not reopen it, but new members or changed
+content do. A mapping edit resolves the members it explains; preview shows those
+members without persisting a resolution. `setup candidates --format json` lists
+resolved entries as well.
+
+A source may set `ignore_labels = ["fantasy", "chapter-notices"]`. This suppresses
+those labels as discovery evidence without excluding any post from classification.
+Title and content evidence can still raise a candidate.
+
+New books, bonus scenes, reposts, and title-format changes can produce candidates.
+Long non-fiction can look substantial. A second story with generic filenames,
+the same labels, and continuing numbering can be missed. Candidate status is a
+request for an operator decision, not a fiction score.
 
 ## Series Shape
 
@@ -140,9 +229,9 @@ title = "Andy, Again"
   attachment_priority = ["epub", "pdf"]
 ```
 
-Keep one series identity across books. Declare `[[series.books]]` and put a
-`book_id` on each book-specific input when its tag or collection establishes the
-boundary. [The config reference](config.md#volume-output) shows complete book and
+Keep one series identity across books. Declare `[[series.books]]` with a
+`collection` or `tag` to select that series and book, or put `book_id` on an explicit
+input. A label establishes identity; chapter boundaries stay explicitly declared. [The config reference](config.md#volume-output) shows complete book and
 sequence-override syntax.
 
 ### `title_regex`
@@ -329,3 +418,47 @@ Look for:
 - titles or collections that suggest a tighter matcher
 - attachment-only matchers that hit posts with no valid attachment
 - fallback matchers that are placed too early
+
+## Shorter mappings and deliberate exceptions
+
+Use `series.source` to avoid repeating a source on every input, and put shared
+output and content settings in `[defaults]` or `[sources.defaults]`. Keep routing
+in series inputs. See the [exact syntax](config.md#authoring-defaults-and-exceptions).
+
+Start with specific title shapes, follow with guarded labels, and put broad
+backstops last. Grouped `collections`, `tags`, `title_patterns`, and
+`attachment_patterns` use OR semantics; all guards must pass. A chapter number
+is never required. A body guard distinguishes short notices from substantial
+posts; long nonfiction needs an exclusion guard or a reasoned override.
+
+Use `[[review]]` for deliberate administrative routing and `[[overrides]]` for
+one release. Preview reports substantial reviewed posts even without a chapter
+number. An override settles that release's discovery evidence. Existing review
+series and top-level rules remain supported.
+
+`setup preview --workspace /workspace --suggest` includes a draft config fragment
+for candidates. Review its name, selectors, strategy, and body threshold before
+copying it into your config. Anonymous and external-content candidates get an
+inspection note. The command never installs a suggestion.
+
+### Identity, conflicts, and selected files
+
+Prefer a pinned collection selector such as
+`collections = [{ id = "fictional-collection-1", name = "Harbor" }]` when preview
+shows an identity. The name documents the mapping; the ID survives renames.
+Name-only selectors remain case-insensitive. Possible drift reports describe the
+captured scope and recent sample, not deleted collections.
+
+Preview reports when a passing label selector and a passing title or filename
+selector identify different series. The first matching input still wins. Resolve
+the conflict with rule order, guards, or a reasoned release override.
+
+A filename selector pins the matched attachment. Preview, materialization, and
+rebuild use that same file, even if another attachment has a preferred extension.
+If that selected file is unavailable, materialization fails; inspect its reference
+in preview before running. Body strategies still select the body explicitly.
+
+A broad input may set `hold_candidates = true` to route first chapters, numbering
+resets, or unreferenced collections to review. This opt-in hold is reported with
+its reason and uses chronological captured evidence. Add a specific mapping or
+an explicit override after reviewing the candidate.

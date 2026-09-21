@@ -85,3 +85,24 @@ func TestOpenBookCannotReuseALaterBooksPosition(t *testing.T) {
 		t.Fatalf("Book Two lost its explicit position: %s", opf)
 	}
 }
+
+func TestInheritedSourceStillRejectsLegacyVolumePublisherBeforeWork(t *testing.T) {
+	s, _ := newReaderService(t)
+	s.Config.Series[0].Source = "alpha"
+	for i := range s.Config.Series[0].Inputs {
+		s.Config.Series[0].Inputs[i].Source = ""
+	}
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+	s.Config.Publishers = []config.PublisherConfig{{ID: "legacy", Kind: "exec", Command: []string{"false"}, Enabled: true}}
+	if _, err := s.RunOnce(context.Background(), "alpha", "", "run"); err == nil || !strings.Contains(err.Error(), "protocol_version = 2") {
+		t.Fatalf("preflight: %v", err)
+	}
+	releases, err := s.Repo.ListReleases(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 0 {
+		t.Fatal("publisher preflight ran after catalog mutation")
+	}
+}

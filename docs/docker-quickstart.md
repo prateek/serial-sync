@@ -83,7 +83,7 @@ docker run --rm \
   -v serial-sync-state:/state \
   -v "$PWD/config.toml:/config/config.toml:ro" \
   -v "$PWD:/work" \
-  serial-sync setup dump --auth-profile patreon-default --path /work/serial-sync-rule-workspace --force
+  serial-sync setup dump --auth-profile patreon-default --path /work/serial-sync-rule-workspace
 
 docker run --rm \
   -v "$PWD/config.toml:/config/config.toml:ro" \
@@ -111,7 +111,7 @@ docker run --rm \
   serial-sync run
 ```
 
-`run` performs sync and then publish. Use `run --dry-run` to preview classification and materialization without mutating state or publishing.
+`run` performs sync and then publish. Use `run --dry-run` to fetch and plan without publishing; it can write caches and run diagnostics. Use `setup preview` for offline, read-only classification.
 
 ## Schedule It From Cron
 

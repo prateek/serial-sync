@@ -75,6 +75,11 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 		}
 	}()
 	for _, source := range sources {
+		history, historyErr := s.authoringDecisions(ctx, source.ID, nil)
+		if historyErr != nil {
+			result.Blocked = append(result.Blocked, source.ID+": "+historyErr.Error())
+			return result, fmt.Errorf("rebuild history unavailable for %s: %w", source.ID, historyErr)
+		}
 		storedSource, readErr := s.Repo.GetSource(ctx, source.ID)
 		if readErr != nil {
 			return result, readErr
@@ -92,11 +97,8 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 			if bundle != nil {
 				oldSeries = bundle.Track.TrackKey
 			}
-			data, loadErr := os.ReadFile(release.NormalizedPayloadRef)
-			var normalized domain.NormalizedRelease
-			if loadErr == nil {
-				loadErr = json.Unmarshal(data, &normalized)
-			}
+			normalized, loadErr := s.loadStoredNormalized(ctx, release)
+
 			if loadErr != nil {
 				if options.SeriesID != "" && oldSeries != options.SeriesID {
 					continue
@@ -105,8 +107,7 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
 				continue
 			}
-			decision := classify.Decide(source.ID, normalized, s.Config.RulesForSource(source.ID))
-			decision = s.numberedDecision(source.ID, normalized, decision)
+			decision := s.authoringDecision(source.ID, normalized, history)
 			if options.SeriesID != "" && decision.SeriesID != options.SeriesID {
 				continue
 			}
@@ -174,18 +175,25 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 	}
 	inputs := map[string]domain.NormalizedRelease{}
 	blocked := map[string]bool{}
+	histories := map[string]map[string]classify.ExplainedDecision{}
+	historyErrors := map[string]error{}
+	for _, candidate := range candidates {
+		if _, ok := histories[candidate.Source.ID]; !ok {
+			histories[candidate.Source.ID], historyErrors[candidate.Source.ID] = s.authoringDecisions(ctx, candidate.Source.ID, nil)
+		}
+	}
 	for i := range candidates {
 		candidate := &candidates[i]
 		if !s.sourceInScope(candidate.Source.ID, options.SourceID, true) {
 			continue
 		}
 		release := candidate.Release
-		data, loadErr := os.ReadFile(release.NormalizedPayloadRef)
-		var normalized domain.NormalizedRelease
+		normalized, loadErr := s.loadStoredNormalized(ctx, release)
+
+		decision := s.authoringDecision(candidate.Source.ID, normalized, histories[candidate.Source.ID])
 		if loadErr == nil {
-			loadErr = json.Unmarshal(data, &normalized)
+			loadErr = historyErrors[candidate.Source.ID]
 		}
-		decision := s.numberedDecision(candidate.Source.ID, normalized, classify.Decide(candidate.Source.ID, normalized, s.Config.RulesForSource(candidate.Source.ID)))
 		if options.SeriesID != "" && decision.SeriesID != options.SeriesID && candidate.Track.TrackKey != options.SeriesID {
 			continue
 		}
@@ -360,13 +368,21 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 
 func artifactMatches(current domain.Artifact, release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
 	var meta struct {
-		OutputVersion int                  `json:"output_version"`
-		Track         domain.StoryTrack    `json:"track"`
-		Release       domain.Release       `json:"release"`
-		Decision      domain.TrackDecision `json:"decision"`
+		OutputVersion int                       `json:"output_version"`
+		Track         domain.StoryTrack         `json:"track"`
+		Release       domain.Release            `json:"release"`
+		Decision      domain.TrackDecision      `json:"decision"`
+		Normalized    *domain.NormalizedRelease `json:"normalized"`
 	}
 	data, err := os.ReadFile(current.MetadataRef)
-	return err == nil && json.Unmarshal(data, &meta) == nil && meta.OutputVersion == 2 && meta.Release.ContentHash == release.ContentHash && meta.Track.TrackName == track.TrackName && meta.Track.CanonicalAuthor == track.CanonicalAuthor && reflect.DeepEqual(meta.Decision, decision)
+	if err != nil || json.Unmarshal(data, &meta) != nil || meta.OutputVersion != 2 {
+		return false
+	}
+	if meta.Decision.SelectedContent == nil && meta.Normalized != nil {
+		selected := classify.SelectContent(*meta.Normalized, meta.Decision)
+		meta.Decision.SelectedContent = &selected
+	}
+	return meta.Release.ContentHash == release.ContentHash && meta.Track.TrackName == track.TrackName && meta.Track.CanonicalAuthor == track.CanonicalAuthor && reflect.DeepEqual(meta.Decision, decision)
 }
 
 func legacyArtifact(current domain.Artifact) bool {

@@ -50,31 +50,30 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 	var mimeType string
 	var kind string
 	var selectedAttachment bool
-	switch decision.ContentStrategy {
-	case domain.ContentStrategyAttachmentPreferred, domain.ContentStrategyAttachmentOnly:
-		if attachment, ok := classify.SelectAttachment(normalized, decision); ok {
-			if attachment.LocalPath == "" {
-				if decision.ContentStrategy == domain.ContentStrategyAttachmentOnly {
-					return domain.ArtifactPlan{}, fmt.Errorf("selected attachment %q is missing a local_path", attachment.FileName)
-				}
-			} else {
-				content, err = os.ReadFile(attachment.LocalPath)
-				if err != nil {
-					return domain.ArtifactPlan{}, err
-				}
-				originalFileName = attachment.FileName
-				mimeType = attachment.MIMEType
-				selectedAttachment = true
-				break
-			}
+	selection := classify.SelectContent(normalized, decision)
+	switch selection.Kind {
+	case "attachment":
+		attachment, ok := classify.SelectAttachment(normalized, decision)
+		if !ok {
+			return domain.ArtifactPlan{}, errors.New("selected attachment no longer matches the captured release")
 		}
-		fallthrough
-	case domain.ContentStrategyTextPost, domain.ContentStrategyTextPlusAttachment:
+		if attachment.LocalPath == "" {
+			return domain.ArtifactPlan{}, fmt.Errorf("selected attachment %q is missing a local_path", attachment.FileName)
+		}
+		content, err = os.ReadFile(attachment.LocalPath)
+		if err != nil {
+			return domain.ArtifactPlan{}, err
+		}
+		originalFileName = attachment.FileName
+		mimeType = attachment.MIMEType
+		selectedAttachment = true
+
+	case "body":
 		rendered := renderHTML(normalized)
 		content = []byte(rendered)
 		originalFileName = fmt.Sprintf("%s.html", slug(normalized.Title))
 		mimeType = "text/html"
-	case domain.ContentStrategyManual:
+	case "none":
 		return domain.ArtifactPlan{}, errors.New("manual strategy does not select a canonical artifact")
 	default:
 		return domain.ArtifactPlan{}, fmt.Errorf("unsupported content strategy %q", decision.ContentStrategy)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -39,11 +38,11 @@ func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter
 		if !s.sourceInScope(candidate.Source.ID, sourceFilter, rebuild) {
 			continue
 		}
-		data, err := os.ReadFile(candidate.Release.NormalizedPayloadRef)
-		var normalized domain.NormalizedRelease
-		if err == nil && json.Unmarshal(data, &normalized) == nil {
+		normalized, err := s.loadStoredNormalized(ctx, candidate.Release)
+		if err == nil {
 			inputs[candidate.Release.ID] = normalized
 		}
+
 	}
 	plans, _, err := s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: sourceFilter, seriesFilter: seriesFilter, rebuild: rebuild, materialize: true, blockedSeries: blockedSeries, candidates: candidates, existing: existing, inputs: inputs})
 	return plans, err
@@ -171,7 +170,7 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation)
 			}
 			return nil
 		}
-		output := config.SeriesOutputDefaults(series.Output)
+		output := s.Config.SeriesOutput(series)
 		retainedGroups := map[string]bool{}
 		if output.Bundling != "volume" {
 			for _, old := range active {

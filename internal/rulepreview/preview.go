@@ -11,6 +11,14 @@ import (
 )
 
 func Build(sourceID string, releases []domain.NormalizedRelease, rules []config.RuleConfig, includePosts bool) provider.DiscoveryPreview {
+	decisions := make([]classify.ExplainedDecision, len(releases))
+	for i, release := range releases {
+		decisions[i] = classify.Explain(sourceID, release, rules)
+	}
+	return BuildDecisions(releases, decisions, includePosts)
+}
+
+func BuildDecisions(releases []domain.NormalizedRelease, decisions []classify.ExplainedDecision, includePosts bool) provider.DiscoveryPreview {
 	preview := provider.DiscoveryPreview{
 		SampledPosts: len(releases),
 	}
@@ -18,13 +26,19 @@ func Build(sourceID string, releases []domain.NormalizedRelease, rules []config.
 		preview.Posts = make([]provider.DiscoveryPreviewPost, 0, len(releases))
 	}
 	groupIndex := map[string]int{}
-	for _, release := range releases {
-		explained := classify.Explain(sourceID, release, rules)
+	for index, release := range releases {
+		explained := decisions[index]
 		materializable := classify.CanMaterialize(release, explained.Decision)
 		matchType := "unmatched"
 		matchValue := ""
 		if explained.Rule != nil {
 			matchType = explained.Rule.MatchType
+			if matchType == "" {
+				matchType = "selectors"
+			}
+			if explained.Rule.Override {
+				matchType = "override"
+			}
 			matchValue = explained.Rule.MatchValue
 		}
 		if explained.Rule == nil || matchType == "fallback" {
@@ -34,23 +48,32 @@ func Build(sourceID string, releases []domain.NormalizedRelease, rules []config.
 			preview.Materializable++
 		}
 		if includePosts {
+			var collectionRefs []domain.LabelReference
+			if release.Enrichment != nil {
+				collectionRefs = release.Enrichment.Collections
+			}
 			attachments := make([]string, 0, len(release.Attachments))
 			for _, attachment := range release.Attachments {
 				attachments = append(attachments, attachment.FileName)
 			}
 			preview.Posts = append(preview.Posts, provider.DiscoveryPreviewPost{
-				ProviderReleaseID: release.ProviderReleaseID,
-				Title:             release.Title,
-				PublishedAt:       release.PublishedAt,
-				Tags:              append([]string(nil), release.Tags...),
-				Collections:       append([]string(nil), release.Collections...),
-				Attachments:       attachments,
-				TrackKey:          explained.Decision.TrackKey,
-				TrackName:         explained.Decision.TrackName,
-				MatchType:         matchType,
-				MatchValue:        matchValue,
-				ContentStrategy:   explained.Decision.ContentStrategy,
-				Materializable:    materializable,
+				CollectionReferences: collectionRefs,
+				SelectedContent:      classify.SelectContent(release, explained.Decision),
+				Decision:             explained.Decision,
+				Explanation:          explained.Explanation,
+				Eligibility:          Eligibility(release, explained.Decision),
+				ProviderReleaseID:    release.ProviderReleaseID,
+				Title:                release.Title,
+				PublishedAt:          release.PublishedAt,
+				Tags:                 append([]string(nil), release.Tags...),
+				Collections:          append([]string(nil), release.Collections...),
+				Attachments:          attachments,
+				TrackKey:             explained.Decision.TrackKey,
+				TrackName:            explained.Decision.TrackName,
+				MatchType:            matchType,
+				MatchValue:           matchValue,
+				ContentStrategy:      explained.Decision.ContentStrategy,
+				Materializable:       materializable,
 			})
 		}
 		groupKey := strings.Join([]string{
@@ -88,4 +111,14 @@ func Build(sourceID string, releases []domain.NormalizedRelease, rules []config.
 		return preview.Groups[i].Total > preview.Groups[j].Total
 	})
 	return preview
+}
+
+func Eligibility(release domain.NormalizedRelease, decision domain.TrackDecision) string {
+	if decision.ContentStrategy == domain.ContentStrategyManual {
+		return "review"
+	}
+	if Can := classify.CanMaterialize(release, decision); Can {
+		return "ready"
+	}
+	return "unavailable"
 }

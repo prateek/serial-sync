@@ -10,21 +10,22 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/store"
 	sqldb "github.com/prateek/serial-sync/internal/store/sqlite/db"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed sql/schema.sql
 var schemaSQL string
 
 type Store struct {
-	hasVolumeSchema bool
-	snapshot        io.Closer
-	db              *sql.DB
-	queries         *sqldb.Queries
+	hasEnrichmentSchema bool
+	hasVolumeSchema     bool
+	hasDiscoverySchema  bool
+	snapshot            io.Closer
+	db                  *sql.DB
+	queries             *sqldb.Queries
 }
 
 func Open(dsn string) (*Store, error) {
@@ -42,7 +43,18 @@ func Open(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	var discoveryTables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'discovery_candidates'`).Scan(&discoveryTables); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	var enrichmentTables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'release_enrichment'`).Scan(&enrichmentTables); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{
+		hasEnrichmentSchema: enrichmentTables > 0, hasDiscoverySchema: discoveryTables > 0,
 		hasVolumeSchema: volumeTables > 0,
 		db:              db,
 		queries:         sqldb.New(db),
@@ -68,6 +80,8 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	if err == nil {
 		err = s.migrateArtifactEditions(ctx)
 		s.hasVolumeSchema = true
+		s.hasDiscoverySchema = true
+		s.hasEnrichmentSchema = true
 	}
 	return err
 }

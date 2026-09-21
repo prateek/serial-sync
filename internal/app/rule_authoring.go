@@ -12,14 +12,11 @@ import (
 	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
-
-	"github.com/prateek/serial-sync/internal/artifact"
-	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
+	"github.com/prateek/serial-sync/internal/discovery"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/observe"
 	"github.com/prateek/serial-sync/internal/provider"
-	"github.com/prateek/serial-sync/internal/rulepreview"
 )
 
 type SourceDumpOptions struct {
@@ -58,6 +55,9 @@ type SourceDumpResult struct {
 }
 
 type RulesPreviewOptions struct {
+	Suggest        bool
+	Stored         bool
+	CompareConfig  string
 	WorkspacePath  string
 	SeriesFile     string
 	CreatorFilters []string
@@ -74,17 +74,25 @@ type RulesPreviewCreator struct {
 }
 
 type RulesPreviewResult struct {
-	Volumes        []domain.VolumePlan   `json:"volumes,omitempty"`
-	RunID          string                `json:"run_id"`
-	WorkspacePath  string                `json:"workspace_path"`
-	SeriesFile     string                `json:"series_file"`
-	TotalPosts     int                   `json:"total_posts"`
-	Materializable int                   `json:"materializable"`
-	FallbackPosts  int                   `json:"fallback_posts"`
-	Creators       []RulesPreviewCreator `json:"creators"`
+	Labels          []discovery.LabelReport     `json:"labels"`
+	Suggestions     string                      `json:"suggestions,omitempty"`
+	SourcesFileHash string                      `json:"sources_file_hash,omitempty"`
+	SeriesFileHash  string                      `json:"series_file_hash,omitempty"`
+	Candidates      []domain.DiscoveryCandidate `json:"candidates"`
+	Binding         ReplayBinding               `json:"binding"`
+	Comparison      *ReplayComparison           `json:"comparison,omitempty"`
+	Volumes         []domain.VolumePlan         `json:"volumes,omitempty"`
+	RunID           string                      `json:"run_id,omitempty"`
+	WorkspacePath   string                      `json:"workspace_path"`
+	SeriesFile      string                      `json:"series_file"`
+	TotalPosts      int                         `json:"total_posts"`
+	Materializable  int                         `json:"materializable"`
+	FallbackPosts   int                         `json:"fallback_posts"`
+	Creators        []RulesPreviewCreator       `json:"creators"`
 }
 
 type dumpManifest struct {
+	originalRoot   string
 	Version        int                 `json:"version"`
 	GeneratedAt    time.Time           `json:"generated_at"`
 	Provider       string              `json:"provider"`
@@ -100,26 +108,22 @@ type dumpPostRecord struct {
 	Normalized domain.NormalizedRelease `json:"normalized"`
 }
 
-type seriesFileConfig struct {
-	Series []config.SeriesConfig `toml:"series"`
-}
-
 type dumpReleaseHydrater interface {
 	HydrateDumpReleases(ctx context.Context, auth config.AuthProfile, source config.SourceConfig, docs []provider.ReleaseDocument, fixtureDir string) ([]provider.ReleaseDocument, domain.AuthState, error)
 }
 
 const sourceDumpWorkerLimit = 2
 
-func (s *Service) DumpSources(ctx context.Context, authFilter string, options SourceDumpOptions, command string) (SourceDumpResult, error) {
+func (s *Service) DumpSources(ctx context.Context, authFilter string, options SourceDumpOptions, command string) (result SourceDumpResult, err error) {
 	recorder, err := observe.Start(ctx, s.Repo, command, strings.TrimSpace(authFilter), false, s.observeOptions())
 	if err != nil {
 		return SourceDumpResult{}, err
 	}
 	ctx = withRecorderProgress(ctx, recorder)
-	result := SourceDumpResult{RunID: recorder.RunID()}
+	result = SourceDumpResult{RunID: recorder.RunID()}
 	defer func() {
 		if err != nil {
-			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
+			_ = recorder.Finish(context.WithoutCancel(ctx), domain.RunStatusFailed, err.Error())
 		}
 	}()
 
@@ -135,9 +139,11 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 	if err != nil {
 		return result, err
 	}
-	if err := prepareWorkspaceRoot(workspacePath, options.Force); err != nil {
+	capture, err := beginDumpCapture(workspacePath)
+	if err != nil {
 		return result, err
 	}
+	defer capture.close()
 
 	discovered, err := client.DiscoverSources(ctx, auth, s.Config.Sources, provider.DiscoverOptions{
 		MembershipFilter:  firstNonEmpty(strings.TrimSpace(options.MembershipFilter), "paid"),
@@ -156,54 +162,34 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 	result.WorkspacePath = workspacePath
 	result.Membership = firstNonEmpty(strings.TrimSpace(options.MembershipFilter), "paid")
 
-	creatorsDir := filepath.Join(workspacePath, "creators")
+	creatorsDir := filepath.Join(capture.directory, "creators")
 	if err := os.MkdirAll(creatorsDir, 0o755); err != nil {
 		return result, err
 	}
-	sourcesSnippet := struct {
-		Sources []config.SourceConfig `toml:"sources"`
-	}{}
-	dumpCreators, err := s.dumpCreators(ctx, auth, client, creatorsDir, discovered.Suggestions)
+	var sources []config.SourceConfig
+	dumpCreators, err := s.dumpCreators(ctx, auth, client, workspacePath, creatorsDir, discovered.Suggestions)
 	if err != nil {
 		return result, err
 	}
 	for _, creator := range dumpCreators {
 		result.TotalPosts += creator.Creator.PostCount
 		result.Creators = append(result.Creators, creator.Creator)
-		sourcesSnippet.Sources = append(sourcesSnippet.Sources, creator.Source)
+		sources = append(sources, creator.Source)
 		_ = recorder.Event(ctx, "info", "dump", fmt.Sprintf("dumped %d post(s) for %s", creator.Creator.PostCount, creator.Creator.SourceID), "source", creator.Creator.SourceID)
 	}
 
-	sourcesFile := filepath.Join(workspacePath, "sources.toml")
-	if err := writeTOMLFile(sourcesFile, sourcesSnippet); err != nil {
-		return result, err
-	}
-	seriesFile := filepath.Join(workspacePath, "series.toml")
-	if err := os.WriteFile(seriesFile, []byte(defaultSeriesScaffold), 0o644); err != nil {
-		return result, err
-	}
 	manifest := dumpManifest{
-		Version:        2,
-		GeneratedAt:    time.Now().UTC(),
-		Provider:       discovered.Provider,
-		AuthProfileID:  auth.ID,
-		Membership:     result.Membership,
-		CreatorFilters: append([]string(nil), options.CreatorFilters...),
-		SourcesFile:    sourcesFile,
-		SeriesFile:     seriesFile,
-		Creators:       result.Creators,
+		GeneratedAt: time.Now().UTC(), Provider: discovered.Provider,
+		AuthProfileID: auth.ID, Membership: result.Membership,
+		CreatorFilters: append([]string(nil), options.CreatorFilters...), Creators: result.Creators,
 	}
-	manifestFile := filepath.Join(workspacePath, "manifest.json")
-	if err := writeJSONFile(manifestFile, manifest); err != nil {
+	if err := capture.install(ctx, manifest, sources); err != nil {
 		return result, err
 	}
-	if err := os.WriteFile(filepath.Join(workspacePath, "README.md"), []byte(workspaceReadme(workspacePath)), 0o644); err != nil {
-		return result, err
-	}
+	result.ManifestFile = filepath.Join(workspacePath, "manifest.json")
+	result.SourcesFile = filepath.Join(capture.directory, "sources.toml")
+	result.SeriesFile = filepath.Join(workspacePath, "series.toml")
 
-	result.ManifestFile = manifestFile
-	result.SourcesFile = sourcesFile
-	result.SeriesFile = seriesFile
 	summary := fmt.Sprintf("creators=%d posts=%d workspace=%s", len(result.Creators), result.TotalPosts, workspacePath)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
@@ -218,7 +204,7 @@ type dumpCreatorResult struct {
 	Err     error
 }
 
-func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, client provider.Client, creatorsDir string, suggestions []provider.SourceSuggestion) ([]dumpCreatorResult, error) {
+func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, client provider.Client, workspacePath, creatorsDir string, suggestions []provider.SourceSuggestion) ([]dumpCreatorResult, error) {
 	if len(suggestions) == 0 {
 		return nil, nil
 	}
@@ -236,7 +222,7 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 				if err := ctx.Err(); err != nil {
 					return
 				}
-				results <- s.dumpCreator(ctx, auth, client, creatorsDir, index, suggestions[index])
+				results <- s.dumpCreator(ctx, auth, client, workspacePath, creatorsDir, index, suggestions[index])
 			}
 		}()
 	}
@@ -266,6 +252,9 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 	if firstErr != nil {
 		return nil, firstErr
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return ordered, nil
 }
 
@@ -280,7 +269,7 @@ func dumpWorkerLimit(client provider.Client) int {
 	return sourceDumpWorkerLimit
 }
 
-func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, client provider.Client, creatorsDir string, index int, suggestion provider.SourceSuggestion) dumpCreatorResult {
+func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, client provider.Client, workspacePath, creatorsDir string, index int, suggestion provider.SourceSuggestion) dumpCreatorResult {
 	listResult, err := client.ListReleases(ctx, auth, suggestion.Source, nil)
 	if err != nil {
 		return dumpCreatorResult{Index: index, Err: err}
@@ -302,7 +291,7 @@ func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, clie
 	if err := writeJSONFile(sourceFile, suggestion); err != nil {
 		return dumpCreatorResult{Index: index, Err: err}
 	}
-	if err := writeDumpPosts(postsFile, listResult.Documents); err != nil {
+	if err := writeDumpPosts(postsFile, workspacePath, listResult.Documents); err != nil {
 		return dumpCreatorResult{Index: index, Err: err}
 	}
 	if err := writeDumpRawPosts(rawPostsDir, listResult.Documents); err != nil {
@@ -329,113 +318,7 @@ func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, clie
 }
 
 func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions, command string) (RulesPreviewResult, error) {
-	recorder, err := observe.Start(ctx, s.Repo, command, strings.Join(options.CreatorFilters, ","), false, s.observeOptions())
-	if err != nil {
-		return RulesPreviewResult{}, err
-	}
-	ctx = withRecorderProgress(ctx, recorder)
-	result := RulesPreviewResult{RunID: recorder.RunID()}
-	defer func() {
-		if err != nil {
-			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
-		}
-	}()
-
-	workspacePath, err := resolveWorkspacePath(options.WorkspacePath)
-	if err != nil {
-		return result, err
-	}
-	manifest, err := loadDumpManifest(filepath.Join(workspacePath, "manifest.json"))
-	if err != nil {
-		return result, err
-	}
-	seriesFile := strings.TrimSpace(options.SeriesFile)
-	if seriesFile == "" {
-		seriesFile = manifest.SeriesFile
-	}
-	if !filepath.IsAbs(seriesFile) {
-		seriesFile = filepath.Join(workspacePath, seriesFile)
-	}
-	series, err := loadSeriesDefinitions(seriesFile)
-	if err != nil {
-		return result, err
-	}
-	result.WorkspacePath = workspacePath
-	previewConfig := *s.Config
-	previewConfig.Series, previewConfig.Rules = series, config.CompileSeriesRules(series)
-	sourceData, err := os.ReadFile(manifest.SourcesFile)
-	if err != nil {
-		return result, err
-	}
-	var dumpedSources struct {
-		Sources []config.SourceConfig `toml:"sources"`
-	}
-	if err := toml.Unmarshal(sourceData, &dumpedSources); err != nil {
-		return result, err
-	}
-	previewConfig.Sources = dumpedSources.Sources
-	if err := previewConfig.ValidateSeries(); err != nil {
-		return result, err
-	}
-	planner := *s
-	planner.Config = &previewConfig
-	rules := previewConfig.Rules
-	var candidates []domain.PublishCandidate
-	inputs := map[string]domain.NormalizedRelease{}
-	result.SeriesFile = seriesFile
-	for _, creator := range manifest.Creators {
-		if !matchesDumpCreatorFilters(creator, options.CreatorFilters) {
-			continue
-		}
-		releases, err := loadDumpPosts(creator.PostsFile)
-		if err != nil {
-			return result, err
-		}
-		preview := rulepreview.Build(creator.SourceID, releases, filterRulesBySource(rules, creator.SourceID), options.ShowPosts)
-		for _, release := range releases {
-			decision := planner.numberedDecision(creator.SourceID, release, classify.Decide(creator.SourceID, release, filterRulesBySource(rules, creator.SourceID)))
-			track := domain.StoryTrack{ID: creator.SourceID + "/" + decision.TrackKey, TrackKey: decision.TrackKey, TrackName: decision.TrackName}
-			stored := domain.Release{ID: creator.SourceID + "/" + release.ProviderReleaseID, ProviderReleaseID: release.ProviderReleaseID, PublishedAt: release.PublishedAt, Title: release.Title}
-			filename := artifact.PreviewFilename(track, stored, release, decision)
-			for i := range preview.Posts {
-				if preview.Posts[i].ProviderReleaseID == release.ProviderReleaseID {
-					preview.Posts[i].Sequence, preview.Posts[i].Filename = decision.Sequence, filename
-				}
-			}
-			if classify.CanMaterialize(release, decision) {
-				mime := "text/html"
-				if decision.OutputFormat == domain.OutputFormatEPUB {
-					mime = "application/epub+zip"
-				}
-				candidates = append(candidates, domain.PublishCandidate{Source: domain.Source{ID: creator.SourceID}, Track: track, Release: stored, Assignment: domain.ReleaseAssignment{ReleaseRole: decision.ReleaseRole}, Artifact: domain.Artifact{Filename: filename, MIMEType: mime}})
-				inputs[stored.ID] = release
-			}
-		}
-		result.TotalPosts += len(releases)
-		result.Materializable += preview.Materializable
-		result.FallbackPosts += preview.FallbackPosts
-		result.Creators = append(result.Creators, RulesPreviewCreator{
-			SourceID:       creator.SourceID,
-			CreatorName:    creator.CreatorName,
-			CreatorHandle:  creator.CreatorHandle,
-			MembershipKind: creator.MembershipKind,
-			PostCount:      len(releases),
-			Preview:        preview,
-		})
-		_ = recorder.Event(ctx, "info", "rules-preview", fmt.Sprintf("previewed %d post(s) for %s", len(releases), creator.SourceID), "source", creator.SourceID)
-	}
-	if len(result.Creators) == 0 {
-		return result, fmt.Errorf("no dumped creators matched the provided filters")
-	}
-	result.Volumes, _, err = planner.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs})
-	if err != nil {
-		return result, err
-	}
-	summary := fmt.Sprintf("creators=%d posts=%d materializable=%d fallback=%d", len(result.Creators), result.TotalPosts, result.Materializable, result.FallbackPosts)
-	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
-		return result, finishErr
-	}
-	return result, nil
+	return s.replay(ctx, options)
 }
 
 func FormatSourceDumpResult(result SourceDumpResult) string {
@@ -453,7 +336,7 @@ func FormatSourceDumpResult(result SourceDumpResult) string {
 
 func FormatRulesPreviewResult(result RulesPreviewResult, showPosts bool) string {
 	lines := []string{
-		fmt.Sprintf("run_id=%s workspace=%s series=%s creators=%d posts=%d materializable=%d fallback=%d", result.RunID, result.WorkspacePath, result.SeriesFile, len(result.Creators), result.TotalPosts, result.Materializable, result.FallbackPosts),
+		fmt.Sprintf("workspace=%s series=%s creators=%d posts=%d materializable=%d fallback=%d", result.WorkspacePath, result.SeriesFile, len(result.Creators), result.TotalPosts, result.Materializable, result.FallbackPosts),
 	}
 	for _, creator := range result.Creators {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\tposts=%d", creator.SourceID, creator.CreatorName, firstNonEmpty(creator.MembershipKind, "unknown"), creator.PostCount))
@@ -474,15 +357,65 @@ func FormatRulesPreviewResult(result RulesPreviewResult, showPosts bool) string 
 					label += ":" + post.MatchValue
 				}
 				lines = append(lines, fmt.Sprintf("    * %s [%s %s materializable=%t] %s", post.TrackKey, label, post.ContentStrategy, post.Materializable, post.Title))
+				lines = append(lines, "      eligibility: "+post.Eligibility+"; content: "+post.SelectedContent.Kind+" "+post.SelectedContent.FileName)
+				if len(post.Explanation.HeldReasons) > 0 {
+					lines = append(lines, "      held for review: "+strings.Join(post.Explanation.HeldReasons, ", "))
+				}
+				for _, conflict := range post.Explanation.Conflicts {
+					lines = append(lines, fmt.Sprintf("      label/title conflict: %s / %s", conflict.LabelSeries, conflict.TitleSeries))
+				}
+				for _, attempt := range post.Explanation.Attempts {
+					if len(attempt.Selectors) == 0 {
+						continue
+					}
+					marker := "passed over"
+					if attempt.Selected {
+						marker = "selected"
+					}
+					lines = append(lines, fmt.Sprintf("      %s: %s %s", attempt.Input, marker, attempt.Reason))
+					for _, guard := range attempt.Guards {
+						lines = append(lines, fmt.Sprintf("        %s passed=%t %s", guard.Field, guard.Passed, guard.Detail))
+					}
+				}
 				if post.Materializable {
 					lines = append(lines, "      output: "+post.Filename)
 					if seq := post.Sequence; seq != nil {
-						lines = append(lines, fmt.Sprintf("      sequence: book=%s chapter=%d position=%d origin=%s matched=%q %s", seq.BookID, seq.Chapter, seq.Position, seq.Origin, seq.MatchedText, seq.Reason))
+						lines = append(lines, fmt.Sprintf("      sequence: book=%s chapter=%d chapter_label=%q part=%q position=%d origin=%s matched=%q %s", seq.BookID, seq.Chapter, seq.ChapterLabel, seq.Part, seq.Position, seq.Origin, seq.MatchedText, seq.Reason))
 					}
 				}
 			}
 		}
 	}
+	for _, report := range result.Labels {
+		for _, label := range report.Labels {
+			lines = append(lines, fmt.Sprintf("collection %s: %s", label.Key(), strings.Join(label.Names, " | ")))
+		}
+		for _, drift := range report.PossibleDrift {
+			lines = append(lines, fmt.Sprintf("possible drift: %s/%s %s %q: %s (%s)", report.Source, drift.Series, drift.ID, drift.Name, drift.Detail, strings.Join(drift.Observed, ", ")))
+		}
+		if report.MissingIdentities > 0 {
+			lines = append(lines, fmt.Sprintf("%s: %d captured posts have no collection identity enrichment", report.Source, report.MissingIdentities))
+		}
+	}
+	lines = append(lines, FormatCandidates(result.Candidates))
+	if result.Suggestions != "" {
+		lines = append(lines, "Draft config (review before installing):", result.Suggestions)
+	}
+	if comparison := result.Comparison; comparison != nil {
+		lines = append(lines, fmt.Sprintf("classification changes: %d", len(comparison.Classification)))
+		for _, change := range comparison.Classification {
+			lines = append(lines, fmt.Sprintf("  %s/%s: %s (%s, %s) -> %s (%s, %s)", change.Source, change.ReleaseID, change.Before.Series, change.Before.Role, change.Before.Eligibility, change.After.Series, change.After.Role, change.After.Eligibility))
+		}
+		lines = append(lines, fmt.Sprintf("output policy changes: %d", len(comparison.OutputPolicy)))
+		for _, change := range comparison.OutputPolicy {
+			lines = append(lines, fmt.Sprintf("  %s/%s: %s", change.Source, change.ReleaseID, policyChanges(change.Before, change.After)))
+		}
+		lines = append(lines, formatAppliedLibrary(comparison.AppliedLibrary)...)
+		if comparison.RequiresRebuild {
+			lines = append(lines, "Stored output needs run --rebuild after promotion; ordinary sync does not apply mapping changes to unchanged content.")
+		}
+	}
+	lines = append(lines, fmt.Sprintf("capture=%s config=%s", result.Binding.CaptureHash, result.Binding.ConfigHash))
 	for _, volume := range result.Volumes {
 		lines = append(lines, formatVolumePlan(volume))
 	}
@@ -505,24 +438,7 @@ func resolveWorkspacePath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func prepareWorkspaceRoot(path string, force bool) error {
-	if info, err := os.Stat(path); err == nil {
-		if !info.IsDir() {
-			return fmt.Errorf("workspace path %s exists and is not a directory", path)
-		}
-		if !force {
-			return fmt.Errorf("workspace path %s already exists; rerun with --force to overwrite", path)
-		}
-		if err := os.RemoveAll(path); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return os.MkdirAll(path, 0o755)
-}
-
-func writeDumpPosts(path string, docs []provider.ReleaseDocument) error {
+func writeDumpPosts(path, workspacePath string, docs []provider.ReleaseDocument) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return err
@@ -531,7 +447,20 @@ func writeDumpPosts(path string, docs []provider.ReleaseDocument) error {
 	writer := bufio.NewWriter(file)
 	encoder := json.NewEncoder(writer)
 	for _, doc := range docs {
-		if err := encoder.Encode(dumpPostRecord{Normalized: doc.Normalized}); err != nil {
+		normalized := doc.Normalized
+		normalized.Attachments = append([]domain.Attachment(nil), normalized.Attachments...)
+		for i := range normalized.Attachments {
+			attachment := &normalized.Attachments[i]
+			if attachment.LocalPath == "" {
+				continue
+			}
+			rel, err := filepath.Rel(workspacePath, attachment.LocalPath)
+			if err != nil || !filepath.IsLocal(rel) {
+				return fmt.Errorf("attachment path is outside workspace: %s", attachment.LocalPath)
+			}
+			attachment.LocalPath = filepath.ToSlash(rel)
+		}
+		if err := encoder.Encode(dumpPostRecord{Normalized: normalized}); err != nil {
 			return err
 		}
 	}
@@ -593,22 +522,7 @@ func loadDumpManifest(path string) (dumpManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return manifest, err
 	}
-	return manifest, nil
-}
-
-func loadSeriesDefinitions(path string) ([]config.SeriesConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var fileConfig seriesFileConfig
-	if err := config.ValidateExplicitOutputFields(data); err != nil {
-		return nil, err
-	}
-	if err := toml.Unmarshal(data, &fileConfig); err != nil {
-		return nil, err
-	}
-	return fileConfig.Series, nil
+	return relocateManifest(filepath.Dir(path), manifest)
 }
 
 func filterRulesBySource(rules []config.RuleConfig, sourceID string) []config.RuleConfig {
@@ -671,13 +585,14 @@ func workspaceReadme(path string) string {
 This directory is a local series-authoring workspace and full Patreon dump.
 
 - Edit series in %s
-- Inspect normalized posts in creators/<source-id>/posts.ndjson
-- Raw Patreon post payloads live in creators/<source-id>/posts/
-- Downloaded source attachments live in creators/<source-id>/attachments/
+- Inspect normalized posts in captures/<generation>/creators/<source-id>/posts.ndjson
+- Raw Patreon post payloads live in captures/<generation>/creators/<source-id>/posts/
+- Downloaded source attachments live in captures/<generation>/creators/<source-id>/attachments/
 - Preview those series definitions offline with:
   serial-sync setup preview --workspace %s --show-posts
 - Creator directories are fixture-compatible captures for later offline replay/materialization work.
-- Merge the resulting sources from sources.toml and series from series.toml into your main config when you are happy with the results.
+- Read manifest.json for the current capture paths. Refreshes preserve authored files.
+- Merge the resulting sources from the reported sources file and series from series.toml into your main config when you are happy with the results.
 `, filepath.Base(filepath.Join(path, "series.toml")), path)) + "\n"
 }
 

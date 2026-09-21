@@ -56,7 +56,7 @@ Use the bundled fixtures under `testdata/fixtures` or `examples/config.demo.toml
 
 Check:
 
-- `serial-sync setup dump --auth-profile <profile> --path ./serial-sync-rule-workspace --force`
+- `serial-sync setup dump --auth-profile <profile> --path ./serial-sync-rule-workspace`
 - `serial-sync debug run <run-id>`
 - `serial-sync debug events <run-id> --component publish`
 - `serial-sync debug publishes`

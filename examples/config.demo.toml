@@ -1,3 +1,5 @@
+# After a fixture run, replay this same config with: setup preview --stored --format json
+# Validate without creating state: serial-sync --config ./examples/config.demo.toml setup check
 [runtime]
 log_level = "info"
 log_format = "text"
@@ -88,3 +90,13 @@ authors = ["Actus"]
   match_value = "^Nightmare Realm Summoner\\s+-\\s+Chapter\\s+"
   release_role = "chapter"
   content_strategy = "text_post"
+
+# Grouped inputs may replace match_type/match_value with collections, tags,
+# title_patterns, or attachment_patterns. Their min_body_chars default is 1500;
+# use zero for attachment-only inputs or deliberate short-fiction mappings.
+# Pin a stable collection with collections = [{ id = "fictional-id", name = "Harbor" }].
+# hold_candidates = true on a broad input keeps unexplained first chapters and
+# unknown collections in review; leave it off to keep discovery advisory.
+# With series.source set, a book may use collection = { id = "fictional-book", name = "Arrival" }
+# or tag = "Arrival"; keep expected first_chapter/last_chapter explicit.
+# setup preview --stored --compare BASELINE.toml includes read-only library plans.

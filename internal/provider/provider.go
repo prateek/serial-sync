@@ -86,20 +86,25 @@ type DiscoveryPreviewGroup struct {
 }
 
 type DiscoveryPreviewPost struct {
-	Sequence          *domain.Sequence       `json:"sequence,omitempty"`
-	Filename          string                 `json:"filename,omitempty"`
-	ProviderReleaseID string                 `json:"provider_release_id"`
-	Title             string                 `json:"title"`
-	PublishedAt       time.Time              `json:"published_at"`
-	Tags              []string               `json:"tags,omitempty"`
-	Collections       []string               `json:"collections,omitempty"`
-	Attachments       []string               `json:"attachments,omitempty"`
-	TrackKey          string                 `json:"track_key"`
-	TrackName         string                 `json:"track_name"`
-	MatchType         string                 `json:"match_type"`
-	MatchValue        string                 `json:"match_value,omitempty"`
-	ContentStrategy   domain.ContentStrategy `json:"content_strategy"`
-	Materializable    bool                   `json:"materializable"`
+	CollectionReferences []domain.LabelReference    `json:"collection_references,omitempty"`
+	SelectedContent      domain.ContentReference    `json:"selected_content"`
+	Decision             domain.TrackDecision       `json:"decision"`
+	Explanation          domain.DecisionExplanation `json:"explanation"`
+	Eligibility          string                     `json:"eligibility"`
+	Sequence             *domain.Sequence           `json:"sequence,omitempty"`
+	Filename             string                     `json:"filename,omitempty"`
+	ProviderReleaseID    string                     `json:"provider_release_id"`
+	Title                string                     `json:"title"`
+	PublishedAt          time.Time                  `json:"published_at"`
+	Tags                 []string                   `json:"tags,omitempty"`
+	Collections          []string                   `json:"collections,omitempty"`
+	Attachments          []string                   `json:"attachments,omitempty"`
+	TrackKey             string                     `json:"track_key"`
+	TrackName            string                     `json:"track_name"`
+	MatchType            string                     `json:"match_type"`
+	MatchValue           string                     `json:"match_value,omitempty"`
+	ContentStrategy      domain.ContentStrategy     `json:"content_strategy"`
+	Materializable       bool                       `json:"materializable"`
 }
 
 type DiscoveryPreview struct {
@@ -162,4 +167,29 @@ func SortReleaseDocuments(items []ReleaseDocument) {
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].Normalized.PublishedAt.After(items[j].Normalized.PublishedAt)
 	})
+}
+
+// CapturedEnricher derives metadata from supplied bytes without fetching or authenticating.
+type CapturedEnricher interface {
+	EnrichCaptured(domain.NormalizedRelease, []byte) (domain.NormalizedRelease, error)
+}
+
+func (r *Registry) EnrichCaptured(release domain.NormalizedRelease, raw []byte) (domain.NormalizedRelease, error) {
+	if r == nil || len(raw) == 0 {
+		return release, nil
+	}
+	client, ok := r.Get(release.Provider)
+	if !ok {
+		return release, nil
+	}
+	enricher, ok := client.(CapturedEnricher)
+	if !ok {
+		return release, nil
+	}
+	return enricher.EnrichCaptured(release, raw)
+}
+
+// ProfileAuthenticator bootstraps a saved session before a source is configured.
+type ProfileAuthenticator interface {
+	BootstrapProfile(context.Context, config.AuthProfile, bool) (AuthBootstrapResult, error)
 }

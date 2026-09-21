@@ -31,11 +31,16 @@ Dump creators into a local workspace:
 ```sh
 serial-sync --config ./config.toml setup dump \
   --auth-profile patreon-default \
-  --path ./serial-sync-rule-workspace \
-  --force
+  --path ./serial-sync-rule-workspace
 ```
 
 This defaults to all paid creators. Use `--creator <value>` only when you want to refresh or inspect a narrower subset.
+
+Reuse an existing dump for offline authoring. Refresh only when new upstream
+content is needed; repeat the dump command without `--force`. A refresh preserves
+authored files and keeps the old capture until the new one is complete.
+`setup check` and workspace preview are read-only and reject unknown keys,
+invalid enums, regexes, globs, and source/book references.
 
 The dump is the canonical local capture. It includes normalized posts for fast authoring, raw Patreon post JSON, and downloaded attachments in the same workspace.
 
@@ -53,13 +58,14 @@ serial-sync --config ./config.toml setup preview \
 The dump writes:
 
 - `manifest.json`
-- `sources.toml`
+- `captures/<generation>/sources.toml`
 - `series.toml`
-- `creators/<source-id>/source.json`
-- `creators/<source-id>/posts.ndjson`
-- `creators/<source-id>/posts/*.json`
-- `creators/<source-id>/attachments/<post-id>/...`
+- `captures/<generation>/creators/<source-id>/source.json`
+- `captures/<generation>/creators/<source-id>/posts.ndjson`
+- `captures/<generation>/creators/<source-id>/posts/*.json`
+- `captures/<generation>/creators/<source-id>/attachments/<post-id>/...`
 
+Resolve capture files through `manifest.json`; do not glob all generations.
 `posts.ndjson` contains one normalized post per line. That is the primary inspection surface.
 
 ## How to inspect the dump
@@ -69,16 +75,16 @@ Prefer local inspection over more Patreon fetches.
 Useful commands:
 
 ```sh
-python3 - <<'PY' ./serial-sync-rule-workspace/creators/plumparrot/posts.ndjson
-import json,sys
-for idx,line in enumerate(open(sys.argv[1])):
-    row=json.loads(line)
-    print(row["normalized"]["title"])
-    if idx >= 20:
-        break
+python3 - ./serial-sync-rule-workspace <<'PY'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+manifest = json.loads((root / "manifest.json").read_text())
+for creator in manifest["creators"]:
+    print(creator["source_id"], root / creator["posts_file"])
 PY
 
-rg -n "Aura Overload|Andy|AA3|AO2" ./serial-sync-rule-workspace/creators/plumparrot/posts.ndjson
 ```
 
 ## Series drafting heuristics
@@ -95,8 +101,10 @@ Avoid generic tags like `Fantasy`, `Magic`, `story`, `update`, `news`, or anythi
 
 Prefer one `[[series]]` per actual franchise/serial, not one per upstream Patreon tag or one per book, unless the user explicitly wants separate publish buckets. If a creator uses tags or collections like `AA1`, `AA2`, `VOT 11`, and `VOT 12`, keep those as multiple `[[series.inputs]]` under a single series whenever they all belong to the same reader-facing serial.
 
-Keep book identity within the shared series: declare `[[series.books]]` and use
-input `book_id` when tags or collections establish the book. When authoring book
+Keep book identity within the shared series: declare `[[series.books]]` with a
+`collection` or `tag`, or use input `book_id` for custom guards and priority.
+Book labels require `series.source`; they select series and book but never infer
+chapter boundaries. When authoring book
 ranges, volume grouping, intentional gaps or per-release overrides, read
 [`docs/config.md`](../../docs/config.md#volume-output) for the exact syntax and
 [`docs/rules.md`](../../docs/rules.md#check-reading-order-before-bundling) for the
@@ -148,7 +156,7 @@ Stop iterating when:
 
 When the series config looks right:
 
-1. Copy the relevant `[[sources]]` from `sources.toml` into the real config.
+1. Copy the relevant `[[sources]]` from the capture file printed as `sources=` by `setup dump` into the real config.
 2. Copy the final `[[series]]` from the workspace `series.toml` into the real config.
 3. Run:
 
@@ -166,3 +174,60 @@ the selected volume before rebuilding it.
 Validate a small Calibre and reader sample before a large migration. Exec hooks
 participating in volume replacement require protocol version 2 as documented in
 [`docs/hooks.md`](../../docs/hooks.md#version-2-publish-and-supersede).
+
+## Replay and discovery
+
+- Preview uses the global main config by default. Pass `--series-file series.toml`
+  explicitly for a standalone draft in a dump workspace.
+- For an existing library, use `setup preview --stored --compare <baseline-config>`
+  under the candidate `--config`. Read the classification and output-policy parts,
+  including disabled/removed sources. Its applied-library section uses the rebuild
+  planner for both configs against the same catalog. Inspect actual actions and
+  blockers; workspace-only replay has no applied state. Disabled sources and
+  destinations retain delivered files.
+- Catalog replay is offline and read-only. It reads only current catalog payload
+  references and never initializes a schema or records a run. It requires a
+  checkpointed catalog; do not copy or mutate live state merely to bypass a read error.
+- Inspect candidates even when every post was classified. They group evidence;
+  they do not enroll or publish inferred series. A config edit can resolve members.
+- `setup candidates dismiss <id> --reason <explanation>` is an explicit durable
+  operator decision. New evidence reopens it; repeated lookbacks do not.
+- Use source `ignore_labels` for genre/per-chapter label noise, without changing
+  classification. Generic filenames and uninterrupted numbering can hide a new story;
+  do not claim the detector proves a capture contains no unmapped series.
+- Reports bind config hashes, binary/version, and capture inventory. Preserve those
+  with private validation evidence; never commit real paid-feed titles or bodies.
+
+### Grouped authoring
+
+- Prefer `series.source` plus grouped `collections`, `tags`, `title_patterns`, or
+  `attachment_patterns`. Lists are ORed; all guards must pass. Do not mix these
+  with `match_type` / `match_value` on one input.
+- Inheritance is `[defaults]`, `[sources.defaults]`, series output, then input.
+  `sources.author` supplies an omitted series author.
+- New grouped inputs default to 1,500 visible Unicode body characters. Set
+  `min_body_chars = 0` for attachment-only or short-fiction inputs and title
+  backstops when needed. Legacy inputs have no new implicit guard.
+- Use `unless_tags` and `unless_title_patterns` for long nonfiction. Body length
+  alone does not establish fiction. Inspect guard explanations in preview.
+- `[[review]]` uses source, priority, selectors, guards, and a required reason.
+  It has no implicit body guard. `[[overrides]]` uses source, release_id, either
+  series or review=true, and a required reason; it runs before inputs.
+- `setup preview --suggest` prints an uninstalled draft. Check every selector and
+  strategy before copying it into the main config.
+
+- Pin collection IDs from preview using `collections = [{ id = "...", name = "..." }]`.
+  The name is descriptive when an ID is present. Inspect possible drift and
+  label/title conflicts before accepting a mapping.
+- Filename selectors pin the selected attachment across preview, sync, and rebuild.
+  Verify the chosen file and eligibility, especially on posts with multiple files.
+- Opt broad backstops into `hold_candidates = true` when first chapters, numbering
+  resets, or unknown collections need review. Explicit overrides settle exceptions.
+- `setup memberships` uses saved-session metadata only; authenticate explicitly if
+  needed. `setup enrich` persists identities from captured raw JSON without
+  refetching or republishing; preview can perform the same enrichment in memory.
+
+- Decimal, suffixed, negative, and part numbering stays single unless a positive
+  sequence override assigns a declared slot. Do not truncate these values or infer
+  book completion from a label. Book labels compile at priority 10 before explicit
+  inputs at the same priority; use explicit `book_id` inputs for other ordering.

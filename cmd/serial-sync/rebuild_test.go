@@ -214,7 +214,7 @@ func TestCheckRejectsInvalidReaderOutputBeforeCreatingState(t *testing.T) {
 		{"book_duplicate", "", "[[series.books]]\nid=\"one\"\nnumber=1\n[[series.books]]\nid=\"two\"\nnumber=1\n", "number"},
 		{"open_book_overlap", "", "[[series.books]]\nid=\"one\"\nnumber=1\n[[series.books]]\nid=\"two\"\nnumber=2\nlast_chapter=1\nseries_position_start=1\n", "overlaps"},
 		{"unknown_override", "", "[[series.sequence_overrides]]\nsource=\"absent\"\nrelease_id=\"a1\"\nchapter=1\n", "source"},
-		{"legacy_true", "", "[[rules]]\nsource=\"alpha\"\ntrack_key=\"alpha\"\nanthology_mode=true\n", "anthology_mode"},
+		{"legacy_true", "", "[[rules]]\nsource=\"alpha\"\ntrack_key=\"alpha\"\nmatch_type=\"fallback\"\nrelease_role=\"chapter\"\ncontent_strategy=\"text_post\"\nanthology_mode=true\n", "anthology_mode"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -222,7 +222,7 @@ func TestCheckRejectsInvalidReaderOutputBeforeCreatingState(t *testing.T) {
 				t.Setenv(key, filepath.Join(root, key))
 			}
 			path := filepath.Join(root, "config.toml")
-			body := "[[sources]]\nid=\"alpha\"\nprovider=\"patreon\"\nurl=\"https://example.test/alpha\"\n[[series]]\nid=\"alpha\"\ntitle=\"Alpha\"\n[[series.inputs]]\nsource=\"alpha\"\nmatch_type=\"title_regex\"\nmatch_value=\"Alpha\"\n[series.output]\n" + tc.output + "\n" + tc.extra
+			body := "[[sources]]\nid=\"alpha\"\nprovider=\"patreon\"\nurl=\"https://example.test/alpha\"\n[[series]]\nid=\"alpha\"\ntitle=\"Alpha\"\n[[series.inputs]]\nsource=\"alpha\"\nmatch_type=\"title_regex\"\nmatch_value=\"Alpha\"\nrelease_role=\"chapter\"\ncontent_strategy=\"text_post\"\n[series.output]\n" + tc.output + "\n" + tc.extra
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -341,10 +341,10 @@ func TestCheckWarnsOnlyWhenDeprecatedAnthologyFlagIsPresent(t *testing.T) {
 			}
 			body := "[[sources]]\nid=\"alpha\"\nprovider=\"patreon\"\nurl=\"https://example.test/alpha\"\n"
 			if location == "series_input" {
-				body += "[[series]]\nid=\"alpha\"\ntitle=\"Alpha\"\n[[series.inputs]]\nsource=\"alpha\"\nmatch_type=\"title_regex\"\nanthology_mode=false\n"
+				body += "[[series]]\nid=\"alpha\"\ntitle=\"Alpha\"\n[[series.inputs]]\nsource=\"alpha\"\nmatch_type=\"title_regex\"\nrelease_role=\"chapter\"\ncontent_strategy=\"text_post\"\nanthology_mode=false\n"
 			}
 			if location == "legacy_rule" {
-				body += "[[rules]]\nsource=\"alpha\"\ntrack_key=\"alpha\"\nanthology_mode=false\n"
+				body += "[[rules]]\nsource=\"alpha\"\ntrack_key=\"alpha\"\nmatch_type=\"fallback\"\nrelease_role=\"chapter\"\ncontent_strategy=\"text_post\"\nanthology_mode=false\n"
 			}
 			path := filepath.Join(root, "config.toml")
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

@@ -22,6 +22,24 @@ The current MVP supports:
 - publisher kinds: `filesystem`, `exec`
 - matcher types: `tag`, `collection`, `title_regex`, `attachment_filename_regex`, `fallback`
 
+`setup check`, `setup preview`, and `run` use the same strict config loader.
+Unknown keys, invalid enum values, malformed regexes and attachment globs, and
+unknown source/series/book references fail with a file and field diagnostic. Standalone
+series files receive the same validation. Check and all preview modes create no
+state, logs, or database; they need no provider connection. Warnings identify
+fallbacks above other inputs and identical selectors; the first input still wins.
+
+`setup preview` uses this main config unless `--series-file` is supplied. Compare
+it with another complete config using `--compare <path>` and either `--stored`
+or `--workspace <path>`; see [replay and comparison](rules.md#replay-and-compare-the-main-config).
+Sources may declare `ignore_labels = ["fantasy", "news"]` to suppress matching
+label names from discovery. It has no effect on routing or publication.
+
+Release roles are `chapter`, `extra`, `release_attachment`, `announcement`,
+`schedule`, `preview_bundle`, and `unknown`. `extra` is fiction that occupies no
+chapter slot and therefore remains a single. Each legacy input or rule must set
+`release_role` and `content_strategy`; see [content strategies](rules.md#content-strategies).
+
 Live auth example:
 
 ```toml
@@ -120,7 +138,7 @@ Notes:
 - in the Docker image, `/config/config.toml` and `/state` are the default roots.
 - later runs reuse the saved session over plain HTTP unless Patreon forces a reauth.
 - `setup auth --import-session` can seed `session_path` from an externally generated session bundle.
-- `setup dump` writes additive `sources.toml` plus a local `series.toml` scaffold based on the Patreon memberships tied to the selected auth profile.
+- `setup dump` installs a complete capture generation and atomically points `manifest.json` at it. It creates `series.toml` once; refreshes preserve authored files and earlier generations.
 - each dump creator directory now contains `posts.ndjson`, raw Patreon post JSON in `posts/`, and downloaded attachments in `attachments/`.
 - those creator directories are fixture-compatible captures for later offline replay/materialization work, even though the generated `sources.toml` snippet still points at the live Patreon sources.
 - if Patreon presents a Cloudflare or other interactive challenge, complete `setup auth` in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle before returning to the Docker run path.
@@ -220,3 +238,148 @@ for volumes or retirement.
 For a full runnable example, use [config.demo.toml](../examples/config.demo.toml).
 
 For real-world rule patterns, use [rules.md](rules.md).
+
+## Authoring defaults and exceptions
+
+`[defaults]` and `[sources.defaults]` accept `format`, `preface_mode`,
+`release_role`, `content_strategy`, `attachment_glob`, `attachment_priority`,
+and `min_body_chars`. Settings inherit in that order, then from
+`[series.output]` (format and preface), then from the individual input. Explicit
+empty attachment lists and `min_body_chars = 0` clear the inherited restriction.
+Without configured defaults, role is `chapter`, strategy is `text_post`, format
+is `preserve`, and preface is `none`.
+
+A series may set `source`; each input can override it. Authors come from
+`series.authors`, then `sources.author`, then the provider's creator name.
+For a series spanning sources, declare its output explicitly when bundling.
+
+An input uses either the legacy `match_type` / `match_value` pair or selector
+lists. Lists are ORed, including across types. Patterns are Go regular expressions;
+collection and tag names match case-insensitively. A matching input must also
+pass every guard:
+
+```toml
+[[series]]
+id = "glass-harbor"
+title = "The Glass Harbor"
+source = "fictional-author"
+
+[[series.inputs]]
+priority = 10
+title_patterns = ['^Harbor (Chapter|Epilogue)']
+min_body_chars = 0
+
+[[series.inputs]]
+priority = 20
+collections = ["Harbor", "Harbor archive"]
+tags = ["harbor-fiction"]
+min_body_chars = 1500
+unless_tags = ["news"]
+unless_title_patterns = ['(?i)^Questions and answers']
+```
+
+`attachment_patterns` matches filenames. `min_body_chars` counts decoded,
+whitespace-normalized Unicode characters in visible HTML, or plain text when HTML
+is absent. It defaults to 1,500 on grouped inputs; legacy matchers acquire no new
+implicit guard. Use zero for short fiction, title backstops, or attachment-only
+inputs. Failed guards continue to the next input and appear in preview explanations.
+
+Built-in review is unpublished. Review rules participate in the same priority
+order as series inputs; they have no implicit body guard:
+
+```toml
+[[review]]
+source = "fictional-author"
+priority = 5
+tags = ["administrative"]
+reason = "Administrative announcements"
+
+[[overrides]]
+source = "fictional-author"
+release_id = "example-release"
+series = "glass-harbor"
+reason = "Confirmed fiction with an incorrect upstream label"
+```
+
+An override runs before inputs. Set exactly one of `series` or `review = true`,
+and provide a nonempty reason. A series override inherits source defaults and
+series output; selector guards do not apply. Review also requires a reason.
+Unmatched posts need no fallback series.
+
+### Collection identity and holding
+
+A collection selector can use a name or a provider ID with an optional display
+name. When an ID is present, only the ID determines the match:
+
+```toml
+[[series.inputs]]
+collections = [{ id = "fictional-collection-1", name = "Harbor" }]
+
+[[series.inputs]]
+priority = 1000
+title_patterns = ['^Harbor']
+min_body_chars = 0
+hold_candidates = true
+```
+
+`hold_candidates` defaults to false. On the winning input or review rule it
+holds first-chapter markers, chronological numbering resets, and unreferenced
+collections in review. Explicit release overrides take precedence. Both preview
+and sync analyze the captured source history; missing history blocks a rebuild.
+Discovery remains advisory on every other input.
+
+`setup preview` reports scoped collection identities, observed names, and possible
+drift. `setup enrich [--source ID]` persists identity metadata from stored raw JSON
+without refetching or changing content hashes or publication. Preview performs
+that enrichment in memory when needed. The durable metadata is bound to its
+capture version so a failed fetch cannot relabel older captured content.
+
+An auth-profile-only config is valid for `setup auth --auth-profile ID` and
+`setup memberships --auth-profile ID [--format json]`. Membership inspection uses
+the saved session for one metadata request and reports configured, enabled, and
+mapped status. An expired session requires explicit authentication; no browser
+opens during inspection.
+
+### Books selected by labels
+
+Set `series.source` when a book uses `collection` or `tag`. These selectors
+inherit the series output and source/global rule defaults, including the grouped
+input body guard. A collection accepts the same name or `{ id, name }` forms as
+input collection lists. Both labels on one book are ORed.
+
+```toml
+[[series]]
+id = "harbor"
+title = "Harbor"
+source = "fictional-author"
+
+[[series.books]]
+id = "arrival"
+number = 1
+collection = { id = "fictional-book-1", name = "Arrival" }
+first_chapter = 1
+last_chapter = 80
+
+[[series.books]]
+id = "return"
+number = 2
+tag = "Return"
+```
+
+Book selectors become ordinary inputs at priority 10, before explicit inputs with
+the same priority. Lower-numbered inputs and release overrides take precedence.
+Book labels can supply all inputs for a series. Use explicit inputs with `book_id`
+when a book needs different guards, content selection, or priority.
+
+The second book above remains open until its endpoint is declared. A collection
+never implies completion. Unknown book markers are reported as candidates and
+cannot complete a fixed-range volume.
+
+Sequence parsing preserves `3.60`, `24D`, negative chapter numbers, and `[Part K8]`
+in `chapter_label` or `part` fields. They remain singles without a scalar reading
+position; an explicit positive `sequence_overrides.chapter` can assign a volume
+slot. Part markers also remain attached to an otherwise integral chapter, including
+when the selected filename supplies the part. `B6C57`, `Chaptger 204`, `Chapeter 480`,
+and a leading `737 - Title` yield integral chapters. Existing spelled-out chapter
+numbers remain supported. A filename separator such as `chapter-50.epub` means
+chapter 50; `Chapter -50` preserves the negative sign.

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-
 	"github.com/prateek/serial-sync/internal/app"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/provider"
@@ -32,11 +31,14 @@ type CLI struct {
 }
 
 type SetupCmd struct {
-	Init    SetupInitCmd    `cmd:"" help:"Write an example config file."`
-	Check   SetupCheckCmd   `cmd:"" help:"Validate config and print the loaded counts. Replaces 'config validate'."`
-	Auth    SetupAuthCmd    `cmd:"" help:"Create, verify, or import provider session state. Replaces 'auth bootstrap' and 'auth import-session'."`
-	Dump    SetupDumpCmd    `cmd:"" help:"Dump creator posts into a local series-authoring workspace. Replaces 'source dump'."`
-	Preview SetupPreviewCmd `cmd:"" help:"Preview how a series file classifies a dumped workspace."`
+	Memberships SetupMembershipsCmd `cmd:"" help:"List memberships using one saved-session metadata request."`
+	Enrich      SetupEnrichCmd      `cmd:"" help:"Enrich collection identities offline from captured raw JSON."`
+	Candidates  SetupCandidatesCmd  `cmd:"" help:"List or dismiss discovery candidates without contacting a provider."`
+	Init        SetupInitCmd        `cmd:"" help:"Write an example config file."`
+	Check       SetupCheckCmd       `cmd:"" help:"Validate config and print the loaded counts. Replaces 'config validate'."`
+	Auth        SetupAuthCmd        `cmd:"" help:"Create, verify, or import provider session state. Replaces 'auth bootstrap' and 'auth import-session'."`
+	Dump        SetupDumpCmd        `cmd:"" help:"Dump creator posts into a local series-authoring workspace. Replaces 'source dump'."`
+	Preview     SetupPreviewCmd     `cmd:"" help:"Replay captured posts offline using the current config."`
 }
 
 type DebugCmd struct {
@@ -67,12 +69,15 @@ type SetupDumpCmd struct {
 	Path          string   `name:"path" help:"Write the dump workspace to this path."`
 	Membership    string   `name:"membership" default:"paid" enum:"paid,free,trial,all" help:"Limit dumping to this membership kind."`
 	Creators      []string `name:"creator" help:"Limit the dump to creator handle, source id, or creator name. Repeat the flag for multiple authors."`
-	Force         bool     `name:"force" help:"Overwrite an existing workspace path."`
+	Force         bool     `name:"force" help:"Compatibility flag; refresh preserves authored files and the previous capture."`
 }
 
 type SetupPreviewCmd struct {
+	Suggest    bool     `name:"suggest" help:"Include a draft config fragment for unresolved candidates."`
+	Stored     bool     `name:"stored" help:"Read current normalized releases through the catalog, offline and read-only."`
+	Compare    string   `name:"compare" help:"Compare against this complete baseline config on the same corpus."`
 	Workspace  string   `name:"workspace" help:"Path to a source dump workspace."`
-	SeriesFile string   `name:"series-file" help:"Path to a series TOML file. Defaults to <workspace>/series.toml."`
+	SeriesFile string   `name:"series-file" help:"Use this standalone series file instead of the main config mappings."`
 	Creators   []string `name:"creator" help:"Limit preview to specific dumped creators. Repeat the flag for multiple authors."`
 	ShowPosts  bool     `name:"show-posts" help:"Include per-post classification output in text mode."`
 	Format     string   `name:"format" default:"text" enum:"text,json" help:"Output format."`
@@ -189,15 +194,12 @@ func (cmd *SetupInitCmd) Run() error {
 }
 
 func (cmd *SetupCheckCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(_ context.Context, service *app.Service) error {
-		fmt.Printf(
-			"config ok: %d source(s), %d series, %d publisher(s)\n",
-			len(service.Config.Sources),
-			len(service.Config.Series),
-			len(service.Config.Publishers),
-		)
-		return nil
-	})
+	cfg, _, err := loadConfig(cli.ConfigPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("config ok: %d source(s), %d series, %d publisher(s)\n", len(cfg.Sources), len(cfg.Series), len(cfg.Publishers))
+	return nil
 }
 
 func (cmd *SetupAuthCmd) Run(cli *CLI) error {
@@ -230,24 +232,39 @@ func (cmd *SetupDumpCmd) Run(cli *CLI) error {
 }
 
 func (cmd *SetupPreviewCmd) Run(cli *CLI) error {
-	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
-		result, err := service.PreviewRules(ctx, app.RulesPreviewOptions{
-			WorkspacePath:  cmd.Workspace,
-			SeriesFile:     cmd.SeriesFile,
-			CreatorFilters: trimStrings(cmd.Creators),
-			ShowPosts:      cmd.ShowPosts,
-		}, "setup preview")
+	cfg, roots, err := loadConfig(cli.ConfigPath)
+	if err != nil {
+		return err
+	}
+	var repo *sqlite.Store
+	if cmd.Stored {
+		repo, err = sqlite.OpenReadOnly(cfg.Runtime.StoreDSN)
 		if err != nil {
 			return err
 		}
-		switch strings.ToLower(strings.TrimSpace(cmd.Format)) {
-		case "json":
-			return printJSON(result)
-		default:
-			fmt.Println(app.FormatRulesPreviewResult(result, cmd.ShowPosts))
-			return nil
-		}
-	})
+		defer repo.Close()
+	}
+	service := app.New(cfg, roots, cli.ConfigPath, nil, provider.NewRegistry(patreon.New()))
+	if repo != nil {
+		service.Repo = repo
+	}
+	result, err := service.PreviewRules(context.Background(), app.RulesPreviewOptions{
+		Stored:         cmd.Stored,
+		CompareConfig:  cmd.Compare,
+		Suggest:        cmd.Suggest,
+		WorkspacePath:  cmd.Workspace,
+		SeriesFile:     cmd.SeriesFile,
+		CreatorFilters: trimStrings(cmd.Creators),
+		ShowPosts:      cmd.ShowPosts || cmd.Format == "json",
+	}, "setup preview")
+	if err != nil {
+		return err
+	}
+	if cmd.Format == "json" {
+		return printJSON(result)
+	}
+	fmt.Println(app.FormatRulesPreviewResult(result, cmd.ShowPosts))
+	return nil
 }
 
 func (cmd *DebugPublishesCmd) Run(cli *CLI) error {
@@ -535,19 +552,25 @@ func withServiceContext(ctx context.Context, configPath string, fn func(context.
 	return fn(ctx, service)
 }
 
+func loadConfig(path string) (*config.Config, config.Roots, error) {
+	cfg, roots, err := config.Load(path)
+	if err != nil {
+		return nil, roots, err
+	}
+	for _, warning := range cfg.Warnings() {
+		fmt.Fprintln(os.Stderr, "warning:", warning)
+	}
+	return cfg, roots, nil
+}
+
 func bootstrap(configPath string) (*app.Service, func(), error) {
 	return bootstrapMode(configPath, false)
 }
 
 func bootstrapMode(configPath string, readOnly bool) (*app.Service, func(), error) {
-	cfg, roots, err := config.Load(configPath)
+	cfg, roots, err := loadConfig(configPath)
 	if err != nil {
 		return nil, nil, err
-	}
-	for _, rule := range cfg.Rules {
-		if rule.AnthologyMode != nil {
-			fmt.Fprintf(os.Stderr, "warning: anthology_mode is deprecated for source %s; remove it and configure series.output.bundling when needed\n", rule.Source)
-		}
 	}
 	if !readOnly {
 		if err := config.EnsureDirs(roots, cfg); err != nil {
@@ -644,7 +667,7 @@ Commands:
     dump'.
 
   setup preview [flags]
-    Preview how a series file classifies a dumped workspace.
+    Replay captured posts offline using the current config.
 
   run [flags]
     Run the normal sync-plus-publish workflow.

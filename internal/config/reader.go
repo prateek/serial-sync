@@ -49,6 +49,9 @@ func validateReaderOutput(series SeriesConfig, sources map[string]struct{}) erro
 	ids, numbers := map[string]bool{}, map[int]bool{}
 	previousEnd := 0
 	for _, book := range books {
+		if (book.Collection != nil || book.Tag != "") && series.Source == "" {
+			return fmt.Errorf("book %s label requires series.source", book.ID)
+		}
 		if strings.TrimSpace(book.ID) == "" || ids[book.ID] {
 			return fmt.Errorf("book id must be present and unique: %q", book.ID)
 		}
@@ -84,7 +87,7 @@ func validateReaderOutput(series SeriesConfig, sources map[string]struct{}) erro
 			return fmt.Errorf("book %s: %w", book.ID, err)
 		}
 	}
-	for _, input := range series.Inputs {
+	for _, input := range series.AuthoringInputs() {
 		if input.BookID != "" && !ids[input.BookID] {
 			return fmt.Errorf("input references unknown book_id %q", input.BookID)
 		}

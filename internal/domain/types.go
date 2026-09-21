@@ -15,6 +15,7 @@ type ReleaseRole string
 
 const (
 	ReleaseRoleChapter           ReleaseRole = "chapter"
+	ReleaseRoleExtra             ReleaseRole = "extra"
 	ReleaseRoleReleaseAttachment ReleaseRole = "release_attachment"
 	ReleaseRoleAnnouncement      ReleaseRole = "announcement"
 	ReleaseRoleSchedule          ReleaseRole = "schedule"
@@ -201,51 +202,55 @@ type Attachment struct {
 }
 
 type NormalizedRelease struct {
-	Provider          string       `json:"provider"`
-	ProviderReleaseID string       `json:"provider_release_id"`
-	URL               string       `json:"url"`
-	Title             string       `json:"title"`
-	PublishedAt       time.Time    `json:"published_at"`
-	EditedAt          time.Time    `json:"edited_at"`
-	PostType          string       `json:"post_type"`
-	VisibilityState   string       `json:"visibility_state"`
-	TextHTML          string       `json:"text_html"`
-	TextPlain         string       `json:"text_plain"`
-	Tags              []string     `json:"tags"`
-	Collections       []string     `json:"collections"`
-	Attachments       []Attachment `json:"attachments"`
-	CreatorID         string       `json:"creator_id"`
-	CreatorName       string       `json:"creator_name"`
-	SourceType        string       `json:"source_type"`
+	Enrichment        *ReleaseEnrichment `json:"enrichment,omitempty"`
+	Provider          string             `json:"provider"`
+	ProviderReleaseID string             `json:"provider_release_id"`
+	URL               string             `json:"url"`
+	Title             string             `json:"title"`
+	PublishedAt       time.Time          `json:"published_at"`
+	EditedAt          time.Time          `json:"edited_at"`
+	PostType          string             `json:"post_type"`
+	VisibilityState   string             `json:"visibility_state"`
+	TextHTML          string             `json:"text_html"`
+	TextPlain         string             `json:"text_plain"`
+	Tags              []string           `json:"tags"`
+	Collections       []string           `json:"collections"`
+	Attachments       []Attachment       `json:"attachments"`
+	CreatorID         string             `json:"creator_id"`
+	CreatorName       string             `json:"creator_name"`
+	SourceType        string             `json:"source_type"`
 }
 
 type TrackDecision struct {
-	BookID             string          `json:"book_id,omitempty"`
-	Sequence           *Sequence       `json:"sequence,omitempty"`
-	TrackKey           string          `json:"track_key"`
-	TrackName          string          `json:"track_name"`
-	SeriesID           string          `json:"series_id,omitempty"`
-	RuleID             string          `json:"rule_id"`
-	ReleaseRole        ReleaseRole     `json:"release_role"`
-	ContentStrategy    ContentStrategy `json:"content_strategy"`
-	OutputFormat       OutputFormat    `json:"output_format"`
-	PrefaceMode        PrefaceMode     `json:"preface_mode"`
-	CanonicalAuthor    string          `json:"canonical_author,omitempty"`
-	AttachmentGlob     []string        `json:"attachment_glob"`
-	AttachmentPriority []string        `json:"attachment_priority"`
-	AnthologyMode      bool            `json:"anthology_mode"`
-	Matched            bool            `json:"matched"`
+	SelectedContent    *ContentReference `json:"selected_content,omitempty"`
+	BookID             string            `json:"book_id,omitempty"`
+	Sequence           *Sequence         `json:"sequence,omitempty"`
+	TrackKey           string            `json:"track_key"`
+	TrackName          string            `json:"track_name"`
+	SeriesID           string            `json:"series_id,omitempty"`
+	RuleID             string            `json:"rule_id"`
+	ReleaseRole        ReleaseRole       `json:"release_role"`
+	ContentStrategy    ContentStrategy   `json:"content_strategy"`
+	OutputFormat       OutputFormat      `json:"output_format"`
+	PrefaceMode        PrefaceMode       `json:"preface_mode"`
+	CanonicalAuthor    string            `json:"canonical_author,omitempty"`
+	AttachmentGlob     []string          `json:"attachment_glob"`
+	AttachmentPriority []string          `json:"attachment_priority"`
+	AnthologyMode      bool              `json:"anthology_mode"`
+	Matched            bool              `json:"matched"`
 }
 
 type Sequence struct {
-	MatchedText string `json:"matched_text,omitempty"`
-	KeepSingle  bool   `json:"keep_single,omitempty"`
-	Book        int    `json:"book,omitempty"`
-	BookID      string `json:"book_id,omitempty"`
-	Chapter     int    `json:"chapter,omitempty"`
-	Position    int    `json:"position,omitempty"`
-	Origin      string `json:"origin,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	ChapterLabel string `json:"chapter_label,omitempty"`
+	Part         string `json:"part,omitempty"`
+	MatchedText  string `json:"matched_text,omitempty"`
+	KeepSingle   bool   `json:"keep_single,omitempty"`
+	Book         int    `json:"book,omitempty"`
+	BookID       string `json:"book_id,omitempty"`
+	Chapter      int    `json:"chapter,omitempty"`
+	Position     int    `json:"position,omitempty"`
+	Origin       string `json:"origin,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 type ArtifactPlan struct {
@@ -275,12 +280,15 @@ type SyncItemPlan struct {
 }
 
 type SyncResult struct {
-	RunID                 string         `json:"run_id"`
-	Discovered            int            `json:"discovered"`
-	Changed               int            `json:"changed"`
-	Unchanged             int            `json:"unchanged"`
-	MaterializedArtifacts int            `json:"materialized_artifacts"`
-	Plans                 []SyncItemPlan `json:"plans"`
+	Candidates            []DiscoveryCandidate `json:"candidates,omitempty"`
+	UnresolvedCandidates  int                  `json:"unresolved_candidates"`
+	DiscoveryNotices      []string             `json:"discovery_notices,omitempty"`
+	RunID                 string               `json:"run_id"`
+	Discovered            int                  `json:"discovered"`
+	Changed               int                  `json:"changed"`
+	Unchanged             int                  `json:"unchanged"`
+	MaterializedArtifacts int                  `json:"materialized_artifacts"`
+	Plans                 []SyncItemPlan       `json:"plans"`
 }
 
 type PublishCandidate struct {
