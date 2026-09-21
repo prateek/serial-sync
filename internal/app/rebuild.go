@@ -343,8 +343,8 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 			if complete {
 				item := domain.PublishItemResult{ArtifactID: old.Artifact.ID, TargetID: target.ID, TargetKind: old.Record.TargetKind, TargetRef: old.Record.TargetRef, Action: "retire"}
 				if old.Record.TargetKind == "filesystem" {
-					current, checkErr := publish.FileHash(old.Record.TargetRef)
-					if checkErr != nil || current != "" && current != old.Artifact.SHA256 {
+					_, checkErr := publish.CheckFilesystemDestination(old.Record.TargetRef, retirementOwnedHashes(records, old))
+					if checkErr != nil {
 						item.Action = "blocked"
 						item.Message = fmt.Sprintf("target %s retirement ownership conflict: %s", target.ID, old.Record.TargetRef)
 						result.Blocked = append(result.Blocked, item.Message)

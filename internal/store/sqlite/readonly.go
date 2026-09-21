@@ -53,7 +53,8 @@ func OpenReadOnly(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := Open("file:catalog.db?mode=ro&immutable=1&vfs=" + url.QueryEscape(name))
+	// The snapshot VFS cannot create spill files for large query sorts.
+	store, err := Open("file:catalog.db?mode=ro&immutable=1&_pragma=temp_store(MEMORY)&vfs=" + url.QueryEscape(name))
 	if err != nil {
 		_ = snapshot.Close()
 		return nil, err

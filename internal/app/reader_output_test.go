@@ -1310,6 +1310,47 @@ func TestOfflineRebuildRenamesChaptersAndRetiresOldPaths(t *testing.T) {
 	}
 }
 
+func TestRebuildRetiresLegacyRecordsForMultipleEditionsAtOnePath(t *testing.T) {
+	s, upstream := newReaderService(t)
+	ctx := context.Background()
+	if _, err := s.RunOnce(ctx, "", "", "initial edition"); err != nil {
+		t.Fatal(err)
+	}
+	original, err := s.ListPublishRecords(ctx, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream.docs["alpha"][0].Normalized.TextHTML = "<p>Corrected chapter</p>"
+	if _, err := s.RunOnce(ctx, "", "", "corrected edition"); err != nil {
+		t.Fatal(err)
+	}
+	// Older installations retained published records for overwritten editions.
+	for _, old := range original {
+		old.Record.Status = domain.PublishStatusPublished
+		if err := s.Repo.UpsertPublishRecord(ctx, old.Record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Config.Series[0].Title = "Renamed Saga"
+	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+	s.Providers = provider.NewRegistry()
+	if _, err := s.Rebuild(ctx, app.RebuildOptions{DryRun: true}, "preview legacy rename"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Rebuild(ctx, app.RebuildOptions{}, "apply legacy rename"); err != nil {
+		t.Fatal(err)
+	}
+	files := findFiles(t, s.Config.Publishers[0].Path, ".html")
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want both renamed chapters", len(files))
+	}
+	for _, file := range files {
+		if !strings.HasPrefix(filepath.Base(file), "renamed-saga-") {
+			t.Fatalf("legacy path was retained: %s", file)
+		}
+	}
+}
+
 func TestPublicationPreservesUserModifiedDestination(t *testing.T) {
 	s, upstream := newReaderService(t)
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {

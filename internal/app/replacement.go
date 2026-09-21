@@ -294,9 +294,9 @@ func (s *Service) retirePreviousPaths(ctx context.Context, candidates []domain.P
 					continue
 				}
 			} else if !samePath {
-				current, err := publish.FileHash(old.Record.TargetRef)
-				if err == nil && current != "" && current != old.Artifact.SHA256 {
-					err = fmt.Errorf("retirement ownership conflict: %s", old.Record.TargetRef)
+				current, err := publish.CheckFilesystemDestination(old.Record.TargetRef, retirementOwnedHashes(records, old))
+				if err != nil {
+					err = fmt.Errorf("retirement ownership conflict: %s: %w", old.Record.TargetRef, err)
 				}
 				if err == nil && current != "" {
 					err = os.Remove(old.Record.TargetRef)
@@ -313,6 +313,19 @@ func (s *Service) retirePreviousPaths(ctx context.Context, candidates []domain.P
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func retirementOwnedHashes(records []domain.PublishRecordBundle, old domain.PublishRecordBundle) []string {
+	hashes := []string{old.Artifact.SHA256}
+	if old.Release.ID == "" {
+		return hashes
+	}
+	for _, record := range records {
+		if record.Record.Status == domain.PublishStatusPublished && record.Release.ID == old.Release.ID && record.Record.TargetRef == old.Record.TargetRef {
+			hashes = append(hashes, record.Artifact.SHA256)
+		}
+	}
+	return hashes
 }
 
 func ownedHashesForPath(records []domain.PublishRecordBundle, path string) []string {
