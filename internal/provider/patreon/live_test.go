@@ -1290,7 +1290,15 @@ func TestProfileSessionsRefreshWhenTheSessionFileChanges(t *testing.T) {
 	// A session refreshed by another process (setup auth, session import) must
 	// be picked up on the next call without rebuilding the profile's HTTP
 	// client or request budget.
+	before, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writeTestSessionBundleWithCookie(t, sessionPath, server.URL, "new-session")
+	modified := before.ModTime().Add(time.Second)
+	if err := os.Chtimes(sessionPath, modified, modified); err != nil {
+		t.Fatal(err)
+	}
 	second, err := client.profileSessions(auth)
 	if err != nil {
 		t.Fatal(err)

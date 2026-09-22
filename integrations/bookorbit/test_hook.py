@@ -60,6 +60,118 @@ class PublisherTest(unittest.TestCase):
     def complete(self, success=True):
         self.publisher.handle({'version': 1, 'action': 'complete', 'succeeded': success})
 
+    def mute(self, *series_ids):
+        self.publisher = Publisher({**self.publisher.config, 'muted_series': list(series_ids)}, self.reader)
+        self.publisher.notify = lambda *payload: self.sent.append(payload) or True
+
+    def test_muted_series_stays_readable_without_alerts_or_unmute_backlog(self):
+        self.mute('series')
+        a = self.candidate()
+        self.prepare(a)
+        receipt = self.publisher.handle(a)
+        self.complete()
+        self.assertTrue(receipt['ready'])
+        self.assertEqual(self.publisher.destination(a).read_bytes(), b'original')
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.publisher.state.pending(), [])
+        self.mute()
+        self.prepare(a)
+        self.publisher.handle(a)
+        self.complete()
+        self.assertEqual(self.sent, [])
+        b = self.candidate(2)
+        self.prepare(b)
+        self.publisher.handle(b)
+        self.complete()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('1 new release', self.sent[0][1])
+
+    def test_mixed_batch_filters_by_series_id_and_links_to_unmuted_release(self):
+        self.mute('series')
+        a, b = self.candidate(), self.candidate(2)
+        b['track']['track_key'] = 'following'
+        self.reader.verify = lambda _, path, expected: {'book_id': 1, 'file_id': 1, 'url': path}
+        self.prepare(a, b)
+        for candidate in (a, b):
+            self.publisher.handle(candidate)
+        self.complete()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0][1], 'Series: 1 new release(s)')
+        self.assertEqual(self.sent[0][2], '/books/source/following/chapter-2.epub')
+        self.assertEqual(self.publisher.state.pending(), [])
+
+    def test_muting_queued_series_after_failed_notification_suppresses_retry(self):
+        a = self.candidate()
+        self.prepare(a)
+        self.publisher.handle(a)
+        self.publisher.notify = lambda *_: False
+        with self.assertRaisesRegex(RuntimeError, 'no notification provider'):
+            self.complete()
+        self.mute('series')
+        self.complete()
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.publisher.state.pending(), [])
+
+    def test_muted_batch_cleanup_survives_restart_and_changed_preferences(self):
+        self.mute('series')
+        a, b = self.candidate(), self.candidate(2)
+        b['track'] = {'track_key': 'following', 'track_name': 'Following'}
+        self.prepare(a, b)
+        for candidate in (a, b):
+            self.publisher.handle(candidate)
+        remove = self.publisher.state.remove
+
+        def interrupted_remove(category, identity):
+            remove(category, identity)
+            if category == 'outbox':
+                raise RuntimeError('Process stopped during cleanup')
+
+        self.publisher.state.remove = interrupted_remove
+        with self.assertRaisesRegex(RuntimeError, 'Process stopped'):
+            self.complete()
+        self.assertEqual(len(self.sent), 1)
+        self.mute()
+        self.complete()
+        self.prepare(a, b)
+        for candidate in (a, b):
+            self.publisher.handle(candidate)
+        self.complete()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.publisher.state.pending(), [])
+        self.assertEqual(self.publisher.state.get('seen', a['release']['id']), {'muted': True})
+
+    def test_series_mute_does_not_hide_delivery_failure_alerts(self):
+        self.mute('series')
+        a = self.candidate()
+        self.prepare(a)
+        self.publisher.handle(a)
+        self.complete(success=False)
+        self.complete(success=False)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0][0], 'Serial-sync needs attention')
+
+    def test_legacy_queued_notifications_require_draining_before_muting(self):
+        a = self.candidate()
+        self.prepare(a)
+        self.publisher.handle(a)
+        item = self.publisher.state.pending()[0]
+        del item['series_id']
+        self.publisher.state.put('outbox', item['id'], item)
+        self.mute('series')
+        with self.assertRaisesRegex(RuntimeError, 'drain the old outbox'):
+            self.complete()
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.publisher.state.pending(), [item])
+        self.mute()
+        self.complete()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_malformed_muted_series_is_rejected_before_publication(self):
+        for muted in ('series', None, {}, [1], [''], [' ']):
+            with self.subTest(muted=muted):
+                with self.assertRaisesRegex(RuntimeError, 'muted_series must be a list'):
+                    Publisher({**self.publisher.config, 'muted_series': muted}, self.reader)
+
     def test_one_scan_and_notification_for_batch_and_quiet_retry(self):
         a, b = self.candidate(), self.candidate(2)
         self.prepare(a, b)

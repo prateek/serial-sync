@@ -16,6 +16,10 @@ from state import State, file_hash, key
 class Publisher:
     def __init__(self, config, api=None):
         self.config = config
+        muted = config.get('muted_series', [])
+        if not isinstance(muted, list) or any(not isinstance(item, str) or not item.strip() for item in muted):
+            raise RuntimeError('muted_series must be a list of nonempty series IDs')
+        self.muted_series = set(muted)
         self.state = State(config['state_dir'])
         self.api = api or BookOrbit(config)
         self.root = Path(config['library_root']).resolve()
@@ -189,6 +193,7 @@ class Publisher:
                 continue
             if self.config.get('announce', False) and not maintenance:
                 self.state.put('outbox', release_id, {'id': release_id, 'series': candidate['track']['track_name'],
+                                                    'series_id': candidate['track']['track_key'],
                                                     'url': receipt['url']})
             else:
                 self.state.put('seen', release_id, {'maintenance': maintenance})
@@ -254,17 +259,26 @@ class Publisher:
                 batch = {'id': key('\n'.join(sorted(item['id'] for item in pending))), 'items': pending}
                 self.state.put('context', 'notification_batch', batch)
             batch_id, pending = batch['id'], batch['items']
-            if self.state.get('notifications', batch_id) is None:
-                grouped = {}
-                for item in pending:
-                    grouped[item['series']] = grouped.get(item['series'], 0) + 1
-                body = '\n'.join(f'{series}: {count} new release(s)' for series, count in sorted(grouped.items()))
-                link = pending[0]['url'] if len(grouped) == 1 else self.config['public_url']
-                if not self.notify('New chapters ready', body, link):
-                    raise RuntimeError('New chapters are ready, but no notification provider is configured')
-                self.state.put('notifications', batch_id, {'delivered_at': time.time()})
+            receipt = self.state.get('notifications', batch_id)
+            if receipt is None:
+                if self.muted_series and any(not item.get('series_id') for item in pending):
+                    raise RuntimeError('Queued notifications lack series IDs; drain the old outbox before enabling muted_series')
+                announced = [item for item in pending if item.get('series_id') not in self.muted_series]
+                receipt = {'notified_ids': [item['id'] for item in announced]}
+                if announced:
+                    grouped = {}
+                    for item in announced:
+                        grouped[item['series']] = grouped.get(item['series'], 0) + 1
+                    body = '\n'.join(f'{series}: {count} new release(s)' for series, count in sorted(grouped.items()))
+                    link = announced[0]['url'] if len(grouped) == 1 else self.config['public_url']
+                    if not self.notify('New chapters ready', body, link):
+                        raise RuntimeError('New chapters are ready, but no notification provider is configured')
+                    receipt['delivered_at'] = time.time()
+                self.state.put('notifications', batch_id, receipt)
+            notified = set(receipt.get('notified_ids', [item['id'] for item in pending]))
             for item in pending:
-                self.state.put('seen', item['id'], {'notified': batch_id})
+                outcome = {'notified': batch_id} if item['id'] in notified else {'muted': True}
+                self.state.put('seen', item['id'], outcome)
                 self.state.remove('outbox', item['id'])
             self.state.remove('context', 'notification_batch')
         if event.get('succeeded', False):

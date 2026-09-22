@@ -18,6 +18,8 @@ Each `[[series.inputs]]` matcher answers:
 
 The series owns output behavior: `format`, `preface_mode`, and optional `bundling`.
 
+Keep reading interest separate from classification. To keep downloading a series while silencing its new-chapter alerts, use `muted_series` in the [BookOrbit adapter configuration](../integrations/bookorbit/README.md). Keep read-through and pending-reading markers in the reader; those preferences do not change routing or EPUB metadata.
+
 Matchers are applied by ascending `priority`. The first matching input wins.
 
 Prefer one `[[series]]` per reader-facing serial or franchise. Use multiple `[[series.inputs]]` when a creator splits that serial across Patreon-specific tags or collections like `Book 11`, `Book 12`, `AA1`, or `AA2`.

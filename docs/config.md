@@ -432,3 +432,5 @@ Live Patreon capture downloads linked artwork through the shared request budget,
 Review selected metadata with offline `setup preview --show-posts --format json`. Normal sync pins existing publication inputs, even when curation changes. Use `run --rebuild --dry-run` to see affected reading copies, then `run --rebuild` to apply the reviewed change. Rebuild is offline and repeated unchanged rebuilds do not republish. Existing pending deliveries retain their saved editions.
 
 The [BookOrbit integration](../integrations/bookorbit/README.md) documents controlled import, readiness receipts, grouped ntfy notifications with reading links, and the optional reader patch. Configure its private notification topic in the adapter JSON after subscribing on the phone. The adapter is separate from the portable metadata model.
+
+For notification-only exclusions, set `muted_series` to a JSON array of configured `series.id` values in the BookOrbit adapter JSON. This setting is not a TOML series field: it leaves source fetching, output, and reader progress unchanged. See the integration guide for queued-notification compatibility and bulk reading-status updates.

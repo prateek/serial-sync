@@ -9,6 +9,7 @@
   "readiness_timeout": 300,
   "adopt_existing": false,
   "announce": false,
+  "muted_series": [],
   "notification": {
     "kind": "ntfy",
     "url": "https://ntfy.sh",
