@@ -239,4 +239,6 @@ Use source `author_profile` or series `author_profiles` to select stable `[[auth
 
 Prefer explicit curated values, then suitable original embedded fields, then directly linked creator/collection fallbacks. Never equate portraits, campaign banners, and book covers. Review ambiguous web identities offline. Keep original captured attachments unchanged. `epub` produces enriched copies with a final About page; `preserve` remains the byte-preserving option.
 
+When embedded titles or creators conflict with reviewed source posts, select series/book `metadata.identity_source = "release"` and verify each resulting title and canonical author in the rebuilt EPUBs. The default `"embedded"` policy preserves original identity; author profiles alone do not change it. Books can override the series policy. See the metadata reference for inheritance and replacement details.
+
 A metadata refresh must not silently replace an existing reading copy. Inspect offline preview, then an explicit rebuild preview for already published files. Review multi-chapter attachment navigation and one final generated About page in volumes. Pending deliveries must keep their saved bytes. For BookOrbit, use the bundled exec v2 adapter and lifecycle hook, disable overlapping library watchers/scans, and keep initial historical imports quiet.

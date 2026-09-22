@@ -108,7 +108,7 @@ func testMetadataAsset(t *testing.T) *domain.MetadataAsset {
 }
 
 func TestVolumeKeepsInternalChaptersAndOneFinalAbout(t *testing.T) {
-	metadata := &domain.PublicationMetadata{Authors: []domain.AuthorProfile{{ID: "author", Name: "Author", Biography: "Biography."}}}
+	metadata := &domain.PublicationMetadata{IdentitySource: domain.PublicationIdentityRelease, Authors: []domain.AuthorProfile{{ID: "author", Name: "Author", Biography: "Biography."}}}
 	original, err := buildSimpleEPUB("Two chapters", "Author", "urn:test:multi-chapter", time.Unix(0, 0).UTC(), []epubChapter{
 		{FileName: "first.xhtml", Title: "First internal chapter", BodyHTML: "<p id=\"anchor\">First story.</p>"},
 		{FileName: "second.xhtml", Title: "Second internal chapter", BodyHTML: "<p>Second story.</p>"},
@@ -146,6 +146,9 @@ func TestVolumeKeepsInternalChaptersAndOneFinalAbout(t *testing.T) {
 	}
 	if len(pkg.Spine.Itemrefs) != 4 {
 		t.Fatalf("unexpected volume spine: %d", len(pkg.Spine.Itemrefs))
+	}
+	if pkg.Metadata.Title != "Volume" {
+		t.Fatalf("release identity policy replaced intentional volume title: %q", pkg.Metadata.Title)
 	}
 	if !bytes.Contains(files["OEBPS/members/0001/OEBPS/first.xhtml"], []byte("id=\"anchor\"")) {
 		t.Fatal("original story anchor lost")

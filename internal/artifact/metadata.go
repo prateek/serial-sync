@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -27,11 +29,15 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 	if strings.HasPrefix(pkg.Version, "2") && pkg.Spine.Toc == "" {
 		pkg.Spine.Toc = firstNCXID(pkg.Manifest.Items)
 	}
-	if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "title") {
-		setPublicationDC(&pkg.Metadata, "title", metadata.Title)
-	}
-	if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "creator") {
-		setPublicationDC(&pkg.Metadata, "creator", metadata.Author)
+	if metadata.Publication != nil && metadata.Publication.IdentitySource == domain.PublicationIdentityRelease {
+		replacePublicationIdentity(&pkg.Metadata, packagePath, metadata.Title, metadata.Author)
+	} else {
+		if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "title") {
+			setPublicationDC(&pkg.Metadata, "title", metadata.Title)
+		}
+		if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "creator") {
+			setPublicationDC(&pkg.Metadata, "creator", metadata.Author)
+		}
 	}
 	if !metadata.PublishedAt.IsZero() && (!metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "date")) {
 		setPublicationDC(&pkg.Metadata, "date", metadata.PublishedAt.UTC().Format(time.RFC3339))
@@ -80,6 +86,72 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 	}
 	files[packagePath] = mustXML(pkg)
 	return writeStructurallyValidatedEPUBArchive(files)
+}
+
+func replacePublicationIdentity(metadata *opfMetadata, packagePath, title, author string) {
+	removed := map[string]bool{}
+	refinementTarget := func(reference string) string {
+		u, err := url.Parse(strings.TrimSpace(reference))
+		if err != nil || u.IsAbs() || u.Host != "" || u.RawQuery != "" || u.Fragment == "" {
+			return ""
+		}
+		if u.Path != "" && path.Clean(path.Join(path.Dir(packagePath), u.Path)) != path.Clean(packagePath) {
+			return ""
+		}
+		return "#" + u.Fragment
+	}
+	removeIDs := func(attrs []xml.Attr) {
+		for _, attr := range attrs {
+			if attr.Name.Local == "id" && attr.Value != "" {
+				removed["#"+attr.Value] = true
+			}
+		}
+	}
+	kept := metadata.DCElements[:0]
+	for _, element := range metadata.DCElements {
+		if element.Name == "title" || element.Name == "creator" {
+			removeIDs(element.Attrs)
+			continue
+		}
+		kept = append(kept, element)
+	}
+	metadata.DCElements = kept
+	for {
+		before := len(metadata.Meta) + len(metadata.Raw)
+		kept := metadata.Meta[:0]
+		for _, meta := range metadata.Meta {
+			if removed[refinementTarget(meta.Refines)] || meta.Name == "calibre:title_sort" || meta.Name == "calibre:author_sort" {
+				removeIDs(meta.Attrs)
+				continue
+			}
+			kept = append(kept, meta)
+		}
+		metadata.Meta = kept
+		keptRaw := metadata.Raw[:0]
+		for _, raw := range metadata.Raw {
+			remove := false
+			if len(raw.Tokens) > 0 {
+				if start, ok := raw.Tokens[0].(xml.StartElement); ok && start.Name.Local == "link" && (start.Name.Space == "" || start.Name.Space == "http://www.idpf.org/2007/opf") {
+					for _, attr := range start.Attr {
+						if attr.Name.Local == "refines" && removed[refinementTarget(attr.Value)] {
+							removeIDs(start.Attr)
+							remove = true
+						}
+					}
+				}
+			}
+			if !remove {
+				keptRaw = append(keptRaw, raw)
+			}
+		}
+		metadata.Raw = keptRaw
+		if len(metadata.Meta)+len(metadata.Raw) == before {
+			break
+		}
+	}
+	metadata.Title, metadata.Creator = strings.TrimSpace(title), strings.TrimSpace(author)
+	setPublicationDC(metadata, "title", title)
+	setPublicationDC(metadata, "creator", author)
 }
 
 func setPublicationDC(metadata *opfMetadata, name, value string) {

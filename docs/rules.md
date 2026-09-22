@@ -469,4 +469,6 @@ an explicit override after reviewing the candidate.
 
 Keep identity/routing rules separate from author profiles and artwork. Configure durable profiles under `[[author_profiles]]`, select them with source `author_profile` or series `author_profiles`, and put descriptions/covers in series or book `metadata`. See the [metadata configuration](config.md#portable-publication-metadata).
 
+Compare embedded titles and creators with the source posts when curating attachments. For a series whose embedded identity is unreliable, select `metadata.identity_source = "release"` to use each post's title and the canonical author. Books can override the inherited policy with `"embedded"`. Review the affected copies through explicit rebuild preview; a valid EPUB package can still contain the wrong chapter title.
+
 Use captured creator identity or a reviewed public-web identity link. Do not promote a campaign banner, portrait, or loosely matched search image to a book cover. Keep selected asset bytes in the offline workspace and record their source URL. Preview and rebuild use the same metadata resolver as sync. Metadata is excluded from upstream content hashes; editing it changes new publications immediately and existing publications only through explicit rebuild.

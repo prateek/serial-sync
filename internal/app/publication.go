@@ -23,6 +23,12 @@ func (s *Service) publicationMetadata(sourceID string, release domain.Normalized
 		profiles = []string{source.AuthorProfile}
 	}
 	apply := func(metadata config.PublicationConfig) error {
+		if metadata.IdentitySource != "" {
+			result.IdentitySource = domain.PublicationIdentitySource(metadata.IdentitySource)
+			if result.IdentitySource == domain.PublicationIdentityEmbedded {
+				result.IdentitySource = ""
+			}
+		}
 		if metadata.Description != "" {
 			result.Description, result.DescriptionOverride = metadata.Description, true
 		}

@@ -411,7 +411,17 @@ portrait = { path = "assets/ada.jpg", source_url = "https://author.example/about
 # links = ["https://author.example/harbor"]
 ```
 
-Books accept the same fields in `[series.books.metadata]`, overriding the series defaults. Explicit descriptions/covers override embedded ones; otherwise suitable embedded metadata is preserved before captured creator/collection fallbacks fill gaps. Original attachment titles and creators are retained. Public-web profiles and artwork must be selected explicitly; a matching display name alone does not establish identity.
+Books accept the same fields in `[series.books.metadata]`, overriding the series defaults. Explicit descriptions/covers override embedded ones; otherwise suitable embedded metadata is preserved before captured creator/collection fallbacks fill gaps. Public-web profiles and artwork must be selected explicitly; a matching display name alone does not establish identity.
+
+Attachment titles and creators are retained by default (`identity_source = "embedded"`). If a series has unreliable embedded identity, set `identity_source = "release"` in its metadata: published `epub` chapter copies use each source post's title and the configured canonical author, falling back to the captured creator. This replaces old title/creator entries and their obsolete identity refinements while retaining story resources and unrelated metadata. Author profiles enrich the About page; they alone do not override embedded creators. Books inherit the series policy and can explicitly select `"embedded"` again. These are the only accepted nonempty values. Volumes keep their assembled volume title.
+
+For example, an attachment titled `Unknown` or carrying the wrong chapter number can use its reviewed post identity:
+
+```toml
+# Within the affected existing [[series]]:
+# [series.metadata]
+# identity_source = "release"
+```
 
 Asset paths are relative to their owning config/series file. Select local PNG, JPEG, or GIF files up to 16 MiB and retain their source URL. Serial-sync snapshots chosen bytes by SHA-256 with the edition. `source_url` records provenance; it does not trigger a preview-time download. Missing optional upstream artwork does not block a chapter. An explicitly configured missing/invalid asset is an actionable configuration error for new publications or rebuilds.
 

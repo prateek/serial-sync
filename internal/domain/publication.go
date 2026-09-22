@@ -1,14 +1,22 @@
 package domain
 
+type PublicationIdentitySource string
+
+const (
+	PublicationIdentityEmbedded PublicationIdentitySource = "embedded"
+	PublicationIdentityRelease  PublicationIdentitySource = "release"
+)
+
 // PublicationMetadata is an edition input, separate from upstream content identity.
 type PublicationMetadata struct {
-	Description         string          `json:"description,omitempty"`
-	DescriptionOverride bool            `json:"description_override,omitempty"`
-	Language            string          `json:"language,omitempty"`
-	Cover               *MetadataAsset  `json:"cover,omitempty"`
-	CoverOverride       bool            `json:"cover_override,omitempty"`
-	Authors             []AuthorProfile `json:"authors,omitempty"`
-	Links               []string        `json:"links,omitempty"`
+	IdentitySource      PublicationIdentitySource `json:"identity_source,omitempty"`
+	Description         string                    `json:"description,omitempty"`
+	DescriptionOverride bool                      `json:"description_override,omitempty"`
+	Language            string                    `json:"language,omitempty"`
+	Cover               *MetadataAsset            `json:"cover,omitempty"`
+	CoverOverride       bool                      `json:"cover_override,omitempty"`
+	Authors             []AuthorProfile           `json:"authors,omitempty"`
+	Links               []string                  `json:"links,omitempty"`
 }
 
 type MetadataAsset struct {

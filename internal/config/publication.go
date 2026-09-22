@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+
+	"github.com/prateek/serial-sync/internal/domain"
 )
 
 type AuthorProfileConfig struct {
@@ -20,10 +22,11 @@ type AssetConfig struct {
 }
 
 type PublicationConfig struct {
-	Description string      `toml:"description"`
-	Language    string      `toml:"language"`
-	Cover       AssetConfig `toml:"cover"`
-	Links       []string    `toml:"links"`
+	IdentitySource string      `toml:"identity_source"`
+	Description    string      `toml:"description"`
+	Language       string      `toml:"language"`
+	Cover          AssetConfig `toml:"cover"`
+	Links          []string    `toml:"links"`
 }
 
 func (c *Config) resolveMetadataPaths(base string) {
@@ -77,6 +80,11 @@ func (c *Config) validatePublicationMetadata() error {
 			metadata = append(metadata, book.Metadata)
 		}
 		for _, entry := range metadata {
+			switch domain.PublicationIdentitySource(entry.IdentitySource) {
+			case "", domain.PublicationIdentityEmbedded, domain.PublicationIdentityRelease:
+			default:
+				return fmt.Errorf("series %q metadata identity_source must be embedded or release, got %q", series.ID, entry.IdentitySource)
+			}
 			for _, link := range append(append([]string{}, entry.Links...), entry.Cover.SourceURL) {
 				if !validURL(link) {
 					return fmt.Errorf("series %q requires HTTP(S) metadata links", series.ID)
