@@ -55,6 +55,7 @@ func LoadSeriesWithDefaults(path string, sources []SourceConfig, defaults RuleDe
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	cfg := Config{Sources: sources, Series: document.Series, Defaults: defaults}
+	cfg.resolveMetadataPaths(filepath.Dir(path))
 	if err := cfg.ValidateSeries(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

@@ -137,6 +137,7 @@ type campaignInfo struct {
 }
 
 type liveSession struct {
+	metadata      *metadataAssetCache
 	sourceID      string
 	bundle        sessionBundle
 	client        *http.Client
@@ -300,6 +301,7 @@ func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile
 		return nil, domain.AuthStateReauthRequired, err
 	}
 	session := &liveSession{
+		metadata: &metadataAssetCache{root: filepath.Join(sessionCacheRoot(auth.SessionPath), "metadata")},
 		sourceID: source.ID,
 		bundle:   *bundle,
 		client:   client,
@@ -603,6 +605,7 @@ func (c *Client) fetchPostDocument(ctx context.Context, session *liveSession, so
 		return provider.ReleaseDocument{}, domain.AuthStateReauthRequired, fmt.Errorf("parse Patreon post %s: %w", postID, err)
 	}
 	norm.SourceType = string(detectSourceKind(source.URL))
+	c.captureMetadataAssets(ctx, session, source, norm.Enrichment)
 	return provider.ReleaseDocument{
 		Normalized: norm,
 		RawJSON:    append(json.RawMessage(nil), raw...),
@@ -712,6 +715,7 @@ func (c *Client) newLiveDownloadSession(auth config.AuthProfile, source config.S
 		return nil, domain.AuthStateReauthRequired, err
 	}
 	return &liveSession{
+		metadata: &metadataAssetCache{root: filepath.Join(sessionCacheRoot(auth.SessionPath), "metadata")},
 		sourceID: source.ID,
 		bundle:   *bundle,
 		client:   client,

@@ -67,9 +67,11 @@ Both reject unknown config keys and invalid rule values before provider work.
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- series output can preserve source attachments or emit EPUBCheck-validated EPUB when serial-sync generates, converts, or wraps the book, including EPUB 2 attachments
+- series output can preserve source attachments or emit EPUBCheck-validated EPUB with portable metadata, artwork, and a final About page, including EPUB 2 attachments
 - published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
 - generated chapter EPUBs have distinct titles and Calibre/EPUB 3 series positions
+- curated author profiles and series/book artwork are retained outside content identity; existing copies adopt metadata edits only through explicit rebuild
+- the [BookOrbit adapter](integrations/bookorbit/README.md) verifies readable imports and groups new-release notifications through ntfy with links to the reader; deploy stock BookOrbit by default. The optional [Serial Reader experiment](integrations/bookorbit/reader/README.md) adds Previous/Next series navigation
 - optional volumes follow declared author books, falling back to configurable 50-chapter ranges; gaps keep chapters as singles
 - `run --rebuild` applies output changes offline from captured inputs; completed volumes remain unchanged during ordinary sync
 - static binary release packaging is configured through `.goreleaser.yml`

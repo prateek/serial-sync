@@ -192,6 +192,9 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 
 		decision := s.authoringDecision(candidate.Source.ID, normalized, histories[candidate.Source.ID])
 		if loadErr == nil {
+			decision.Publication, loadErr = s.publicationMetadata(candidate.Source.ID, normalized, decision)
+		}
+		if loadErr == nil {
 			loadErr = historyErrors[candidate.Source.ID]
 		}
 		if options.SeriesID != "" && decision.SeriesID != options.SeriesID && candidate.Track.TrackKey != options.SeriesID {
@@ -382,7 +385,9 @@ func artifactMatches(current domain.Artifact, release domain.Release, track doma
 		selected := classify.SelectContent(*meta.Normalized, meta.Decision)
 		meta.Decision.SelectedContent = &selected
 	}
-	return meta.Release.ContentHash == release.ContentHash && meta.Track.TrackName == track.TrackName && meta.Track.CanonicalAuthor == track.CanonicalAuthor && reflect.DeepEqual(meta.Decision, decision)
+	metadataMatches := publicationFingerprint(meta.Decision.Publication) == publicationFingerprint(decision.Publication)
+	meta.Decision.Publication, decision.Publication = nil, nil
+	return metadataMatches && meta.Release.ContentHash == release.ContentHash && meta.Track.TrackName == track.TrackName && meta.Track.CanonicalAuthor == track.CanonicalAuthor && reflect.DeepEqual(meta.Decision, decision)
 }
 
 func legacyArtifact(current domain.Artifact) bool {

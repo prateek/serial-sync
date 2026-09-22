@@ -69,8 +69,17 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 		prefix := fmt.Sprintf("members/%04d", i+1)
 		memberDir := path.Dir(memberPath)
 		items := map[string]opfItem{}
+		aboutID := ""
+		for _, meta := range memberPackage.Metadata.Meta {
+			if meta.Name == aboutMarker {
+				aboutID = meta.Content
+			}
+		}
+		if err := removeAboutNavigation(memberFiles, memberPackage, memberPath, aboutID); err != nil {
+			return domain.Artifact{}, err
+		}
 		for _, item := range memberPackage.Manifest.Items {
-			if strings.Contains(item.Properties, "nav") || item.MediaType == "application/x-dtbncx+xml" {
+			if item.ID == aboutID {
 				continue
 			}
 			originalID := item.ID
@@ -89,6 +98,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			resourcePath := path.Join(prefix, entry)
 			item.Href = (&url.URL{Path: resourcePath}).EscapedPath()
 			item.Properties = strings.ReplaceAll(item.Properties, "cover-image", "")
+			item.Properties = strings.TrimSpace(strings.ReplaceAll(" "+item.Properties+" ", " nav ", " "))
 			if item.Fallback != "" {
 				item.Fallback = fmt.Sprintf("member-%04d-%s", i+1, item.Fallback)
 			}
@@ -100,6 +110,10 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			items[originalID] = item
 		}
 		first := true
+		memberNav, err := memberNavigation(memberFiles, memberPackage, memberPath, prefix, aboutID)
+		if err != nil {
+			return domain.Artifact{}, fmt.Errorf("chapter %s navigation: %w", chapter.Release.Title, err)
+		}
 		for _, ref := range memberPackage.Spine.Itemrefs {
 			item, ok := items[ref.IDRef]
 			if !ok {
@@ -107,7 +121,10 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			}
 			pkg.Spine.Itemrefs = append(pkg.Spine.Itemrefs, opfItemref{IDRef: item.ID, Linear: ref.Linear})
 			if first {
-				nav = append(nav, epubChapter{FileName: item.Href, Title: chapter.Release.Title})
+				if len(memberNav) == 1 && memberNav[0].FileName == item.Href && memberNav[0].Title == chapter.Release.Title {
+					memberNav = memberNav[0].Children
+				}
+				nav = append(nav, epubChapter{FileName: item.Href, Title: chapter.Release.Title, Children: memberNav})
 				first = false
 			}
 		}
@@ -121,7 +138,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 	if err != nil {
 		return domain.Artifact{}, err
 	}
-	content, err = withPublicationMetadata(content, publicationMetadata{Title: title, Author: chapters[0].Track.CanonicalAuthor, Series: chapters[0].Track.TrackName, Position: volume.Members[0].Position, PublishedAt: chapters[0].Release.PublishedAt})
+	content, err = withPublicationMetadata(content, publicationMetadata{Title: title, Author: chapters[0].Track.CanonicalAuthor, Series: chapters[0].Track.TrackName, Position: volume.Members[0].Position, PublishedAt: chapters[0].Release.PublishedAt, Publication: volume.Publication})
 	if err != nil {
 		return domain.Artifact{}, err
 	}
@@ -137,6 +154,19 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 	filename := volume.Artifact.Filename
 	art := domain.Artifact{ID: "volart_" + hash, TrackID: volume.TrackID, ArtifactKind: "epub", IsCanonical: true, Filename: filename, MIMEType: "application/epub+zip", SHA256: hash, StorageRef: filepath.Join(dir, filename), BuiltAt: time.Now().UTC(), State: domain.ArtifactStateMaterialized, MetadataRef: filepath.Join(dir, "volume.json")}
 	volume.Artifact = art
+	snapshot, assets, err := m.snapshotPublication(volume.Publication)
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	volume.Publication = snapshot
+	for assetPath, data := range assets {
+		if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
+			return domain.Artifact{}, err
+		}
+		if err := os.WriteFile(assetPath, data, 0o644); err != nil {
+			return domain.Artifact{}, err
+		}
+	}
 	metadata, err := json.MarshalIndent(volume, "", "  ")
 	if err != nil {
 		return domain.Artifact{}, err

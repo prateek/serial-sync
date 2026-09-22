@@ -448,6 +448,41 @@ func writeDumpPosts(path, workspacePath string, docs []provider.ReleaseDocument)
 	encoder := json.NewEncoder(writer)
 	for _, doc := range docs {
 		normalized := doc.Normalized
+		if normalized.Enrichment != nil {
+			data, err := json.Marshal(normalized.Enrichment)
+			if err != nil {
+				return err
+			}
+			var enrichment domain.ReleaseEnrichment
+			if err := json.Unmarshal(data, &enrichment); err != nil {
+				return err
+			}
+			normalized.Enrichment = &enrichment
+			for _, asset := range enrichment.Assets() {
+				if asset.Path == "" {
+					continue
+				}
+				data, err := os.ReadFile(asset.Path)
+				if err != nil {
+					return err
+				}
+				if hashBytes(data) != asset.SHA256 {
+					return fmt.Errorf("metadata image changed: %s", asset.Path)
+				}
+				target := filepath.Join(filepath.Dir(path), "metadata-assets", asset.SHA256)
+				if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(target, data, 0644); err != nil {
+					return err
+				}
+				rel, err := filepath.Rel(workspacePath, target)
+				if err != nil || !filepath.IsLocal(rel) {
+					return fmt.Errorf("metadata image outside workspace: %s", target)
+				}
+				asset.Path = filepath.ToSlash(rel)
+			}
+		}
 		normalized.Attachments = append([]domain.Attachment(nil), normalized.Attachments...)
 		for i := range normalized.Attachments {
 			attachment := &normalized.Attachments[i]

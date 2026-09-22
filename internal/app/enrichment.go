@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/prateek/serial-sync/internal/domain"
 )
@@ -74,7 +75,34 @@ func enrichmentFingerprint(release domain.NormalizedRelease) string {
 }
 
 func (s *Service) saveEnrichment(ctx context.Context, source string, release domain.NormalizedRelease) error {
-	metadata := *release.Enrichment
+	data, err := json.Marshal(release.Enrichment)
+	if err != nil {
+		return err
+	}
+	var metadata domain.ReleaseEnrichment
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return err
+	}
+	for _, asset := range metadata.Assets() {
+		if asset.Path == "" {
+			continue
+		}
+		data, err := os.ReadFile(asset.Path)
+		if err != nil {
+			return err
+		}
+		if hashBytes(data) != asset.SHA256 {
+			return fmt.Errorf("metadata image changed: %s", asset.Path)
+		}
+		target := filepath.Join(s.Config.Runtime.ArtifactRoot, "metadata-assets", asset.SHA256)
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, 0644); err != nil {
+			return err
+		}
+		asset.Path = target
+	}
 	metadata.CaptureFingerprint = enrichmentFingerprint(release)
 	return s.Repo.SaveReleaseEnrichment(ctx, source, release.ProviderReleaseID, metadata)
 }

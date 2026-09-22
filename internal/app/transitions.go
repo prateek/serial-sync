@@ -15,10 +15,11 @@ import (
 )
 
 type deliveryPlan struct {
-	ID         string                    `json:"id"`
-	EventScope string                    `json:"event_scope,omitempty"`
-	Target     config.PublisherConfig    `json:"target"`
-	Candidates []domain.PublishCandidate `json:"candidates"`
+	Maintenance bool                      `json:"maintenance,omitempty"`
+	ID          string                    `json:"id"`
+	EventScope  string                    `json:"event_scope,omitempty"`
+	Target      config.PublisherConfig    `json:"target"`
+	Candidates  []domain.PublishCandidate `json:"candidates"`
 }
 
 func (s *Service) deliveryPlan(ctx context.Context, target config.PublisherConfig, candidates []domain.PublishCandidate, sourceFilter, seriesFilter string, rebuild bool) (deliveryPlan, error) {
@@ -39,7 +40,7 @@ func (s *Service) deliveryPlan(ctx context.Context, target config.PublisherConfi
 	if _, _, err := s.orderReplacements(ctx, target, candidates); err != nil {
 		return deliveryPlan{}, err
 	}
-	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates}
+	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates, Maintenance: rebuild}
 	plan.EventScope = plan.ID
 	data, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
@@ -96,7 +97,7 @@ func (s *Service) pendingDelivery(ctx context.Context, target config.PublisherCo
 }
 
 func targetSignature(target config.PublisherConfig) string {
-	data, _ := json.Marshal([]any{target.Kind, target.Path, target.Command, target.ProtocolVersion})
+	data, _ := json.Marshal([]any{target.Kind, target.Path, target.Command, target.ProtocolVersion, target.LifecycleCommand})
 	return hashBytes(data)
 }
 

@@ -222,22 +222,23 @@ type NormalizedRelease struct {
 }
 
 type TrackDecision struct {
-	SelectedContent    *ContentReference `json:"selected_content,omitempty"`
-	BookID             string            `json:"book_id,omitempty"`
-	Sequence           *Sequence         `json:"sequence,omitempty"`
-	TrackKey           string            `json:"track_key"`
-	TrackName          string            `json:"track_name"`
-	SeriesID           string            `json:"series_id,omitempty"`
-	RuleID             string            `json:"rule_id"`
-	ReleaseRole        ReleaseRole       `json:"release_role"`
-	ContentStrategy    ContentStrategy   `json:"content_strategy"`
-	OutputFormat       OutputFormat      `json:"output_format"`
-	PrefaceMode        PrefaceMode       `json:"preface_mode"`
-	CanonicalAuthor    string            `json:"canonical_author,omitempty"`
-	AttachmentGlob     []string          `json:"attachment_glob"`
-	AttachmentPriority []string          `json:"attachment_priority"`
-	AnthologyMode      bool              `json:"anthology_mode"`
-	Matched            bool              `json:"matched"`
+	Publication        *PublicationMetadata `json:"publication,omitempty"`
+	SelectedContent    *ContentReference    `json:"selected_content,omitempty"`
+	BookID             string               `json:"book_id,omitempty"`
+	Sequence           *Sequence            `json:"sequence,omitempty"`
+	TrackKey           string               `json:"track_key"`
+	TrackName          string               `json:"track_name"`
+	SeriesID           string               `json:"series_id,omitempty"`
+	RuleID             string               `json:"rule_id"`
+	ReleaseRole        ReleaseRole          `json:"release_role"`
+	ContentStrategy    ContentStrategy      `json:"content_strategy"`
+	OutputFormat       OutputFormat         `json:"output_format"`
+	PrefaceMode        PrefaceMode          `json:"preface_mode"`
+	CanonicalAuthor    string               `json:"canonical_author,omitempty"`
+	AttachmentGlob     []string             `json:"attachment_glob"`
+	AttachmentPriority []string             `json:"attachment_priority"`
+	AnthologyMode      bool                 `json:"anthology_mode"`
+	Matched            bool                 `json:"matched"`
 }
 
 type Sequence struct {
@@ -254,16 +255,17 @@ type Sequence struct {
 }
 
 type ArtifactPlan struct {
-	ArtifactKind      string `json:"artifact_kind"`
-	Filename          string `json:"filename"`
-	MIMEType          string `json:"mime_type"`
-	SHA256            string `json:"sha256"`
-	SelectedPath      string `json:"selected_path"`
-	ValidateEPUBCheck bool   `json:"validate_epub_check,omitempty"`
-	SelectedContent   []byte `json:"-"`
-	MetadataJSON      []byte `json:"-"`
-	NormalizedJSON    []byte `json:"-"`
-	RawJSON           []byte `json:"-"`
+	MetadataAssets    map[string][]byte `json:"-"`
+	ArtifactKind      string            `json:"artifact_kind"`
+	Filename          string            `json:"filename"`
+	MIMEType          string            `json:"mime_type"`
+	SHA256            string            `json:"sha256"`
+	SelectedPath      string            `json:"selected_path"`
+	ValidateEPUBCheck bool              `json:"validate_epub_check,omitempty"`
+	SelectedContent   []byte            `json:"-"`
+	MetadataJSON      []byte            `json:"-"`
+	NormalizedJSON    []byte            `json:"-"`
+	RawJSON           []byte            `json:"-"`
 }
 
 type SyncItemPlan struct {
@@ -307,18 +309,19 @@ type VolumeMember struct {
 }
 
 type VolumeEdition struct {
-	Notes      []string       `json:"notes,omitempty"`
-	ID         string         `json:"id"`
-	SeriesID   string         `json:"series_id"`
-	SourceID   string         `json:"source_id"`
-	TrackID    string         `json:"track_id"`
-	GroupID    string         `json:"group_id"`
-	First      int            `json:"first"`
-	Last       int            `json:"last"`
-	RecipeHash string         `json:"recipe_hash"`
-	Active     bool           `json:"active"`
-	Artifact   Artifact       `json:"artifact"`
-	Members    []VolumeMember `json:"members"`
+	Publication *PublicationMetadata `json:"publication,omitempty"`
+	Notes       []string             `json:"notes,omitempty"`
+	ID          string               `json:"id"`
+	SeriesID    string               `json:"series_id"`
+	SourceID    string               `json:"source_id"`
+	TrackID     string               `json:"track_id"`
+	GroupID     string               `json:"group_id"`
+	First       int                  `json:"first"`
+	Last        int                  `json:"last"`
+	RecipeHash  string               `json:"recipe_hash"`
+	Active      bool                 `json:"active"`
+	Artifact    Artifact             `json:"artifact"`
+	Members     []VolumeMember       `json:"members"`
 }
 
 type VolumePlan struct {

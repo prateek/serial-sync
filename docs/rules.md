@@ -338,7 +338,7 @@ Do not split those into separate series-extra buckets unless you explicitly want
 Set output policy once per series:
 
 - `format = "preserve"`: keep the source format when possible
-- `format = "epub"`: emit EPUB output for HTML/text sources and PDF attachments via Calibre; existing EPUB attachments are passed through unless wrapped
+- `format = "epub"`: emit EPUB output for HTML/text sources and PDF attachments via Calibre; existing EPUB attachments are enriched while retaining original story resources and navigation
 
 Set preface behavior once per series:
 
@@ -352,7 +352,7 @@ Recommended default:
 - use book definitions and input `book_id` for reading order within a shared series
 - published filenames are lowercase and dash-slugged, so shell use and URL/path handling stay predictable
 
-EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Unchanged pass-through EPUB attachments stay byte-preserving.
+EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Only `preserve` EPUB attachments without wrapping remain byte-preserving. `epub` output includes selected metadata and a final About page.
 
 For EPUB 2 attachments, wrapping retains author metadata and guide links while repairing empty guide sections. See the [output compatibility notes](config.md) before changing a series to pass-through output to avoid a validation failure.
 
@@ -464,3 +464,9 @@ A broad input may set `hold_candidates = true` to route first chapters, numberin
 resets, or unreferenced collections to review. This opt-in hold is reported with
 its reason and uses chronological captured evidence. Add a specific mapping or
 an explicit override after reviewing the candidate.
+
+## Curating publication metadata
+
+Keep identity/routing rules separate from author profiles and artwork. Configure durable profiles under `[[author_profiles]]`, select them with source `author_profile` or series `author_profiles`, and put descriptions/covers in series or book `metadata`. See the [metadata configuration](config.md#portable-publication-metadata).
+
+Use captured creator identity or a reviewed public-web identity link. Do not promote a campaign banner, portrait, or loosely matched search image to a book cover. Keep selected asset bytes in the offline workspace and record their source URL. Preview and rebuild use the same metadata resolver as sync. Metadata is excluded from upstream content hashes; editing it changes new publications immediately and existing publications only through explicit rebuild.

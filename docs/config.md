@@ -144,10 +144,10 @@ Notes:
 - if Patreon presents a Cloudflare or other interactive challenge, complete `setup auth` in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle before returning to the Docker run path.
 - `format = "preserve"` keeps the source format when possible.
 - `format = "preserve"` plus `preface_mode = "prepend_post"` wraps existing EPUB attachments with a front-matter page while leaving non-EPUB attachments in their original format.
-- `format = "epub"` emits EPUB output for HTML/text sources and PDF attachments via Calibre's `ebook-convert`; existing EPUB attachments are passed through unless `preface_mode = "prepend_post"` wraps them.
+- `format = "epub"` emits EPUB output for HTML/text sources and PDF attachments via Calibre's `ebook-convert`; existing EPUB attachments become enriched publication copies while retaining story resources, author metadata, and navigation. `preface_mode = "prepend_post"` additionally wraps them.
 - `format = "epub"` plus `preface_mode = "prepend_post"` adds the Patreon post text to EPUB attachments and to PDF attachments after conversion.
 - EPUB 2 wrapping preserves namespaced author attributes and populated guide links. Empty guide sections are removed before validation; chapter content and NCX navigation remain intact.
-- EPUBs generated, converted, or wrapped by serial-sync are checked as ZIP/OCF/package documents during planning and must pass EPUBCheck before they are stored. Unchanged pass-through attachments stay byte-preserving. Native, non-Docker runs that produce EPUB output need `epubcheck` on `PATH`. Use `scripts/validate-epubs <published-root> <report-dir>` when you want a full EPUBCheck pass over a published folder.
+- EPUBs generated, converted, or wrapped by serial-sync are checked as ZIP/OCF/package documents during planning and must pass EPUBCheck before they are stored. `preserve` attachments without wrapping stay byte-preserving. New `epub` publications include selected metadata and an About page. Native, non-Docker runs that produce EPUB output need `epubcheck` on `PATH`. Use `scripts/validate-epubs <published-root> <report-dir>` when you want a full EPUBCheck pass over a published folder.
 - published chapter names use the series slug, optional `bkNN`, and `chNNNN` (minimum four digits). Unnumbered posts use date and title. Only colliding names receive a stable identity suffix; every member of a collision receives one.
 
 ## Volume output
@@ -384,3 +384,39 @@ when the selected filename supplies the part. `B6C57`, `Chaptger 204`, `Chapeter
 and a leading `737 - Title` yield integral chapters. Existing spelled-out chapter
 numbers remain supported. A filename separator such as `chapter-50.epub` means
 chapter 50; `Chapter -50` preserves the negative sign.
+
+## Portable publication metadata
+
+`epub` output embeds descriptions, selected cover artwork, language, series order, and one generated About page at the end. The About page contains available author biographies, portraits, and source links. Volumes retain member navigation and add one final About page. Captured originals are unchanged. `preserve` retains its existing byte-preserving/wrapping contract.
+
+Use stable author-profile IDs across sources. A source's `author_profile` is the default; `series.author_profiles` selects explicit profiles for that series. Omit them to use the creator directly linked in captured Patreon metadata. A campaign banner or author portrait is never guessed to be a series cover. A configured book collection can supply its captured description and cover.
+
+```toml
+[[author_profiles]]
+id = "harbor-author"
+name = "Ada Harbor"
+biography = "Writes maritime fantasy."
+url = "https://author.example/about"
+portrait = { path = "assets/ada.jpg", source_url = "https://author.example/about" }
+
+# Within an existing [[sources]]:
+# author_profile = "harbor-author"
+
+# Within an existing [[series]]:
+# author_profiles = ["harbor-author"]
+# [series.metadata]
+# description = "A city built above a sleeping sea."
+# language = "en"
+# cover = { path = "assets/harbor.jpg", source_url = "https://author.example/harbor" }
+# links = ["https://author.example/harbor"]
+```
+
+Books accept the same fields in `[series.books.metadata]`, overriding the series defaults. Explicit descriptions/covers override embedded ones; otherwise suitable embedded metadata is preserved before captured creator/collection fallbacks fill gaps. Original attachment titles and creators are retained. Public-web profiles and artwork must be selected explicitly; a matching display name alone does not establish identity.
+
+Asset paths are relative to their owning config/series file. Select local PNG, JPEG, or GIF files up to 16 MiB and retain their source URL. Serial-sync snapshots chosen bytes by SHA-256 with the edition. `source_url` records provenance; it does not trigger a preview-time download. Missing optional upstream artwork does not block a chapter. An explicitly configured missing/invalid asset is an actionable configuration error for new publications or rebuilds.
+
+Live Patreon capture downloads linked artwork through the shared request budget, with a daily URL cache and a one-hour failure cooldown. Dumps retain referenced image bytes for offline use. `setup enrich` can recover profile fields from stored JSON but cannot invent uncaptured image bytes.
+
+Review selected metadata with offline `setup preview --show-posts --format json`. Normal sync pins existing publication inputs, even when curation changes. Use `run --rebuild --dry-run` to see affected reading copies, then `run --rebuild` to apply the reviewed change. Rebuild is offline and repeated unchanged rebuilds do not republish. Existing pending deliveries retain their saved editions.
+
+The [BookOrbit integration](../integrations/bookorbit/README.md) documents controlled import, readiness receipts, grouped ntfy notifications with reading links, and the optional reader patch. Configure its private notification topic in the adapter JSON after subscribing on the phone. The adapter is separate from the portable metadata model.

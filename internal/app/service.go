@@ -628,6 +628,7 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 		}
 	}
 	for _, target := range targets {
+		targetStartFailed := result.Failed
 		for attempt := 0; attempt < 2; attempt++ {
 			plan := deliveryPlan{Target: target, Candidates: selected}
 			if !dryRun {
@@ -647,6 +648,27 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 				break
 			}
 			delivered := map[string]bool{}
+			if !dryRun {
+				event := publish.LifecycleEvent{Action: "prepare", RunID: recorder.RunID(), TargetID: target.ID, DeliveryID: plan.ID, Maintenance: plan.Maintenance, Candidates: ordered}
+				if plan.Maintenance && len(target.LifecycleCommand) > 0 {
+					records, err := s.Repo.ListPublishRecords(ctx, "", target.ID)
+					if err != nil {
+						return result, err
+					}
+					previous := make([]domain.PublishRecordBundle, 0, len(records))
+					for _, record := range records {
+						if record.Record.Status == domain.PublishStatusPublished {
+							previous = append(previous, record)
+						}
+					}
+					event.Previous = &previous
+				}
+				if err := publish.RunLifecycle(ctx, target.LifecycleCommand, event); err != nil {
+					result.Failed++
+					result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "failed", Message: err.Error()})
+					break
+				}
+			}
 			for _, candidate := range ordered {
 				ready := true
 				for _, dependency := range dependencies[candidate.Artifact.ID] {
@@ -771,6 +793,12 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 				break
 			}
 		}
+		if !dryRun {
+			if err := publish.RunLifecycle(ctx, target.LifecycleCommand, publish.LifecycleEvent{Action: "complete", RunID: recorder.RunID(), TargetID: target.ID, Maintenance: rebuild, Succeeded: result.Failed == targetStartFailed}); err != nil {
+				result.Failed++
+				result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "notification_failed", Message: err.Error()})
+			}
+		}
 	}
 	summaryVerb := "published"
 	if dryRun {
@@ -790,8 +818,19 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 	return result, nil
 }
 
-func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, command string) (RunOnceResult, error) {
-	result := RunOnceResult{}
+func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, command string) (result RunOnceResult, err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		notificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		for _, target := range selectPublishers(s.Config.Publishers, targetFilter) {
+			if notificationErr := publish.RunLifecycle(notificationCtx, target.LifecycleCommand, publish.LifecycleEvent{Action: "complete", RunID: result.Sync.RunID, TargetID: target.ID, Succeeded: false}); notificationErr != nil {
+				err = errors.Join(err, notificationErr)
+			}
+		}
+	}()
 	if err := s.validatePublishTargets(sourceFilter, targetFilter, "", false); err != nil {
 		return result, err
 	}
@@ -853,6 +892,26 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 	existingRelease, err := s.Repo.GetReleaseByProviderID(ctx, source.ID, doc.Normalized.ProviderReleaseID)
 	if err != nil {
 		return domain.SyncItemPlan{}, false, false, err
+	}
+	pinnedPublication := false
+	if existingRelease != nil && !rebuild {
+		current, loadErr := s.Repo.GetCanonicalArtifactByReleaseID(ctx, existingRelease.ID)
+		if loadErr != nil {
+			return domain.SyncItemPlan{}, false, false, loadErr
+		}
+		if current != nil {
+			pinnedPublication = true
+			decision.Publication, err = artifactPublication(*current)
+			if err != nil {
+				return domain.SyncItemPlan{}, false, false, err
+			}
+		}
+	}
+	if !pinnedPublication {
+		decision.Publication, err = s.publicationMetadata(source.ID, doc.Normalized, decision)
+		if err != nil {
+			return domain.SyncItemPlan{}, false, false, err
+		}
 	}
 	doc.Normalized, err = s.captureAttachments(source.ID, doc.Normalized, dryRun)
 	if err != nil {

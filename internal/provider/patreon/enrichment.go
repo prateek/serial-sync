@@ -34,12 +34,70 @@ func collectionEnrichment(envelope postEnvelope) *domain.ReleaseEnrichment {
 		}
 	}
 	result := &domain.ReleaseEnrichment{NormalizerVersion: domain.NormalizerVersion}
+	creatorID := envelope.Data.Relationships.User.Data.ID
+	campaignBiography := ""
+	nonCoverImages := map[string]bool{}
+	for _, item := range envelope.Included {
+		if item.Type != "campaign" || item.ID != envelope.Data.Relationships.Campaign.Data.ID {
+			continue
+		}
+		if item.Relationships.Creator.Data.ID != "" {
+			creatorID = item.Relationships.Creator.Data.ID
+		}
+		var attrs struct {
+			Summary        string `json:"summary"`
+			AvatarPhotoURL string `json:"avatar_photo_url"`
+			CoverPhotoURL  string `json:"cover_photo_url"`
+		}
+		if json.Unmarshal(item.Attributes, &attrs) == nil {
+			campaignBiography = stripTags(attrs.Summary)
+			nonCoverImages[metadataImageIdentity(attrs.AvatarPhotoURL)] = true
+			nonCoverImages[metadataImageIdentity(attrs.CoverPhotoURL)] = true
+		}
+	}
+	for _, item := range envelope.Included {
+		if item.Type == "user" && item.ID == creatorID {
+			var attrs struct {
+				FullName string `json:"full_name"`
+				About    string `json:"about"`
+				URL      string `json:"url"`
+				ImageURL string `json:"image_url"`
+			}
+			if json.Unmarshal(item.Attributes, &attrs) == nil {
+				result.Author = &domain.AuthorProfile{ID: "patreon:user:" + item.ID, Name: attrs.FullName, Biography: firstNonEmpty(stripTags(attrs.About), campaignBiography), URL: attrs.URL}
+				if attrs.ImageURL != "" {
+					result.Author.Portrait = &domain.MetadataAsset{SourceURL: attrs.ImageURL}
+					nonCoverImages[metadataImageIdentity(attrs.ImageURL)] = true
+				}
+			}
+		}
+	}
 	for _, ref := range envelope.Data.Relationships.Collections.Data {
 		label := domain.LabelReference{Provider: "patreon", Campaign: envelope.Data.Relationships.Campaign.Data.ID, Type: "collection", ID: ref.ID}
 		if name := names[ref.ID]; name != "" {
 			label.Names = []string{name}
 		}
 		result.Collections = append(result.Collections, label)
+		for _, item := range envelope.Included {
+			if item.Type != "collection" || item.ID != ref.ID {
+				continue
+			}
+			var attrs struct {
+				Description   string `json:"description"`
+				CoverImageURL string `json:"cover_image_url"`
+				Thumbnail     struct {
+					Default string `json:"default"`
+				} `json:"thumbnail"`
+			}
+			if json.Unmarshal(item.Attributes, &attrs) == nil {
+				metadata := domain.CollectionMetadata{ID: item.ID, Description: stripTags(attrs.Description)}
+				coverURL := firstNonEmpty(attrs.CoverImageURL, attrs.Thumbnail.Default)
+				if coverURL != "" && !nonCoverImages[metadataImageIdentity(coverURL)] {
+					metadata.Cover = &domain.MetadataAsset{SourceURL: coverURL}
+				}
+				result.Metadata = append(result.Metadata, metadata)
+			}
+		}
 	}
 	return result
 }

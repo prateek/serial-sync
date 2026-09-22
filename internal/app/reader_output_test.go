@@ -236,7 +236,7 @@ func TestBookChapterOutsideDeclaredRangeRemainsSingle(t *testing.T) {
 		t.Fatalf("out-of-range chapter must remain a single: %v", files)
 	}
 	volume := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-bk01.epub")
-	if strings.Contains(string(epubEntry(t, volume, "nav.xhtml")), "Chapter 2") {
+	if strings.Contains(string(epubNavigation(t, volume)), "Chapter 2") {
 		t.Fatal("book swallowed an out-of-range chapter")
 	}
 }
@@ -886,7 +886,7 @@ func TestSequenceOverridesResolveDuplicateAndShortFinalRange(t *testing.T) {
 		t.Fatalf("selected chapter slots must complete volume and retain duplicate single: %v", files)
 	}
 	volume := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
-	nav := string(epubEntry(t, volume, "/nav.xhtml"))
+	nav := string(epubNavigation(t, volume))
 	if !strings.Contains(nav, "Interlude") || strings.Count(nav, "Chapter 2") != 1 {
 		t.Fatalf("override chose wrong membership: %s", nav)
 	}
@@ -969,7 +969,7 @@ func TestVolumeSplitFailureRetainsOldVolumeOnThatTarget(t *testing.T) {
 	if bytes.Equal(before, mustReadFile(t, oldPath)) {
 		t.Fatal("retry did not finish split")
 	}
-	if nav := string(epubEntry(t, conflict, "/nav.xhtml")); !strings.Contains(nav, "Chapter 4") {
+	if nav := string(epubNavigation(t, conflict)); !strings.Contains(nav, "Chapter 4") {
 		t.Fatal("split lost chapter 4")
 	}
 }
@@ -1005,7 +1005,7 @@ func TestChangingVolumeSizeWaitsForRebuildAndRetainsAllChapters(t *testing.T) {
 	if files := findFiles(t, s.Config.Publishers[0].Path, ".epub"); len(files) != 1 {
 		t.Fatalf("regroup left extra files: %v", files)
 	}
-	if nav := string(epubEntry(t, volume, "/nav.xhtml")); !strings.Contains(nav, "Chapter 3") {
+	if nav := string(epubNavigation(t, volume)); !strings.Contains(nav, "Chapter 3") {
 		t.Fatal("regroup lost chapter 3")
 	}
 }
@@ -1248,7 +1248,7 @@ func TestCompleteVolumeReplacesItsPreviouslyPublishedChapters(t *testing.T) {
 	if len(files) != 1 || filepath.Base(files[0]) != "alpha-saga-vol01.epub" {
 		t.Fatalf("completed range must replace singles: %v", files)
 	}
-	nav := string(epubEntry(t, files[0], "/nav.xhtml"))
+	nav := string(epubNavigation(t, files[0]))
 	if !strings.Contains(nav, "Alpha Saga - Chapter 1") || !strings.Contains(nav, "Alpha Saga - Chapter 2") {
 		t.Fatalf("volume TOC lost chapters: %s", nav)
 	}
@@ -1463,6 +1463,59 @@ func TestPublishedChaptersHaveDistinctTitlesAndSeriesPositions(t *testing.T) {
 			}
 		}
 	}
+}
+
+func epubNavigation(t *testing.T, filename string) []byte {
+	t.Helper()
+	var container struct {
+		Rootfiles []struct {
+			FullPath string `xml:"full-path,attr"`
+		} `xml:"rootfiles>rootfile"`
+	}
+	if err := xml.Unmarshal(epubEntry(t, filename, "META-INF/container.xml"), &container); err != nil {
+		t.Fatal(err)
+	}
+	if len(container.Rootfiles) != 1 {
+		t.Fatal("expected one EPUB package")
+	}
+	packagePath := container.Rootfiles[0].FullPath
+	var pkg struct {
+		Items []struct {
+			Href       string `xml:"href,attr"`
+			Properties string `xml:"properties,attr"`
+		} `xml:"manifest>item"`
+	}
+	if err := xml.Unmarshal(epubEntry(t, filename, packagePath), &pkg); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.OpenReader(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, item := range pkg.Items {
+		if !strings.Contains(" "+item.Properties+" ", " nav ") {
+			continue
+		}
+		entry := filepath.ToSlash(filepath.Join(filepath.Dir(packagePath), item.Href))
+		for _, file := range reader.File {
+			if file.Name != entry {
+				continue
+			}
+			stream, err := file.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := io.ReadAll(stream)
+			_ = stream.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return data
+		}
+	}
+	t.Fatal("EPUB has no declared navigation document")
+	return nil
 }
 
 func epubEntry(t *testing.T, filename, suffix string) []byte {

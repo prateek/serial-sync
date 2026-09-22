@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly serial chapter delivery
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+Unit=serial-sync.service
+
+[Install]
+WantedBy=timers.target

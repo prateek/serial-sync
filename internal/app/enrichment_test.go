@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
 	"github.com/prateek/serial-sync/internal/provider/patreon"
@@ -86,5 +87,55 @@ func TestWorkspaceRejectsReleaseIDTraversalBeforeRawEnrichment(t *testing.T) {
 	}
 	if _, err := loadWorkspacePosts(root, "", path); err == nil {
 		t.Fatal("workspace accepted a release ID outside the capture")
+	}
+}
+
+func TestWorkspacePreviewUpgradesCapturedMetadataOffline(t *testing.T) {
+	for _, version := range []int{2, 3, domain.NormalizerVersion} {
+		root := t.TempDir()
+		captured := map[string][]byte{}
+		write := func(name string, value any) {
+			t.Helper()
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			captured[path] = data
+		}
+		write("manifest.json", dumpManifest{Version: 3, SourcesFile: "sources.toml", SeriesFile: "series.toml", Creators: []SourceDumpCreator{{SourceID: "author", PostsFile: "posts.ndjson", RawPostsDir: "raw"}}})
+		sources := []byte("[[sources]]\nid='author'\nprovider='patreon'\nurl='https://www.patreon.com/c/author/posts'\nenabled=true\n")
+		if err := os.WriteFile(filepath.Join(root, "sources.toml"), sources, 0600); err != nil {
+			t.Fatal(err)
+		}
+		enrichment := &domain.ReleaseEnrichment{NormalizerVersion: version}
+		want := "Ada"
+		if version == domain.NormalizerVersion {
+			enrichment.Author = &domain.AuthorProfile{ID: "patreon:user:creator", Name: "Current capture"}
+			want = "Current capture"
+		}
+		write("posts.ndjson", dumpPostRecord{Normalized: domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "post", Title: "Harbor Chapter 1", TextPlain: "Story text.", Enrichment: enrichment}})
+		write("raw/post.json", json.RawMessage(`{"data":{"id":"post","relationships":{"user":{"data":{"id":"creator"}}}},"included":[{"type":"user","id":"creator","attributes":{"full_name":"Ada","about":"Biography"}}]}`))
+		s := Service{Config: &config.Config{Sources: []config.SourceConfig{{ID: "author", Enabled: true}}, Rules: []config.RuleConfig{{Source: "author", MatchType: "fallback", TrackKey: "harbor", ContentStrategy: "text_post", OutputFormat: "epub"}}}, Providers: provider.NewRegistry(patreon.New())}
+		preview, err := s.PreviewRules(context.Background(), RulesPreviewOptions{WorkspacePath: root, ShowPosts: true}, "preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata := preview.Creators[0].Preview.Posts[0].Decision.Publication
+		if metadata == nil || len(metadata.Authors) != 1 || metadata.Authors[0].Name != want {
+			t.Fatalf("version %d preview metadata = %+v, want author %q", version, metadata, want)
+		}
+		for path, before := range captured {
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("preview changed captured file %s: %v", path, err)
+			}
+		}
 	}
 }

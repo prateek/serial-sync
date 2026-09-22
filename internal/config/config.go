@@ -19,17 +19,18 @@ const (
 )
 
 type Config struct {
-	fileHash     string
-	Defaults     RuleDefaults      `toml:"defaults"`
-	Review       []ReviewConfig    `toml:"review"`
-	Overrides    []OverrideConfig  `toml:"overrides"`
-	Runtime      RuntimeConfig     `toml:"runtime"`
-	Scheduler    SchedulerConfig   `toml:"scheduler"`
-	AuthProfiles []AuthProfile     `toml:"auth_profiles"`
-	Publishers   []PublisherConfig `toml:"publishers"`
-	Sources      []SourceConfig    `toml:"sources"`
-	Series       []SeriesConfig    `toml:"series"`
-	Rules        []RuleConfig      `toml:"rules"`
+	AuthorProfiles []AuthorProfileConfig `toml:"author_profiles"`
+	fileHash       string
+	Defaults       RuleDefaults      `toml:"defaults"`
+	Review         []ReviewConfig    `toml:"review"`
+	Overrides      []OverrideConfig  `toml:"overrides"`
+	Runtime        RuntimeConfig     `toml:"runtime"`
+	Scheduler      SchedulerConfig   `toml:"scheduler"`
+	AuthProfiles   []AuthProfile     `toml:"auth_profiles"`
+	Publishers     []PublisherConfig `toml:"publishers"`
+	Sources        []SourceConfig    `toml:"sources"`
+	Series         []SeriesConfig    `toml:"series"`
+	Rules          []RuleConfig      `toml:"rules"`
 }
 
 type RuntimeConfig struct {
@@ -60,27 +61,31 @@ type AuthProfile struct {
 }
 
 type PublisherConfig struct {
-	ProtocolVersion int      `toml:"protocol_version"`
-	ID              string   `toml:"id"`
-	Kind            string   `toml:"kind"`
-	Path            string   `toml:"path"`
-	Command         []string `toml:"command"`
-	Enabled         bool     `toml:"enabled"`
+	LifecycleCommand []string `toml:"lifecycle_command"`
+	ProtocolVersion  int      `toml:"protocol_version"`
+	ID               string   `toml:"id"`
+	Kind             string   `toml:"kind"`
+	Path             string   `toml:"path"`
+	Command          []string `toml:"command"`
+	Enabled          bool     `toml:"enabled"`
 }
 
 type SourceConfig struct {
-	Author       string       `toml:"author"`
-	Defaults     RuleDefaults `toml:"defaults"`
-	IgnoreLabels []string     `toml:"ignore_labels"`
-	ID           string       `toml:"id"`
-	Provider     string       `toml:"provider"`
-	URL          string       `toml:"url"`
-	AuthProfile  string       `toml:"auth_profile"`
-	Enabled      bool         `toml:"enabled"`
-	FixtureDir   string       `toml:"fixture_dir"`
+	AuthorProfile string       `toml:"author_profile"`
+	Author        string       `toml:"author"`
+	Defaults      RuleDefaults `toml:"defaults"`
+	IgnoreLabels  []string     `toml:"ignore_labels"`
+	ID            string       `toml:"id"`
+	Provider      string       `toml:"provider"`
+	URL           string       `toml:"url"`
+	AuthProfile   string       `toml:"auth_profile"`
+	Enabled       bool         `toml:"enabled"`
+	FixtureDir    string       `toml:"fixture_dir"`
 }
 
 type SeriesConfig struct {
+	AuthorProfiles    []string            `toml:"author_profiles"`
+	Metadata          PublicationConfig   `toml:"metadata"`
 	Source            string              `toml:"source"`
 	SequenceOverrides []SequenceOverride  `toml:"sequence_overrides"`
 	ID                string              `toml:"id"`
@@ -100,6 +105,7 @@ type SequenceOverride struct {
 }
 
 type BookConfig struct {
+	Metadata            PublicationConfig   `toml:"metadata"`
 	Collection          *CollectionSelector `toml:"collection"`
 	Tag                 string              `toml:"tag"`
 	IntentionalGaps     []ChapterGap        `toml:"intentional_gaps"`
@@ -235,6 +241,7 @@ func Load(path string) (*Config, Roots, error) {
 		return nil, Roots{}, err
 	}
 	cfg.fileHash = hashConfig(data)
+	cfg.resolveMetadataPaths(filepath.Dir(path))
 	cfg.ApplyDefaults(roots)
 	if err := cfg.expandPaths(roots); err != nil {
 		return nil, Roots{}, err
@@ -306,6 +313,9 @@ func (c *Config) expandPaths(roots Roots) error {
 		for argIdx := range c.Publishers[idx].Command {
 			c.Publishers[idx].Command[argIdx] = expand(c.Publishers[idx].Command[argIdx])
 		}
+		for argIdx := range c.Publishers[idx].LifecycleCommand {
+			c.Publishers[idx].LifecycleCommand[argIdx] = expand(c.Publishers[idx].LifecycleCommand[argIdx])
+		}
 	}
 	for idx := range c.Sources {
 		c.Sources[idx].FixtureDir = expand(c.Sources[idx].FixtureDir)
@@ -314,6 +324,9 @@ func (c *Config) expandPaths(roots Roots) error {
 }
 
 func (c *Config) Validate() error {
+	if err := c.validatePublicationMetadata(); err != nil {
+		return err
+	}
 	if len(c.Sources) == 0 && len(c.AuthProfiles) == 0 {
 		return errors.New("config must define at least one source or auth profile")
 	}
@@ -383,6 +396,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	for _, publisher := range c.Publishers {
+		if len(publisher.LifecycleCommand) > 0 && (normalizePublisherKind(publisher.Kind) != "exec" || publisher.ProtocolVersion != 2) {
+			return fmt.Errorf("publisher %q lifecycle_command requires exec protocol_version = 2", publisher.ID)
+		}
 		if publisher.ProtocolVersion < 0 || publisher.ProtocolVersion > 2 {
 			return fmt.Errorf("publisher %q protocol_version must be 1 or 2", publisher.ID)
 		}

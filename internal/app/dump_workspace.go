@@ -75,6 +75,12 @@ func loadWorkspacePosts(root, originalRoot, path string) ([]domain.NormalizedRel
 				return nil, fmt.Errorf("post %s attachment: %w", releases[i].ProviderReleaseID, err)
 			}
 		}
+		for _, asset := range releases[i].Enrichment.Assets() {
+			asset.Path, err = workspaceFile(root, originalRoot, asset.Path)
+			if err != nil {
+				return nil, fmt.Errorf("post %s metadata: %w", id, err)
+			}
+		}
 	}
 	return releases, nil
 }

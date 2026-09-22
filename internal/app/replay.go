@@ -172,7 +172,7 @@ func (s *Service) previewCorpus(ctx context.Context, options RulesPreviewOptions
 		}
 		if creator.RawPostsDir != "" {
 			for i := range releases {
-				if releases[i].Enrichment != nil {
+				if releases[i].Enrichment != nil && releases[i].Enrichment.NormalizerVersion >= domain.NormalizerVersion {
 					continue
 				}
 				raw, err := os.ReadFile(filepath.Join(creator.RawPostsDir, releases[i].ProviderReleaseID+".json"))
@@ -333,6 +333,10 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 				return result, err
 			}
 			decisions[i] = analysis.Decisions[release.ProviderReleaseID]
+			decisions[i].Decision.Publication, err = planner.publicationMetadata(source, release, decisions[i].Decision)
+			if err != nil {
+				return result, err
+			}
 			capture := hashableNormalizedRelease(release)
 			capture.Enrichment = release.Enrichment
 			content, _ := json.Marshal(capture)

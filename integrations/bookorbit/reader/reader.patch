@@ -1,0 +1,990 @@
+diff --git a/Dockerfile b/Dockerfile
+index 25d7ea2..4557fa9 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -22,7 +22,8 @@ COPY client/ ./client/
+ # re-install is both redundant and wrong: it resolves against a partial
+ # workspace. In the server stage it is fatal, because client/ is absent and the
+ # @embedpdf patches then look unused.
+-RUN pnpm --config.verify-deps-before-run=false --filter client run build-only
++RUN pnpm --config.verify-deps-before-run=false --filter client run generate-pwa-icons && \
++    pnpm --config.verify-deps-before-run=false --filter client run build-only
+ 
+ # Stage 2: Build server + create deploy bundle
+ FROM base AS server-builder
+diff --git a/NOTICE b/NOTICE
+index 03991d4..ed83c41 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -23,3 +23,10 @@ The required attribution is:
+ 
+ See ADDITIONAL_TERMS.md for the conditions governing display, source access,
+ modified versions, preservation, and trademarks.
++
++Serial Reader modifications, September 21, 2026
++
++This is a modified version of BookOrbit and is not an official BookOrbit release.
++Serial Reader adds experimental series navigation and reading-copy correction
++handling. It uses distinct application branding and retains BookOrbit attribution.
++Corresponding source is offered in Legal notices at /serial-sync-source.tar.gz.
+diff --git a/client/index.html b/client/index.html
+index 3467bc6..044b920 100644
+--- a/client/index.html
++++ b/client/index.html
+@@ -9,8 +9,8 @@
+     <meta name="mobile-web-app-capable" content="yes" />
+     <meta name="apple-mobile-web-app-capable" content="yes" />
+     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+-    <meta name="apple-mobile-web-app-title" content="BookOrbit" />
+-    <title>BookOrbit</title>
++    <meta name="apple-mobile-web-app-title" content="Serial Reader" />
++    <title>Serial Reader</title>
+     <!-- Blocking theme init — must run before first paint to prevent FOUC -->
+     <script src="/theme-init.js"></script>
+   </head>
+diff --git a/client/public/pwa-icon-source.svg b/client/public/pwa-icon-source.svg
+index cb17015..0bdf1f6 100644
+--- a/client/public/pwa-icon-source.svg
++++ b/client/public/pwa-icon-source.svg
+@@ -1,25 +1,7 @@
+ <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+-  <defs>
+-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+-      <stop offset="0%" stop-color="#2c2c22"/>
+-      <stop offset="100%" stop-color="#1a1a10"/>
+-    </linearGradient>
+-  </defs>
+-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+-  <!-- Orbit icon (Lucide), 24x24 viewBox scaled to fill ~252x252 of safe zone, centered -->
+-  <!-- transform: scale(14), translate(88,88) => visual extent ~130-382 per axis -->
+-  <g
+-    transform="translate(88, 88) scale(14)"
+-    fill="none"
+-    stroke="rgba(255,255,255,0.9)"
+-    stroke-width="1.5"
+-    stroke-linecap="round"
+-    stroke-linejoin="round"
+-  >
+-    <path d="M20.341 6.484A10 10 0 0 1 10.266 21.85"/>
+-    <path d="M3.659 17.516A10 10 0 0 1 13.74 2.152"/>
+-    <circle cx="12" cy="12" r="3"/>
+-    <circle cx="19" cy="5" r="2"/>
+-    <circle cx="5" cy="19" r="2"/>
++  <rect width="512" height="512" rx="96" fill="#1e1e18" />
++  <g fill="none" stroke="#fafaf8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
++    <path d="M112 138h88c24 0 44 10 56 26 12-16 32-26 56-26h88v226h-88c-24 0-44 10-56 26-12-16-32-26-56-26h-88z" />
++    <path d="M256 164v226M152 200h54M152 248h54M306 200h54M306 248h54" />
+   </g>
+ </svg>
+diff --git a/client/src/components/AppSidebar.vue b/client/src/components/AppSidebar.vue
+index 758b5bc..b3754cf 100644
+--- a/client/src/components/AppSidebar.vue
++++ b/client/src/components/AppSidebar.vue
+@@ -2,7 +2,7 @@
+ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+ import { useI18n } from 'vue-i18n'
+ import { useRoute, useRouter } from 'vue-router'
+-import { Aperture, BookCopy, CircleArrowUp, FolderOpen, Heart, Orbit, Podcast } from '@lucide/vue'
++import { Aperture, BookCopy, CircleArrowUp, FolderOpen, Heart, BookOpen, Podcast } from '@lucide/vue'
+ import { APP_FEATURES, Permission, type Library, type LibraryType, type MediaType } from '@bookorbit/types'
+ import { formatCompactNumber, formatNumber } from '@/i18n/formatters'
+ import { entityCount } from '@/lib/entity-count'
+@@ -319,10 +319,10 @@ onUnmounted(() => stopLibraryUploadListener())
+           class="flex h-9 w-9 shrink-0 items-center justify-center rounded-(--shell-radius) bg-primary ring-1 ring-(--shell-accent-line)"
+           aria-hidden="true"
+         >
+-          <Orbit :size="21" class="text-primary-foreground" />
++          <BookOpen :size="21" class="text-primary-foreground" />
+         </div>
+         <span class="truncate font-serif text-[18px] font-semibold leading-none text-sidebar-foreground group-data-[collapsible=icon]:hidden">
+-          Book<span class="text-primary"> Orbit</span>
++          Serial<span class="text-primary"> Reader</span>
+         </span>
+       </RouterLink>
+       <SidebarModeSwitch v-if="showModeSwitch" :mode="mode" :rail="isRail" class="mt-1.5" @switch="handleModeSwitch" />
+diff --git a/client/src/components/legal/LegalNotices.spec.ts b/client/src/components/legal/LegalNotices.spec.ts
+index 8b5876e..9fd2dba 100644
+--- a/client/src/components/legal/LegalNotices.spec.ts
++++ b/client/src/components/legal/LegalNotices.spec.ts
+@@ -26,6 +26,9 @@ describe('LegalNotices', () => {
+     useLegalNotices().openLegalNotices()
+     await nextTick()
+ 
++    expect(wrapper.get('.legal-dialog').text()).toContain('Serial Reader')
++    expect(wrapper.get('.legal-dialog').text()).toContain('This is a modified version of BookOrbit and is not an official BookOrbit release.')
++    expect(wrapper.get('.legal-dialog').text()).toContain('Modified September 21, 2026.')
+     expect(wrapper.get('.legal-dialog').text()).toContain('Powered by BookOrbit')
+     expect(wrapper.get('.legal-dialog').text()).toContain('Copyright (C) 2025-2026 neon.')
+     expect(wrapper.get('.legal-dialog').text()).toContain('Additional copyright is held by the respective BookOrbit contributors.')
+@@ -40,7 +43,7 @@ describe('LegalNotices', () => {
+     const links = wrapper.findAll('a')
+     expect(links.map((link) => link.attributes('href'))).toEqual([
+       'https://github.com/bookorbit/bookorbit',
+-      'https://github.com/bookorbit/bookorbit',
++      '/serial-sync-source.tar.gz',
+       'https://github.com/bookorbit/bookorbit/blob/main/LICENSE',
+       'https://github.com/bookorbit/bookorbit/blob/main/ADDITIONAL_TERMS.md',
+     ])
+diff --git a/client/src/components/legal/LegalNotices.vue b/client/src/components/legal/LegalNotices.vue
+index 61569f3..bd1db4f 100644
+--- a/client/src/components/legal/LegalNotices.vue
++++ b/client/src/components/legal/LegalNotices.vue
+@@ -22,9 +22,7 @@ const ADDITIONAL_TERMS_URL = `${PROJECT_URL}/blob/main/ADDITIONAL_TERMS.md`
+       >
+         <div class="flex items-start justify-between gap-4">
+           <div>
+-            <DialogTitle class="text-lg font-semibold text-foreground">
+-              {{ t('components.legalNotices.title') }}
+-            </DialogTitle>
++            <DialogTitle class="text-lg font-semibold text-foreground"> Serial Reader </DialogTitle>
+             <DialogDescription class="mt-1 text-sm text-muted-foreground">
+               {{ t('components.legalNotices.description') }}
+             </DialogDescription>
+@@ -40,6 +38,10 @@ const ADDITIONAL_TERMS_URL = `${PROJECT_URL}/blob/main/ADDITIONAL_TERMS.md`
+         </div>
+ 
+         <div class="mt-6 space-y-4 text-sm">
++          <div class="rounded-md border border-border bg-muted p-3 text-foreground">
++            <p class="font-semibold">This is a modified version of BookOrbit and is not an official BookOrbit release.</p>
++            <p>Modified September 21, 2026. Experimental serial navigation and reading-copy correction handling.</p>
++          </div>
+           <a
+             :href="PROJECT_URL"
+             target="_blank"
+@@ -60,7 +62,7 @@ const ADDITIONAL_TERMS_URL = `${PROJECT_URL}/blob/main/ADDITIONAL_TERMS.md`
+ 
+           <div class="grid gap-2 sm:grid-cols-3">
+             <a
+-              :href="PROJECT_URL"
++              href="/serial-sync-source.tar.gz"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-3 py-2 font-medium text-foreground outline-hidden hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+diff --git a/client/src/features/auth/ForgotPasswordPage.vue b/client/src/features/auth/ForgotPasswordPage.vue
+index 76bb2b9..65c860b 100644
+--- a/client/src/features/auth/ForgotPasswordPage.vue
++++ b/client/src/features/auth/ForgotPasswordPage.vue
+@@ -203,7 +203,7 @@ async function handleSubmit() {
+ 
+     <div class="login-card relative z-10 w-full max-w-sm rounded-2xl p-8">
+       <div class="text-center mb-8">
+-        <h1 class="text-2xl font-serif font-semibold text-foreground">Book<span class="text-primary"> Orbit</span></h1>
++        <h1 class="text-2xl font-serif font-semibold text-foreground">Serial<span class="text-primary"> Reader</span></h1>
+         <p class="text-sm text-muted-foreground mt-1">{{ t('auth.forgotPassword.subtitle') }}</p>
+       </div>
+ 
+diff --git a/client/src/features/auth/LoginPage.vue b/client/src/features/auth/LoginPage.vue
+index f1a3b79..8bcf968 100644
+--- a/client/src/features/auth/LoginPage.vue
++++ b/client/src/features/auth/LoginPage.vue
+@@ -256,7 +256,7 @@ async function handleOidcLogin(provider: OidcProviderPublic) {
+ 
+     <div class="login-card relative z-10 w-full max-w-sm rounded-2xl p-8">
+       <div class="text-center mb-8 animate-fade-up">
+-        <h1 class="text-2xl font-serif font-semibold text-foreground">Book<span class="text-primary"> Orbit</span></h1>
++        <h1 class="text-2xl font-serif font-semibold text-foreground">Serial<span class="text-primary"> Reader</span></h1>
+         <p class="text-sm text-muted-foreground mt-1">{{ t('auth.login.subtitle') }}</p>
+       </div>
+ 
+diff --git a/client/src/features/auth/OidcCallbackPage.vue b/client/src/features/auth/OidcCallbackPage.vue
+index 3aaa209..3035134 100644
+--- a/client/src/features/auth/OidcCallbackPage.vue
++++ b/client/src/features/auth/OidcCallbackPage.vue
+@@ -85,7 +85,7 @@ onMounted(async () => {
+ <template>
+   <div class="min-h-screen flex flex-col items-center justify-center gap-3 bg-background px-4">
+     <div class="w-full max-w-sm text-center">
+-      <h1 class="text-2xl font-serif font-semibold text-foreground mb-6">Book<span class="text-primary"> Orbit</span></h1>
++      <h1 class="text-2xl font-serif font-semibold text-foreground mb-6">Serial<span class="text-primary"> Reader</span></h1>
+ 
+       <div v-if="!error" class="space-y-3">
+         <div class="flex justify-center">
+diff --git a/client/src/features/auth/ResetPasswordPage.vue b/client/src/features/auth/ResetPasswordPage.vue
+index 46113be..431ec4b 100644
+--- a/client/src/features/auth/ResetPasswordPage.vue
++++ b/client/src/features/auth/ResetPasswordPage.vue
+@@ -223,7 +223,7 @@ async function handleSubmit() {
+ 
+     <div class="login-card relative z-10 w-full max-w-sm rounded-2xl p-8">
+       <div class="text-center mb-8">
+-        <h1 class="text-2xl font-serif font-semibold text-foreground">Book<span class="text-primary"> Orbit</span></h1>
++        <h1 class="text-2xl font-serif font-semibold text-foreground">Serial<span class="text-primary"> Reader</span></h1>
+         <p class="text-sm text-muted-foreground mt-1">{{ t('auth.resetPassword.subtitle') }}</p>
+       </div>
+ 
+diff --git a/client/src/features/reader/ReaderView.vue b/client/src/features/reader/ReaderView.vue
+index 4de2a0d..176173a 100644
+--- a/client/src/features/reader/ReaderView.vue
++++ b/client/src/features/reader/ReaderView.vue
+@@ -6,6 +6,7 @@ import { toast } from 'vue-sonner'
+ import { useFoliate, type RelocateDetail } from './epub/composables/useFoliate'
+ import type { SelectionDetail } from './epub/composables/useFoliateSelection'
+ import { useReaderProgress } from './shared/composables/useReaderProgress'
++import { useSeriesNeighbors } from './shared/composables/useSeriesNeighbors'
+ import { useReadingSession } from './shared/composables/useReadingSession'
+ import { useReaderPageTitle } from './shared/composables/useReaderPageTitle'
+ import { useReaderState } from './epub/composables/useReaderState'
+@@ -239,6 +240,35 @@ function handleTranslate() {
+ }
+ 
+ const bookMeta = ref<BookDetail | null>(null)
++const seriesNeighbors = useSeriesNeighbors(
++  computed(() => bookMeta.value?.seriesId ?? null),
++  bookId,
++)
++const changingSeriesBook = ref(false)
++function openPreviousSeriesBook() {
++  void openSeriesNeighbor('previous')
++}
++function openNextSeriesBook() {
++  void openSeriesNeighbor('next')
++}
++async function openSeriesNeighbor(direction: 'previous' | 'next') {
++  if (isNavigationLocked.value || changingSeriesBook.value) return
++  changingSeriesBook.value = true
++  try {
++    await seriesNeighbors.refresh(true)
++    const neighbor = seriesNeighbors[direction].value
++    if (!neighbor) {
++      toast.info(direction === 'next' ? 'You are caught up with this series.' : 'This is the first available book in the series.')
++      return
++    }
++    await progress.save(true)
++    await router.push({ name: 'reader', params: { bookId: neighbor.bookId, fileId: neighbor.fileId }, query: { format: neighbor.format } })
++  } catch (error) {
++    toast.error(error instanceof Error ? error.message : 'Could not open the next reading copy. Your current book is still open.')
++  } finally {
++    changingSeriesBook.value = false
++  }
++}
+ 
+ const {
+   foliateReady,
+@@ -921,6 +951,11 @@ onMounted(async () => {
+   const deepLinkCfi = typeof route.query.cfi === 'string' ? route.query.cfi : null
+   const hadProgress = progress.percentage.value > 0
+   const resumeTarget = resolveReaderResumeTarget(deepLinkCfi ? undefined : route.query.checkpoint, progress.cfi.value, progress.percentage.value)
++  const changedReadingCopy = !deepLinkCfi && progress.copyChanged.value
++  if (changedReadingCopy) {
++    resumeTarget.cfi = progress.koboLocationSource.value || progress.cfi.value?.replace(/!.*/, '!/4)') || null
++    resumeTarget.fraction = undefined
++  }
+   const savedNarration = await resolveSavedNarrationPos()
+   await open(bookId, fileId, fileFormat, {
+     cfi: resumeTarget.cfi,
+@@ -930,6 +965,7 @@ onMounted(async () => {
+     mediaOverlaySectionIndex: savedNarration?.section,
+     preferMediaOverlay: savedNarration != null,
+   })
++  if (changedReadingCopy) toast.info('This reading copy was updated. Returned to the beginning of your chapter.', { duration: 8000 })
+   initialOpenCompleted = true
+   setChapters(getChapters())
+   sectionFractions.value = getSectionFractions()
+@@ -1594,7 +1630,12 @@ onUnmounted(() => {
+       :chapterStartFraction="chapterStartFraction"
+       :chapterEndFraction="chapterEndFraction"
+       :locationTotal="locationTotal"
+-      :navigationLocked="isNavigationLocked"
++      :navigationLocked="isNavigationLocked || changingSeriesBook"
++      :hasSeries="bookMeta?.seriesId != null"
++      :previousBookTitle="seriesNeighbors.previous.value?.title"
++      :nextBookTitle="seriesNeighbors.next.value?.title"
++      @previousBook="openPreviousSeriesBook"
++      @nextBook="openNextSeriesBook"
+       class="transition-all duration-300"
+       :class="footerVisible && !showTapZones ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-full pointer-events-none'"
+       @prevSection="navigateToSection(sectionIndex - 1)"
+diff --git a/client/src/features/reader/epub/components/ReaderFooter.vue b/client/src/features/reader/epub/components/ReaderFooter.vue
+index e7b7742..b06cb1a 100644
+--- a/client/src/features/reader/epub/components/ReaderFooter.vue
++++ b/client/src/features/reader/epub/components/ReaderFooter.vue
+@@ -1,7 +1,7 @@
+ <script setup lang="ts">
+ import { ref, watch } from 'vue'
+ import { useI18n } from 'vue-i18n'
+-import { ChevronLeft, ChevronRight, ChevronsUpDown } from '@lucide/vue'
++import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ChevronsUpDown } from '@lucide/vue'
+ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+ 
+ const { t } = useI18n()
+@@ -15,9 +15,14 @@ const props = defineProps<{
+   chapterEndFraction: number
+   locationTotal: number
+   navigationLocked?: boolean
++  hasSeries?: boolean
++  previousBookTitle?: string | null
++  nextBookTitle?: string | null
+ }>()
+ 
+ const emit = defineEmits<{
++  previousBook: []
++  nextBook: []
+   prevSection: []
+   nextSection: []
+   seek: [fraction: number]
+@@ -27,6 +32,13 @@ const showGoToInput = ref(false)
+ const goToValue = ref('')
+ const goToInputRef = ref<HTMLInputElement | null>(null)
+ 
++function handlePreviousBook() {
++  if (!props.navigationLocked) emit('previousBook')
++}
++function handleNextBook() {
++  if (!props.navigationLocked) emit('nextBook')
++}
++
+ function onSeek(e: Event) {
+   if (props.navigationLocked) return
+   const input = e.target as HTMLInputElement
+@@ -89,6 +101,17 @@ watch(
+   <footer
+     class="fixed bottom-0 left-0 right-0 h-10 sm:h-11 z-50 flex items-center gap-2 px-2 sm:gap-3 sm:px-4 bg-background/90 backdrop-blur-md border-t border-border"
+   >
++    <button
++      v-if="hasSeries"
++      type="button"
++      class="viewer-btn"
++      aria-label="Previous in series"
++      :title="previousBookTitle || 'Check previous in series'"
++      :disabled="!!navigationLocked"
++      @click="handlePreviousBook"
++    >
++      <ChevronsLeft :size="18" />
++    </button>
+     <Tooltip>
+       <TooltipTrigger as-child>
+         <button
+@@ -184,5 +207,16 @@ watch(
+       </TooltipTrigger>
+       <TooltipContent>{{ t('reader.footer.nextSection') }}</TooltipContent>
+     </Tooltip>
++    <button
++      v-if="hasSeries"
++      type="button"
++      class="viewer-btn"
++      aria-label="Next in series"
++      :title="nextBookTitle || 'Check for new chapters'"
++      :disabled="!!navigationLocked"
++      @click="handleNextBook"
++    >
++      <ChevronsRight :size="18" />
++    </button>
+   </footer>
+ </template>
+diff --git a/client/src/features/reader/epub/composables/useFoliate.ts b/client/src/features/reader/epub/composables/useFoliate.ts
+index 3557400..dfe4d49 100644
+--- a/client/src/features/reader/epub/composables/useFoliate.ts
++++ b/client/src/features/reader/epub/composables/useFoliate.ts
+@@ -65,7 +65,7 @@ function applyEpubOpenOptions(book: unknown, options: EpubOpenOptions | undefine
+ }
+ 
+ function makeFoliateFetchFile(): FoliateFetchFile {
+-  const fetchFile = ((input: RequestInfo | URL, init?: RequestInit) => api(input, init)) as FoliateFetchFile
++  const fetchFile = ((input: RequestInfo | URL, init?: RequestInit) => api(input, { ...init, cache: 'no-store' })) as FoliateFetchFile
+   const currentToken = () => getAccessToken() ?? ''
+   fetchFile.toString = currentToken
+   fetchFile[Symbol.toPrimitive] = currentToken
+diff --git a/client/src/features/reader/shared/composables/useReaderProgress.test.ts b/client/src/features/reader/shared/composables/useReaderProgress.test.ts
+index e0d3187..fe44459 100644
+--- a/client/src/features/reader/shared/composables/useReaderProgress.test.ts
++++ b/client/src/features/reader/shared/composables/useReaderProgress.test.ts
+@@ -76,6 +76,22 @@ describe('useReaderProgress', () => {
+     vi.useRealTimers()
+   })
+ 
++  it('requires an acknowledged save before switching books', async () => {
++    mockApi.mockResolvedValue(makeErrorResponse())
++    const progress = useReaderProgress(1, 42, ref(0))
++    await expect(progress.save(true)).rejects.toThrow('Reading position could not be saved')
++  })
++
++  it('detects an overwritten copy without treating a newer reading position as a correction', async () => {
++    const progress = useReaderProgress(1, 42, ref(0))
++    mockApi.mockResolvedValue(makeOkResponse({ fileModifiedAt: '2026-09-21T11:00:00Z', textUpdatedAt: '2026-09-21T10:00:00Z' }))
++    await progress.load()
++    expect(progress.copyChanged.value).toBe(true)
++    mockApi.mockResolvedValue(makeOkResponse({ fileModifiedAt: '2026-09-21T11:00:00Z', textUpdatedAt: '2026-09-21T12:00:00Z' }))
++    await progress.load()
++    expect(progress.copyChanged.value).toBe(false)
++  })
++
+   describe('load()', () => {
+     it('does not call api when trackingEnabled is false', async () => {
+       const elapsedMinutes = ref(0)
+diff --git a/client/src/features/reader/shared/composables/useReaderProgress.ts b/client/src/features/reader/shared/composables/useReaderProgress.ts
+index 1e01e94..959df9d 100644
+--- a/client/src/features/reader/shared/composables/useReaderProgress.ts
++++ b/client/src/features/reader/shared/composables/useReaderProgress.ts
+@@ -56,6 +56,8 @@ export function useReaderProgress(
+   initialFooterMode: FooterDisplayMode = 0,
+   options: ReaderProgressOptions = {},
+ ) {
++  const copyChanged = ref(false)
++  let fileModifiedAt: string | undefined
+   const cfi = ref<string | null>(null)
+   const pageNumber = ref<number | null>(null)
+   const percentage = ref(0)
+@@ -108,6 +110,8 @@ export function useReaderProgress(
+     const res = await api(`/api/v1/books/files/${fileId}/progress`)
+     if (!res.ok) return
+     const data = await res.json()
++    fileModifiedAt = typeof data.fileModifiedAt === 'string' ? data.fileModifiedAt : undefined
++    copyChanged.value = !!data.fileModifiedAt && !!data.textUpdatedAt && Date.parse(data.fileModifiedAt) > Date.parse(data.textUpdatedAt)
+     cfi.value = normalizeString(data.cfi)
+     pageNumber.value = normalizePageNumber(data.pageNumber)
+     updatePercentage(data.percentage, 0)
+@@ -174,13 +178,14 @@ export function useReaderProgress(
+     mediaOverlaySectionIndex.value = null
+   }
+ 
+-  async function save() {
++  async function save(required = false) {
+     if (!unref(trackingEnabled)) return
+     const safePercentage = updatePercentage(percentage.value)
+-    await api(`/api/v1/books/files/${fileId}/progress`, {
++    const response = await api(`/api/v1/books/files/${fileId}/progress`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({
++        expectedFileModifiedAt: fileModifiedAt,
+         cfi: cfi.value,
+         pageNumber: normalizePageNumber(pageNumber.value),
+         percentage: safePercentage,
+@@ -195,6 +200,10 @@ export function useReaderProgress(
+         source: pendingSource.value,
+       }),
+     })
++    if (required && !response.ok)
++      throw new Error(
++        response.status === 409 ? 'This reading copy was updated. Reopen it to resume your chapter.' : 'Reading position could not be saved',
++      )
+   }
+ 
+   function cycleFooterMode() {
+@@ -313,6 +322,7 @@ export function useReaderProgress(
+   }
+ 
+   return {
++    copyChanged,
+     cfi,
+     pageNumber,
+     percentage,
+diff --git a/client/src/features/reader/shared/composables/useSeriesNeighbors.ts b/client/src/features/reader/shared/composables/useSeriesNeighbors.ts
+new file mode 100644
+index 0000000..9d77da3
+--- /dev/null
++++ b/client/src/features/reader/shared/composables/useSeriesNeighbors.ts
+@@ -0,0 +1,47 @@
++import { onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
++import type { SeriesNextBook, SeriesNeighborsResponse } from '@bookorbit/types'
++import { api } from '@/lib/api'
++
++export function useSeriesNeighbors(seriesId: Ref<number | null>, bookId: number) {
++  const previous = ref<SeriesNextBook | null>(null)
++  const next = ref<SeriesNextBook | null>(null)
++  let timer: ReturnType<typeof setInterval> | undefined
++  let sequence = 0
++
++  async function refresh(required = false) {
++    const request = ++sequence
++    if (seriesId.value === null) {
++      previous.value = next.value = null
++      return
++    }
++    try {
++      const response = await api(`/api/v1/series/${seriesId.value}/books/${bookId}/neighbors?formatGroup=epub`)
++      if (!response.ok) throw new Error('Series navigation unavailable')
++      const result = (await response.json()) as SeriesNeighborsResponse
++      if (request === sequence) {
++        previous.value = result.previous
++        next.value = result.next
++      }
++    } catch (error) {
++      if (required) throw error
++      if (request === sequence) previous.value = next.value = null
++    }
++  }
++
++  function whenVisible() {
++    if (document.visibilityState === 'visible') void refresh()
++  }
++  watch(seriesId, () => refresh(), { immediate: true })
++  onMounted(() => {
++    timer = setInterval(whenVisible, 60_000)
++    document.addEventListener('visibilitychange', whenVisible)
++    window.addEventListener('focus', whenVisible)
++  })
++  onUnmounted(() => {
++    sequence++
++    clearInterval(timer)
++    document.removeEventListener('visibilitychange', whenVisible)
++    window.removeEventListener('focus', whenVisible)
++  })
++  return { previous, next, refresh }
++}
+diff --git a/client/src/lib/__tests__/page-title.spec.ts b/client/src/lib/__tests__/page-title.spec.ts
+index 2c82f9a..edecaa4 100644
+--- a/client/src/lib/__tests__/page-title.spec.ts
++++ b/client/src/lib/__tests__/page-title.spec.ts
+@@ -10,7 +10,7 @@ describe('formatPageTitle', () => {
+   })
+ 
+   it('formats non-empty leaf title', () => {
+-    expect(formatPageTitle('Authors')).toBe('Authors · BookOrbit')
+-    expect(formatPageTitle('  Dashboard  ')).toBe('Dashboard · BookOrbit')
++    expect(formatPageTitle('Authors')).toBe('Authors · Serial Reader')
++    expect(formatPageTitle('  Dashboard  ')).toBe('Dashboard · Serial Reader')
+   })
+ })
+diff --git a/client/src/lib/page-title.ts b/client/src/lib/page-title.ts
+index 683b1bb..74fe48d 100644
+--- a/client/src/lib/page-title.ts
++++ b/client/src/lib/page-title.ts
+@@ -1,4 +1,4 @@
+-export const APP_TITLE = 'BookOrbit'
++export const APP_TITLE = 'Serial Reader'
+ 
+ export function formatPageTitle(leaf: string | null | undefined): string {
+   const trimmed = (leaf ?? '').trim()
+diff --git a/client/src/router/__tests__/title-resolver.spec.ts b/client/src/router/__tests__/title-resolver.spec.ts
+index 3d5f126..ebd456c 100644
+--- a/client/src/router/__tests__/title-resolver.spec.ts
++++ b/client/src/router/__tests__/title-resolver.spec.ts
+@@ -19,22 +19,22 @@ describe('resolveRouteTitle', () => {
+   })
+ 
+   it('uses string route title', () => {
+-    expect(resolveRouteTitle(routeWithMeta('Authors'))).toBe('Authors · BookOrbit')
++    expect(resolveRouteTitle(routeWithMeta('Authors'))).toBe('Authors · Serial Reader')
+   })
+ 
+   it('uses function route title', () => {
+     const route = routeWithMeta(() => 'Audit Log')
+-    expect(resolveRouteTitle(route)).toBe('Audit Log · BookOrbit')
++    expect(resolveRouteTitle(route)).toBe('Audit Log · Serial Reader')
+   })
+ 
+   it('falls back to app title when route title is missing', () => {
+-    expect(resolveRouteTitle(routeWithMeta(undefined))).toBe('BookOrbit')
++    expect(resolveRouteTitle(routeWithMeta(undefined))).toBe('Serial Reader')
+   })
+ 
+   it('resolves the account activity admin tab title', () => {
+     const route = router.resolve('/settings/admin/account-activity')
+ 
+-    expect(resolveRouteTitle(route as unknown as RouteLocationNormalizedLoaded)).toBe('Account Activity · BookOrbit')
++    expect(resolveRouteTitle(route as unknown as RouteLocationNormalizedLoaded)).toBe('Account Activity · Serial Reader')
+   })
+ 
+   it('refreshes the current route title when the locale changes', async () => {
+@@ -49,10 +49,10 @@ describe('resolveRouteTitle', () => {
+ 
+     registerRouteTitleHook(router)
+     afterEachHook?.(route)
+-    expect(document.title).toBe('Authors · BookOrbit')
++    expect(document.title).toBe('Authors · Serial Reader')
+ 
+     await setI18nLocale('nl')
+     await nextTick()
+-    expect(document.title).toBe('Auteurs · BookOrbit')
++    expect(document.title).toBe('Auteurs · Serial Reader')
+   })
+ })
+diff --git a/client/vite.config.ts b/client/vite.config.ts
+index 765b392..faf1aa9 100644
+--- a/client/vite.config.ts
++++ b/client/vite.config.ts
+@@ -35,8 +35,8 @@ export default defineConfig({
+         'maskable-icon-512x512.png',
+       ],
+       manifest: {
+-        name: 'BookOrbit',
+-        short_name: 'BookOrbit',
++        name: 'Serial Reader',
++        short_name: 'Serial Reader',
+         description: 'Your personal book library and reading space',
+         theme_color: '#1e1e18',
+         background_color: '#fafaf8',
+diff --git a/packages/types/src/series.ts b/packages/types/src/series.ts
+index 9a6a8fa..b57033f 100644
+--- a/packages/types/src/series.ts
++++ b/packages/types/src/series.ts
+@@ -93,3 +93,8 @@ export type SeriesNextBook = {
+ export type SeriesNextBookResponse = {
+   next: SeriesNextBook | null;
+ };
++
++export type SeriesNeighborsResponse = {
++  previous: SeriesNextBook | null;
++  next: SeriesNextBook | null;
++};
+diff --git a/server/src/modules/book/book.repository.ts b/server/src/modules/book/book.repository.ts
+index 61c4d09..d50b4fc 100644
+--- a/server/src/modules/book/book.repository.ts
++++ b/server/src/modules/book/book.repository.ts
+@@ -1549,6 +1549,7 @@ export class BookRepository {
+         libraryId: books.libraryId,
+         libraryFolderPath: libraryFolders.path,
+         fileHash: bookFiles.fileHash,
++        mtime: bookFiles.mtime,
+         sizeBytes: bookFiles.sizeBytes,
+         durationSeconds: bookFiles.durationSeconds,
+         mediaOverlayAvailable: bookFiles.mediaOverlayAvailable,
+diff --git a/server/src/modules/book/book.service.test.ts b/server/src/modules/book/book.service.test.ts
+index 3e9b5ee..20c3d64 100644
+--- a/server/src/modules/book/book.service.test.ts
++++ b/server/src/modules/book/book.service.test.ts
+@@ -2414,6 +2414,24 @@ describe('BookService', () => {
+     });
+   });
+ 
++  it('rejects a position saved from an overwritten EPUB even before the scanner updates its catalog', async () => {
++    const { service, bookRepo } = makeService();
++    const user = makeUser();
++    bookRepo.findFileById.mockResolvedValue({
++      id: 7,
++      bookId: 10,
++      libraryId: 1,
++      absolutePath: '/books/a.epub',
++      format: 'epub',
++      mtime: new Date('2026-09-21T10:00:00Z'),
++    });
++    mockStat.mockResolvedValue({ mtimeMs: Date.parse('2026-09-21T11:00:00Z') } as never);
++    await expect(
++      service.saveProgress(user.id, 7, { percentage: 50, expectedFileModifiedAt: '2026-09-21T10:00:00.000Z' }, user),
++    ).rejects.toBeInstanceOf(ConflictException);
++    expect(bookRepo.upsertProgress).not.toHaveBeenCalled();
++  });
++
+   describe('saveProgress - positionSeconds', () => {
+     it('passes positionSeconds from DTO to repo', async () => {
+       const { service, bookRepo, libraryService } = makeService();
+diff --git a/server/src/modules/book/book.service.ts b/server/src/modules/book/book.service.ts
+index 95ca7d6..e5ad55b 100644
+--- a/server/src/modules/book/book.service.ts
++++ b/server/src/modules/book/book.service.ts
+@@ -1,5 +1,6 @@
+ import {
+   BadRequestException,
++  ConflictException,
+   ForbiddenException,
+   HttpException,
+   HttpStatus,
+@@ -2104,8 +2105,9 @@ export class BookService {
+   }
+ 
+   async getProgress(userId: number, fileId: number, user: RequestUser) {
+-    await this.verifyFileAccess(fileId, user);
+-    return this.bookRepo.findProgress(userId, fileId);
++    const file = await this.verifyFileAccess(fileId, user);
++    const progress = await this.bookRepo.findProgress(userId, fileId);
++    return 'mtime' in file ? { ...progress, fileModifiedAt: file.mtime } : progress;
+   }
+ 
+   async getBookProgress(userId: number, bookId: number, user: RequestUser) {
+@@ -2237,6 +2239,12 @@ export class BookService {
+ 
+   async saveProgress(userId: number, fileId: number, dto: SaveProgressDto, user: RequestUser) {
+     const file = await this.verifyFileAccess(fileId, user);
++    if (dto.expectedFileModifiedAt) {
++      const current = await stat(file.absolutePath);
++      if (Math.trunc(current.mtimeMs) !== Date.parse(dto.expectedFileModifiedAt)) {
++        throw new ConflictException('This reading copy was updated. Reopen it to resume your chapter.');
++      }
++    }
+     const previous = await this.bookRepo.findProgress(userId, fileId);
+     const now = new Date();
+     const text = this.resolveTextPosition(dto, previous ?? null);
+diff --git a/server/src/modules/book/dto/save-progress.dto.ts b/server/src/modules/book/dto/save-progress.dto.ts
+index 11655f5..27f2695 100644
+--- a/server/src/modules/book/dto/save-progress.dto.ts
++++ b/server/src/modules/book/dto/save-progress.dto.ts
+@@ -8,6 +8,10 @@ export const PROGRESS_SOURCES = ['text', 'narration'] as const;
+ export type ProgressSource = (typeof PROGRESS_SOURCES)[number];
+ 
+ export class SaveProgressDto {
++  @IsOptional()
++  @IsString()
++  expectedFileModifiedAt?: string;
++
+   @IsOptional()
+   @IsIn(PROGRESS_SOURCES)
+   source?: ProgressSource;
+diff --git a/server/src/modules/reader/epub/epub.controller.test.ts b/server/src/modules/reader/epub/epub.controller.test.ts
+index 391055b..fad9d45 100644
+--- a/server/src/modules/reader/epub/epub.controller.test.ts
++++ b/server/src/modules/reader/epub/epub.controller.test.ts
+@@ -60,7 +60,7 @@ describe('EpubController', () => {
+     expect(epubService.streamFile).toHaveBeenCalledWith(9, 'OPS/text/Chapter 1.xhtml', 13, user);
+     expect(reply.header).toHaveBeenNthCalledWith(1, 'Content-Type', 'application/xhtml+xml');
+     expect(reply.header).toHaveBeenNthCalledWith(2, 'Content-Length', 321);
+-    expect(reply.header).toHaveBeenNthCalledWith(3, 'Cache-Control', 'public, max-age=3600');
++    expect(reply.header).toHaveBeenNthCalledWith(3, 'Cache-Control', 'private, no-cache');
+     expect(reply.send).toHaveBeenCalledWith(stream);
+   });
+ 
+@@ -114,7 +114,7 @@ describe('EpubController', () => {
+ 
+     expect(reply.header).toHaveBeenCalledWith('Content-Type', 'application/xml');
+     expect(reply.header).not.toHaveBeenCalledWith('Content-Length', expect.anything());
+-    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600');
++    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'private, no-cache');
+   });
+ 
+   it('rejects malformed encoded file paths', async () => {
+diff --git a/server/src/modules/reader/epub/epub.controller.ts b/server/src/modules/reader/epub/epub.controller.ts
+index 86ac693..c61e64b 100644
+--- a/server/src/modules/reader/epub/epub.controller.ts
++++ b/server/src/modules/reader/epub/epub.controller.ts
+@@ -62,7 +62,7 @@ export class EpubController {
+ 
+     reply.header('Content-Type', contentType);
+     if (size > 0) reply.header('Content-Length', size);
+-    reply.header('Cache-Control', 'public, max-age=3600');
++    reply.header('Cache-Control', 'private, no-cache');
+     reply.send(stream);
+   }
+ 
+diff --git a/server/src/modules/series/series.controller.ts b/server/src/modules/series/series.controller.ts
+index 57501ee..4f040a6 100644
+--- a/server/src/modules/series/series.controller.ts
++++ b/server/src/modules/series/series.controller.ts
+@@ -21,6 +21,16 @@ export class SeriesController {
+     return this.seriesService.findBooks(user, seriesId, dto);
+   }
+ 
++  @Get(':seriesId/books/:bookId/neighbors')
++  findNeighbors(
++    @CurrentUser() user: RequestUser,
++    @Param('seriesId', ParseIntPipe) seriesId: number,
++    @Param('bookId', ParseIntPipe) bookId: number,
++    @Query() dto: FindNextSeriesBookDto,
++  ) {
++    return this.seriesService.findNeighbors(user, seriesId, bookId, dto);
++  }
++
+   @Get(':seriesId/books/:bookId/next')
+   findNextBook(
+     @CurrentUser() user: RequestUser,
+diff --git a/server/src/modules/series/series.repository.ts b/server/src/modules/series/series.repository.ts
+index e81f018..36f10ee 100644
+--- a/server/src/modules/series/series.repository.ts
++++ b/server/src/modules/series/series.repository.ts
+@@ -353,11 +353,12 @@ export class SeriesRepository {
+    * The next book of the series this user can open right now, resolved down to one file.
+    * Books with no readable file of the requested formats are skipped rather than dead-ended on.
+    */
+-  async findNextReadableBook(params: {
++  async findAdjacentReadableBook(params: {
+     seriesId: number;
+     bookId: number;
+     libraryIds: number[];
+     formats: string[];
++    direction?: 'next' | 'previous';
+     contentFilters?: ContentFilterRules;
+   }): Promise<SeriesNextBookRow | null> {
+     if (params.formats.length === 0) return null;
+@@ -384,6 +385,14 @@ export class SeriesRepository {
+             isNull(bookSeriesMemberships.seriesIndex),
+           )!;
+ 
++    const previous = params.direction === 'previous';
++    const beforeCurrent =
++      current.seriesIndex === null
++        ? or(and(isNull(bookSeriesMemberships.seriesIndex), sql`${books.id} < ${params.bookId}`), isNotNull(bookSeriesMemberships.seriesIndex))!
++        : or(
++            compareSeriesIndexSql(bookSeriesMemberships.seriesIndex, '<', current.seriesIndex),
++            and(compareSeriesIndexSql(bookSeriesMemberships.seriesIndex, '<=', current.seriesIndex), sql`${books.id} < ${params.bookId}`),
++          )!;
+     const filterClauses = params.contentFilters ? buildContentFilterClauses(params.contentFilters, this.db) : [];
+ 
+     const [row] = await this.db
+@@ -401,10 +410,19 @@ export class SeriesRepository {
+         bookFiles,
+         and(eq(bookFiles.bookId, books.id), eq(bookFiles.role, 'content'), inArray(sql`lower(${bookFiles.format})`, params.formats))!,
+       )
+-      .where(and(eq(bookSeriesMemberships.seriesId, params.seriesId), eq(books.status, 'present'), libraryFilter, afterCurrent, ...filterClauses))
++      .where(
++        and(
++          eq(bookSeriesMemberships.seriesId, params.seriesId),
++          eq(books.status, 'present'),
++          libraryFilter,
++          previous ? beforeCurrent : afterCurrent,
++          ...filterClauses,
++        ),
++      )
+       .orderBy(
+-        ...seriesIndexOrderBy(bookSeriesMemberships.seriesIndex, 'ASC'),
+-        asc(books.id),
++        sql`(${bookSeriesMemberships.seriesIndex} IS NULL) ${previous ? sql`DESC` : sql`ASC`}`,
++        ...seriesIndexOrderBy(bookSeriesMemberships.seriesIndex, previous ? 'DESC' : 'ASC'),
++        previous ? desc(books.id) : asc(books.id),
+         sql`(${bookFiles.id} = ${books.primaryFileId}) DESC`,
+         sql`${bookFiles.sortOrder} ASC NULLS LAST`,
+         asc(bookFiles.id),
+diff --git a/server/src/modules/series/series.service.test.ts b/server/src/modules/series/series.service.test.ts
+index 32838dc..5b7c52b 100644
+--- a/server/src/modules/series/series.service.test.ts
++++ b/server/src/modules/series/series.service.test.ts
+@@ -48,7 +48,7 @@ describe('SeriesService', () => {
+     findPage: vi.fn(),
+     findDetail: vi.fn(),
+     findBookIds: vi.fn(),
+-    findNextReadableBook: vi.fn(),
++    findAdjacentReadableBook: vi.fn(),
+     countSeries: vi.fn(),
+   };
+ 
+@@ -590,11 +590,28 @@ describe('SeriesService', () => {
+       expect(await gapsFor(['1', '1', '3'], 3, 4)).toEqual([2, 4]);
+     });
+   });
++  describe('findNeighbors', () => {
++    it('returns both directions through the same access and format restrictions', async () => {
++      const previous = { bookId: 89, fileId: 499, format: 'epub', title: 'Previous', seriesIndex: '9' };
++      const next = { bookId: 91, fileId: 501, format: 'epub', title: 'Next', seriesIndex: '11' };
++      seriesRepo.findAdjacentReadableBook.mockImplementation(({ direction }) => Promise.resolve(direction === 'previous' ? previous : next));
++      await expect(service.findNeighbors(reqUser(), 42, 90, { formatGroup: 'epub' })).resolves.toEqual({ previous, next });
++      for (const [params] of seriesRepo.findAdjacentReadableBook.mock.calls) {
++        expect(params).toMatchObject({ seriesId: 42, bookId: 90, libraryIds: [1, 2], formats: ['epub', 'mobi', 'azw3', 'azw', 'fb2'] });
++      }
++    });
++    it('does not expose either neighbor when the user has no library access', async () => {
++      libraryService.findAll.mockResolvedValue([]);
++      await expect(service.findNeighbors(reqUser(), 42, 90, {})).resolves.toEqual({ previous: null, next: null });
++      expect(seriesRepo.findAdjacentReadableBook).not.toHaveBeenCalled();
++    });
++  });
++
+   describe('findNextBook', () => {
+     const row = { bookId: 91, title: 'Issue 10', seriesIndex: '10', fileId: 501, format: 'cbr' };
+ 
+     it('resolves the next book down to the file the reader should open', async () => {
+-      seriesRepo.findNextReadableBook.mockResolvedValue(row);
++      seriesRepo.findAdjacentReadableBook.mockResolvedValue(row);
+ 
+       await expect(service.findNextBook(reqUser(), 42, 90, { formatGroup: 'cbx' })).resolves.toEqual({
+         next: { bookId: 91, fileId: 501, format: 'cbr', title: 'Issue 10', seriesIndex: '10' },
+@@ -602,44 +619,44 @@ describe('SeriesService', () => {
+     });
+ 
+     it('limits candidates to the formats the requesting reader can open', async () => {
+-      seriesRepo.findNextReadableBook.mockResolvedValue(null);
++      seriesRepo.findAdjacentReadableBook.mockResolvedValue(null);
+ 
+       await service.findNextBook(reqUser(), 42, 90, { formatGroup: 'cbx' });
+ 
+-      const params = seriesRepo.findNextReadableBook.mock.calls[0]![0];
++      const params = seriesRepo.findAdjacentReadableBook.mock.calls[0]![0];
+       expect(params).toMatchObject({ seriesId: 42, bookId: 90, libraryIds: [1, 2] });
+       expect([...params.formats].sort()).toEqual(['cb7', 'cbr', 'cbz']);
+     });
+ 
+     it('allows every readable format when no group is requested', async () => {
+-      seriesRepo.findNextReadableBook.mockResolvedValue(null);
++      seriesRepo.findAdjacentReadableBook.mockResolvedValue(null);
+ 
+       await service.findNextBook(reqUser(), 42, 90, {});
+ 
+-      const params = seriesRepo.findNextReadableBook.mock.calls[0]![0];
++      const params = seriesRepo.findAdjacentReadableBook.mock.calls[0]![0];
+       expect(params.formats).toEqual(expect.arrayContaining(['epub', 'pdf', 'cbz', 'm4b']));
+     });
+ 
+     it('applies the user content filters and exempts superusers', async () => {
+-      seriesRepo.findNextReadableBook.mockResolvedValue(null);
++      seriesRepo.findAdjacentReadableBook.mockResolvedValue(null);
+       const filtered = { ...reqUser(), contentFilters: EMPTY_CONTENT_FILTER_RULES };
+ 
+       await service.findNextBook(filtered as any, 42, 90, { formatGroup: 'cbx' });
+-      expect(seriesRepo.findNextReadableBook.mock.calls[0]![0].contentFilters).toBe(EMPTY_CONTENT_FILTER_RULES);
++      expect(seriesRepo.findAdjacentReadableBook.mock.calls[0]![0].contentFilters).toBe(EMPTY_CONTENT_FILTER_RULES);
+ 
+       await service.findNextBook(reqUser(7, true), 42, 90, { formatGroup: 'cbx' });
+-      expect(seriesRepo.findNextReadableBook.mock.calls[1]![0].contentFilters).toBeUndefined();
++      expect(seriesRepo.findAdjacentReadableBook.mock.calls[1]![0].contentFilters).toBeUndefined();
+     });
+ 
+     it('returns no next book without querying when the user has no library access', async () => {
+       libraryService.findAll.mockResolvedValue([]);
+ 
+       await expect(service.findNextBook(reqUser(), 42, 90, {})).resolves.toEqual({ next: null });
+-      expect(seriesRepo.findNextReadableBook).not.toHaveBeenCalled();
++      expect(seriesRepo.findAdjacentReadableBook).not.toHaveBeenCalled();
+     });
+ 
+     it('returns no next book when the candidate file has no format', async () => {
+-      seriesRepo.findNextReadableBook.mockResolvedValue({ ...row, format: null });
++      seriesRepo.findAdjacentReadableBook.mockResolvedValue({ ...row, format: null });
+ 
+       await expect(service.findNextBook(reqUser(), 42, 90, {})).resolves.toEqual({ next: null });
+     });
+diff --git a/server/src/modules/series/series.service.ts b/server/src/modules/series/series.service.ts
+index db54e6d..e0a9f3d 100644
+--- a/server/src/modules/series/series.service.ts
++++ b/server/src/modules/series/series.service.ts
+@@ -1,6 +1,14 @@
+ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+ 
+-import type { BooksPage, SeriesBooksPage, SeriesDetail, SeriesNextBookResponse, SeriesPage, SeriesSummary } from '@bookorbit/types';
++import type {
++  BooksPage,
++  SeriesBooksPage,
++  SeriesDetail,
++  SeriesNextBookResponse,
++  SeriesNeighborsResponse,
++  SeriesPage,
++  SeriesSummary,
++} from '@bookorbit/types';
+ import { READER_OPENABLE_FORMATS, SERIES_GAP_PREVIEW_LIMIT, getOpenableFormatsForGroup } from '@bookorbit/types';
+ import { MAX_OFFSET_ROWS, isOffsetWithinLimit } from '../../common/constants/pagination.constants';
+ import type { RequestUser } from '../../common/types/request-user';
+@@ -197,27 +205,38 @@ export class SeriesService {
+    * the reader can ask about every book it opens.
+    */
+   async findNextBook(user: RequestUser, seriesId: number, bookId: number, dto: FindNextSeriesBookDto): Promise<SeriesNextBookResponse> {
++    return { next: await this.findNeighbor(user, seriesId, bookId, dto, 'next') };
++  }
++
++  async findNeighbors(user: RequestUser, seriesId: number, bookId: number, dto: FindNextSeriesBookDto): Promise<SeriesNeighborsResponse> {
++    const [previous, next] = await Promise.all([
++      this.findNeighbor(user, seriesId, bookId, dto, 'previous'),
++      this.findNeighbor(user, seriesId, bookId, dto, 'next'),
++    ]);
++    return { previous, next };
++  }
++
++  private async findNeighbor(user: RequestUser, seriesId: number, bookId: number, dto: FindNextSeriesBookDto, direction: 'next' | 'previous') {
+     const libraryIds = await this.resolveLibraryIds(user);
+-    if (libraryIds.length === 0) return { next: null };
++    if (libraryIds.length === 0) return null;
+ 
+-    const row = await this.seriesRepo.findNextReadableBook({
++    const row = await this.seriesRepo.findAdjacentReadableBook({
+       seriesId,
+       bookId,
+       libraryIds,
++      direction,
+       formats: dto.formatGroup ? getOpenableFormatsForGroup(dto.formatGroup) : [...READER_OPENABLE_FORMATS],
+       contentFilters: user.isSuperuser ? undefined : user.contentFilters,
+     });
+ 
+-    if (!row?.format) return { next: null };
++    if (!row?.format) return null;
+ 
+     return {
+-      next: {
+-        bookId: row.bookId,
+-        fileId: row.fileId,
+-        format: row.format,
+-        title: row.title,
+-        seriesIndex: row.seriesIndex,
+-      },
++      bookId: row.bookId,
++      fileId: row.fileId,
++      format: row.format,
++      title: row.title,
++      seriesIndex: row.seriesIndex,
+     };
+   }
+ 

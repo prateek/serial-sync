@@ -37,10 +37,6 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 		"decision":       decision,
 		"normalized":     normalized,
 	}
-	metadataJSON, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return domain.ArtifactPlan{}, err
-	}
 	normalizedJSON, err := json.MarshalIndent(normalized, "", "  ")
 	if err != nil {
 		return domain.ArtifactPlan{}, err
@@ -78,12 +74,13 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 	default:
 		return domain.ArtifactPlan{}, fmt.Errorf("unsupported content strategy %q", decision.ContentStrategy)
 	}
+	preserveEmbedded := selectedAttachment && (strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub"))
 	validateEPUBCheck := false
 	content, originalFileName, mimeType, validateEPUBCheck, err = applyOutputProfile(track, release, normalized, decision, content, originalFileName, mimeType, selectedAttachment)
 	if err != nil {
 		return domain.ArtifactPlan{}, err
 	}
-	if validateEPUBCheck {
+	if validateEPUBCheck || decision.Publication != nil && mimeType == "application/epub+zip" {
 		sequence := detectSequenceInfo(normalized.Title, originalFileName)
 		position := sequence.Chapter
 		if decision.Sequence != nil {
@@ -92,15 +89,28 @@ func (m *Materializer) Plan(source domain.Source, track domain.StoryTrack, relea
 		content, err = withPublicationMetadata(content, publicationMetadata{
 			Title: release.Title, Author: firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName),
 			Series: track.TrackName, Position: position, PublishedAt: release.PublishedAt,
+			PreserveEmbedded: preserveEmbedded, Publication: decision.Publication,
 		})
 		if err != nil {
 			return domain.ArtifactPlan{}, err
 		}
+		validateEPUBCheck = true
 	}
 	fileName := canonicalFileName(track, release, normalized, originalFileName, mimeType, decision.Sequence)
+	snapshot, assets, err := m.snapshotPublication(decision.Publication)
+	if err != nil {
+		return domain.ArtifactPlan{}, err
+	}
+	decision.Publication = snapshot
+	meta["decision"] = decision
+	metadataJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return domain.ArtifactPlan{}, err
+	}
 	kind = attachmentKind(fileName, mimeType)
 	sum := sha256.Sum256(content)
 	return domain.ArtifactPlan{
+		MetadataAssets:    assets,
 		ArtifactKind:      kind,
 		Filename:          fileName,
 		MIMEType:          mimeType,
@@ -130,6 +140,14 @@ func (m *Materializer) Materialize(ctx context.Context, source domain.Source, tr
 	rawPath := filepath.Join(dir, baseName+".raw.json")
 	if plan.ValidateEPUBCheck {
 		if err := validateEPUBArchive(plan.SelectedContent); err != nil {
+			return domain.Artifact{}, err
+		}
+	}
+	for path, data := range plan.MetadataAssets {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return domain.Artifact{}, err
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
 			return domain.Artifact{}, err
 		}
 	}

@@ -13,6 +13,7 @@ import (
 )
 
 type epubChapter struct {
+	Children []epubChapter
 	FileName string
 	Title    string
 	BodyHTML string
@@ -1300,13 +1301,24 @@ func buildNavDocument(title string, chapters []epubChapter) string {
 	builder.WriteString(`</title></head><body><nav epub:type="toc" id="toc"><h1>`)
 	builder.WriteString(escapeHTML(title))
 	builder.WriteString(`</h1><ol>`)
-	for _, chapter := range chapters {
-		builder.WriteString(`<li><a href="`)
-		builder.WriteString(escapeHTML(chapter.FileName))
-		builder.WriteString(`">`)
-		builder.WriteString(escapeHTML(chapter.Title))
-		builder.WriteString(`</a></li>`)
+	var writeEntries func([]epubChapter)
+	writeEntries = func(entries []epubChapter) {
+		for _, chapter := range entries {
+			builder.WriteString(`<li>`)
+			if chapter.FileName == "" {
+				builder.WriteString(`<span>` + escapeHTML(chapter.Title) + `</span>`)
+			} else {
+				builder.WriteString(`<a href="` + escapeHTML(chapter.FileName) + `">` + escapeHTML(chapter.Title) + `</a>`)
+			}
+			if len(chapter.Children) > 0 {
+				builder.WriteString(`<ol>`)
+				writeEntries(chapter.Children)
+				builder.WriteString(`</ol>`)
+			}
+			builder.WriteString(`</li>`)
+		}
 	}
+	writeEntries(chapters)
 	builder.WriteString(`</ol></nav></body></html>`)
 	return builder.String()
 }

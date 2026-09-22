@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync serial chapters and reconcile the reading library
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/serial-sync
+ExecStart=/usr/bin/flock --nonblock %h/serial-sync/run.lock /usr/bin/docker compose run --rm --name serial-sync-hourly sync
+TimeoutStartSec=55min
+TimeoutStopSec=60

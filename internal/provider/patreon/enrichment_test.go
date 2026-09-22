@@ -14,6 +14,67 @@ import (
 	"github.com/prateek/serial-sync/internal/provider"
 )
 
+func TestCapturedAuthorProfileUsesLinkedIdentityAndKeepsArtworkRoles(t *testing.T) {
+	raw := []byte(`{"data":{"id":"p1","relationships":{"user":{"data":{"id":"editor"}},"campaign":{"data":{"id":"c1"}},"collections":{"data":[{"id":"book"}]}}},"included":[{"id":"stranger","type":"user","attributes":{"full_name":"Wrong author","about":"Wrong biography"}},{"id":"c1","type":"campaign","attributes":{"name":"Campaign","cover_photo_url":"https://example.com/banner.jpg"},"relationships":{"creator":{"data":{"id":"author"}}}},{"id":"author","type":"user","attributes":{"full_name":"Author","about":"<p>Writes &amp; reads.</p>","url":"https://www.patreon.com/author","image_url":"https://c10.patreonusercontent.com/portrait.jpg"}},{"id":"book","type":"collection","attributes":{"title":"Book","description":"<p>A serial.</p>","cover_image_url":"https://c10.patreonusercontent.com/book.jpg"}}]}`)
+	release, err := New().EnrichCaptured(domain.NormalizedRelease{ProviderReleaseID: "p1"}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := release.Enrichment
+	if metadata.Author == nil || metadata.Author.ID != "patreon:user:author" || metadata.Author.Biography != "Writes & reads." {
+		t.Fatalf("incorrect author identity: %+v", metadata.Author)
+	}
+	if len(metadata.Metadata) != 1 || metadata.Metadata[0].Cover.SourceURL == metadata.Author.Portrait.SourceURL || metadata.Metadata[0].Description != "A serial." {
+		t.Fatalf("artwork roles collapsed: %+v", metadata)
+	}
+	if metadata.Author.Portrait.Path != "" {
+		t.Fatal("offline enrichment claimed to fetch an image")
+	}
+}
+
+func TestCapturedCampaignBiographyAndCollectionThumbnail(t *testing.T) {
+	for _, about := range []string{"null", `"<p>User biography.</p>"`} {
+		raw := []byte(fmt.Sprintf(`{"data":{"id":"post","relationships":{"user":{"data":{"id":"author"}},"campaign":{"data":{"id":"campaign"}},"collections":{"data":[{"id":"series"}]}}},"included":[{"id":"unrelated","type":"campaign","attributes":{"summary":"Wrong biography"}},{"id":"campaign","type":"campaign","attributes":{"summary":"<p>Writes fantasy &amp; science fiction.</p>","cover_photo_url":"https://example.com/campaign-banner.jpg"},"relationships":{"creator":{"data":{"id":"author"}}}},{"id":"author","type":"user","attributes":{"full_name":"Author","about":%s,"url":"https://www.patreon.com/author","image_url":"https://c10.patreonusercontent.com/portrait.png"}},{"id":"series","type":"collection","attributes":{"title":"Series","description":"A journey.","thumbnail":{"default":"https://c10.patreonusercontent.com/series.png","default_blurred":"https://c10.patreonusercontent.com/blurred.png"}}}]}`, about))
+		release, err := New().EnrichCaptured(domain.NormalizedRelease{ProviderReleaseID: "post"}, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBiography := "Writes fantasy & science fiction."
+		if about != "null" {
+			wantBiography = "User biography."
+		}
+		metadata := release.Enrichment
+		if metadata.Author == nil || metadata.Author.Biography != wantBiography || metadata.Author.ID != "patreon:user:author" {
+			t.Fatalf("linked biography: %+v", metadata.Author)
+		}
+		if len(metadata.Metadata) != 1 || metadata.Metadata[0].Cover == nil || metadata.Metadata[0].Cover.SourceURL != "https://c10.patreonusercontent.com/series.png" {
+			t.Fatalf("collection artwork: %+v", metadata.Metadata)
+		}
+		if metadata.Author.Portrait.SourceURL != "https://c10.patreonusercontent.com/portrait.png" || metadata.Metadata[0].Cover.Path != "" {
+			t.Fatal("artwork roles or offline capture contract changed")
+		}
+	}
+}
+
+func TestCapturedCollectionThumbnailRejectsResizedCreatorArtwork(t *testing.T) {
+	for _, mediaID := range []string{"portrait", "avatar", "banner", "series-cover"} {
+		imageURL := "https://c10.patreonusercontent.com/4/patreon-media/p/campaign/123/" + mediaID + "/eyJ3Ijo2MjB9/1.png?token-time=new"
+		raw := []byte(fmt.Sprintf(`{"data":{"id":"post","relationships":{"user":{"data":{"id":"author"}},"campaign":{"data":{"id":"campaign"}},"collections":{"data":[{"id":"series"}]}}},"included":[{"id":"campaign","type":"campaign","attributes":{"avatar_photo_url":"https://c1.patreonusercontent.com/4/patreon-media/p/campaign/123/avatar/eyJ3IjoyMDB9/1.png?token-time=old","cover_photo_url":"https://c1.patreonusercontent.com/4/patreon-media/p/campaign/123/banner/eyJ3IjoyMDB9/1.png?token-time=old"}},{"id":"author","type":"user","attributes":{"full_name":"Author","image_url":"https://c1.patreonusercontent.com/4/patreon-media/p/campaign/123/portrait/eyJ3IjoyMDB9/1.png?token-time=old"}},{"id":"series","type":"collection","attributes":{"title":"Series","thumbnail":{"default":%q}}}]}`, imageURL))
+		release, err := New().EnrichCaptured(domain.NormalizedRelease{ProviderReleaseID: "post"}, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cover := release.Enrichment.Metadata[0].Cover
+		if mediaID == "series-cover" {
+			if cover == nil || cover.SourceURL != imageURL {
+				t.Fatalf("distinct series artwork was rejected: %+v", cover)
+			}
+		} else if cover != nil {
+			t.Fatalf("creator %s was selected as series cover: %+v", mediaID, cover)
+		}
+	}
+}
+
 func TestCollectionIdentityUsesResourceTypeAndKeepsUnnamedReferences(t *testing.T) {
 	raw := []byte(`{"data":{"id":"post-1","attributes":{"title":"Harbor Chapter 1","content":"<p>Filler &amp; text.</p>"},"relationships":{"campaign":{"data":{"id":"campaign-1"}},"collections":{"data":[{"id":"shared"},{"id":"unnamed"}]},"attachments_media":{"data":[{"id":"shared"}]}}},"included":[{"type":"collection","id":"shared","attributes":{"title":"Harbor"}},{"type":"media","id":"shared","attributes":{"file_name":"story.pdf","mimetype":"application/pdf"}}]}`)
 	release, err := parsePost(raw, "")

@@ -7,12 +7,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prateek/serial-sync/internal/domain"
 )
 
 type publicationMetadata struct {
 	Title, Author, Series string
 	Position              int
 	PublishedAt           time.Time
+	PreserveEmbedded      bool
+	Publication           *domain.PublicationMetadata
 }
 
 func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]byte, error) {
@@ -20,9 +24,16 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 	if err != nil {
 		return nil, err
 	}
-	setPublicationDC(&pkg.Metadata, "title", metadata.Title)
-	setPublicationDC(&pkg.Metadata, "creator", metadata.Author)
-	if !metadata.PublishedAt.IsZero() {
+	if strings.HasPrefix(pkg.Version, "2") && pkg.Spine.Toc == "" {
+		pkg.Spine.Toc = firstNCXID(pkg.Manifest.Items)
+	}
+	if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "title") {
+		setPublicationDC(&pkg.Metadata, "title", metadata.Title)
+	}
+	if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "creator") {
+		setPublicationDC(&pkg.Metadata, "creator", metadata.Author)
+	}
+	if !metadata.PublishedAt.IsZero() && (!metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "date")) {
 		setPublicationDC(&pkg.Metadata, "date", metadata.PublishedAt.UTC().Format(time.RFC3339))
 	}
 	removedIDs := map[string]bool{}
@@ -60,6 +71,11 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 			if metadata.Position > 0 {
 				pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Property: "group-position", Refines: "#" + id, Value: strconv.Itoa(metadata.Position)})
 			}
+		}
+	}
+	if metadata.Publication != nil {
+		if err := decoratePublication(files, &pkg, packagePath, *metadata.Publication); err != nil {
+			return nil, err
 		}
 	}
 	files[packagePath] = mustXML(pkg)

@@ -32,7 +32,7 @@ func TestFinalVolumeLeavesLaterChaptersAsSingles(t *testing.T) {
 		t.Fatalf("final range must leave chapter 3 available separately: %v", names)
 	}
 	volume := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
-	nav := string(epubEntry(t, volume, "nav.xhtml"))
+	nav := string(epubNavigation(t, volume))
 	if strings.Contains(nav, "Chapter 3") || !strings.Contains(nav, "Chapter 1") || !strings.Contains(nav, "Chapter 2") {
 		t.Fatalf("wrong final-volume contents: %s", nav)
 	}

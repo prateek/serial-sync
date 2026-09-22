@@ -126,7 +126,7 @@ For output settings:
 - keep manual/review buckets at `format = "preserve"` and `preface_mode = "none"`
 - `prepend_post` only matters when the release materializes from an attachment and the Patreon post has note text; in `format = "epub"` it wraps EPUB attachments and PDF attachments after Calibre conversion, while plain text-post chapters stay plain converted content
 - published artifact filenames are lowercase and dash-slugged, so sample output paths may normalize spaces and punctuation
-- generated, converted, and wrapped EPUBs must pass EPUBCheck before storage; unchanged pass-through EPUB attachments stay byte-preserving
+- generated, converted, wrapped, and enriched EPUBs must pass EPUBCheck before storage; unwrapped `preserve` EPUB attachments stay byte-preserving
 - when an EPUB 2 attachment fails wrapping, check the [output compatibility notes](../../docs/config.md) and preserve author attributes and populated guide links when repairing it
 - after publishing EPUB output, run `scripts/validate-epubs <published-source-root> <report-dir>` when you need a report over the whole published folder
 
@@ -232,3 +232,11 @@ participating in volume replacement require protocol version 2 as documented in
   sequence override assigns a declared slot. Do not truncate these values or infer
   book completion from a label. Book labels compile at priority 10 before explicit
   inputs at the same priority; use explicit `book_id` inputs for other ordering.
+
+## Publication curation
+
+Use source `author_profile` or series `author_profiles` to select stable `[[author_profiles]]`. Put descriptions, language, cover assets, and source links under series/book `metadata`. Asset paths are relative to the owning file; retain local PNG/JPEG/GIF bytes and provenance. See [portable metadata](../../docs/config.md#portable-publication-metadata).
+
+Prefer explicit curated values, then suitable original embedded fields, then directly linked creator/collection fallbacks. Never equate portraits, campaign banners, and book covers. Review ambiguous web identities offline. Keep original captured attachments unchanged. `epub` produces enriched copies with a final About page; `preserve` remains the byte-preserving option.
+
+A metadata refresh must not silently replace an existing reading copy. Inspect offline preview, then an explicit rebuild preview for already published files. Review multi-chapter attachment navigation and one final generated About page in volumes. Pending deliveries must keep their saved bytes. For BookOrbit, use the bundled exec v2 adapter and lifecycle hook, disable overlapping library watchers/scans, and keep initial historical imports quiet.

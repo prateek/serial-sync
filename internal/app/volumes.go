@@ -377,7 +377,16 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation)
 			for _, chapter := range group.chapters {
 				members = append(members, domain.VolumeMember{ReleaseID: chapter.Release.ID, ContentHash: chapter.Release.ContentHash, Position: group.sequences[chapter.Release.ID].Position})
 			}
-			recipe, _ := json.Marshal(series)
+			first := group.chapters[0]
+			metadata, err := s.publicationMetadata(first.Source.ID, inputs[first.Release.ID], domain.TrackDecision{SeriesID: series.ID, BookID: group.sequences[first.Release.ID].BookID, OutputFormat: domain.OutputFormatEPUB})
+			if err != nil {
+				return plans, nil, err
+			}
+			recipe, _ := json.Marshal(struct {
+				Series          config.SeriesConfig
+				Metadata        string
+				AssemblyVersion int
+			}{series, publicationFingerprint(metadata), 4})
 			recipeHash := hashBytes(recipe)
 			prior, exists := active[series.ID+"/"+key]
 			archiveValid := false
@@ -402,6 +411,7 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation)
 			fingerprint, _ := json.Marshal(members)
 			volume := domain.VolumeEdition{ID: "volume_" + hashBytes(append(recipe, fingerprint...)), SeriesID: series.ID, SourceID: group.chapters[0].Source.ID, TrackID: group.chapters[0].Track.ID, GroupID: key, First: plan.First, Last: plan.Last, RecipeHash: recipeHash, Active: true, Members: members}
 			volume.Notes = notes
+			volume.Publication = metadata
 			volume.Artifact = domain.Artifact{ID: volume.ID, TrackID: volume.TrackID, Filename: plan.Filename, MIMEType: "application/epub+zip"}
 			if write {
 				volume.Artifact, err = s.Files.BuildVolume(ctx, volume, group.title, group.chapters)

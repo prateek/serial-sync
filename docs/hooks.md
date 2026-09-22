@@ -94,3 +94,16 @@ Legacy hooks (`protocol_version` absent or `1`) continue to receive their origin
 release-oriented payload. Selecting volumes or a required rename/retirement with
 one of these hooks fails before replacement delivery to any selected target, with
 an instruction to upgrade. Serial-sync does not send a new action to a legacy hook.
+
+## Optional batch lifecycle
+
+Exec v2 publishers may configure `lifecycle_command = [...]` alongside `command`. It receives JSON on stdin using a separate lifecycle `version = 1`; it does not change the v2 artifact events. It is never invoked by config checks, preview, or dry runs.
+
+- `prepare`: `run_id`, `target_id`, `delivery_id`, `maintenance`, and ordered saved `candidates`. This can batch-stage new paths and request one import. Preparation does not acknowledge publication or permit retirement. Ordinary preparation preserves existing paths and per-artifact dependency ordering.
+- `complete`: `run_id`, `target_id`, `maintenance`, and `succeeded`. It is called after the target's publication attempt, including an unchanged cycle, so a notification outbox can retry without republishing. `run` also signals a failed completion when upstream work fails before publication.
+
+Maintenance preparation optionally includes `previous`, an array of successful publication record bundles (`record`, `artifact`, `release`, `source`, and `track`). `record.filename` is the acknowledged filename. These are predecessor identities, not a generic filesystem layout or permission to overwrite arbitrary copies. A consumer may batch existing single-release replacements only after proving the same destination and release identity, matching the predecessor artifact ID/hash to its own ownership receipt, and checking all input bytes. It must verify each replacement is readable before its per-artifact acknowledgement. Missing `previous` retains the ordinary behavior; ambiguous predecessors and volume transitions require separately safe ordered delivery. The BookOrbit adapter rejects any overwrite whose release-ID set changes, and requires explicit predecessor proof to upgrade legacy single receipts without recorded coverage.
+
+Nonzero exits report failure. Publication acknowledgements remain durable if completion/notification fails. Lifecycle consumers must tolerate repeated completion and partial publication, retain their own outbox, and use verified readability before notification. `maintenance` is pinned in pending delivery plans; explicit rebuilds must not announce historical content as new.
+
+The [BookOrbit adapter](../integrations/bookorbit/README.md) is the reference implementation. It verifies actual downloaded bytes, preserves unrelated files, and separates library receipts from notification delivery.

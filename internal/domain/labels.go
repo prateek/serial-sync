@@ -1,6 +1,6 @@
 package domain
 
-const NormalizerVersion = 2
+const NormalizerVersion = 4
 
 type LabelReference struct {
 	Provider string   `json:"provider"`
@@ -15,7 +15,25 @@ func (label LabelReference) Key() string {
 }
 
 type ReleaseEnrichment struct {
-	CaptureFingerprint string           `json:"capture_fingerprint,omitempty"`
-	NormalizerVersion  int              `json:"normalizer_version"`
-	Collections        []LabelReference `json:"collections,omitempty"`
+	Author             *AuthorProfile       `json:"author,omitempty"`
+	Metadata           []CollectionMetadata `json:"metadata,omitempty"`
+	CaptureFingerprint string               `json:"capture_fingerprint,omitempty"`
+	NormalizerVersion  int                  `json:"normalizer_version"`
+	Collections        []LabelReference     `json:"collections,omitempty"`
+}
+
+func (metadata *ReleaseEnrichment) Assets() []*MetadataAsset {
+	if metadata == nil {
+		return nil
+	}
+	var assets []*MetadataAsset
+	if metadata.Author != nil && metadata.Author.Portrait != nil {
+		assets = append(assets, metadata.Author.Portrait)
+	}
+	for _, collection := range metadata.Metadata {
+		if collection.Cover != nil {
+			assets = append(assets, collection.Cover)
+		}
+	}
+	return assets
 }
