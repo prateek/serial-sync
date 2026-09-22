@@ -168,7 +168,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 				return result, err
 			}
 			listResult, listErr := client.ListReleases(ctx, auth, sourceCfg, storedSource)
-			_ = recorder.EventData(ctx, "info", "provider", "auth state "+string(listResult.AuthState), "source", sourceCfg.ID, map[string]any{
+			_ = recorder.EventDataK(ctx, "info", observe.KindAuthState, "auth state "+string(listResult.AuthState), "source", sourceCfg.ID, map[string]any{
 				"source_id":   sourceCfg.ID,
 				"auth_state":  listResult.AuthState,
 				"provider":    sourceCfg.Provider,
@@ -179,7 +179,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 				_ = recorder.Event(ctx, "error", "provider", listErr.Error(), "source", sourceCfg.ID)
 				return result, err
 			}
-			_ = recorder.EventData(ctx, "info", "provider", fmt.Sprintf("fetched %d releases", len(listResult.Documents)), "source", sourceCfg.ID, map[string]any{
+			_ = recorder.EventDataK(ctx, "info", observe.KindReleasesFetched, fmt.Sprintf("fetched %d releases", len(listResult.Documents)), "source", sourceCfg.ID, map[string]any{
 				"source_id":        sourceCfg.ID,
 				"discovered_count": len(listResult.Documents),
 			})
@@ -208,11 +208,13 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 					}
 				}
 				decision := authoringDecisionFor(sourceCfg.ID, doc.Normalized, sourceDecisions, s.Config, rules)
+				classificationKind := observe.KindClassifyMatched
 				classificationMessage := "classified release"
 				if !decision.Matched {
+					classificationKind = observe.KindClassifyUnmatched
 					classificationMessage = "release unmatched fallback"
 				}
-				_ = recorder.EventData(ctx, "info", "classify", classificationMessage, "release", doc.Normalized.ProviderReleaseID, map[string]any{
+				_ = recorder.EventDataK(ctx, "info", classificationKind, classificationMessage, "release", doc.Normalized.ProviderReleaseID, map[string]any{
 					"source_id":           sourceCfg.ID,
 					"provider_release_id": doc.Normalized.ProviderReleaseID,
 					"title":               doc.Normalized.Title,
@@ -777,80 +779,36 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 	if err != nil {
 		return nil, err
 	}
-	result := &RunForensics{
-		Run:             bundle.Run,
-		LogText:         filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
-		LogJSON:         filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
-		ComponentCounts: map[string]int{},
-		EntityCounts:    map[string]int{},
-		PhaseTimingsMS:  map[string]int64{},
+	// The run record is the durable log, and internal/observe owns reading it.
+	// Forensics is that read, named for the CLI; nothing here re-derives counts.
+	record, err := observe.ReadRun(s.Config.Runtime.LogRoot, runID)
+	if err != nil {
+		return nil, err
 	}
-	for _, event := range bundle.Events {
-		switch strings.ToLower(strings.TrimSpace(event.Level)) {
-		case "warn", "warning":
-			result.WarningEvents++
-		case "error":
-			result.ErrorEvents++
-			result.RecentErrors = append(result.RecentErrors, event)
-		default:
-			result.InfoEvents++
-		}
-		if component := strings.TrimSpace(event.Component); component != "" {
-			result.ComponentCounts[component]++
-		}
-		if entityKind := strings.TrimSpace(event.EntityKind); entityKind != "" {
-			result.EntityCounts[entityKind]++
-		}
-		if strings.TrimSpace(event.PayloadRef) != "" {
-			result.EventPayloadCount++
-		}
-		switch event.Component {
-		case "classify":
-			if strings.Contains(strings.ToLower(event.Message), "unmatched") {
-				result.ClassifiedUnmatched++
-			} else {
-				result.ClassifiedMatched++
-			}
-		case "sync":
-			message := strings.ToLower(event.Message)
-			switch {
-			case strings.Contains(message, "release synced"):
-				result.ReleaseSynced++
-			case strings.Contains(message, "release unchanged"):
-				result.ReleaseUnchanged++
-			}
-		case "publish":
-			message := strings.ToLower(event.Message)
-			switch {
-			case strings.Contains(message, "planned"):
-				result.PublishPlanned++
-			case strings.Contains(message, "skipped"):
-				result.PublishSkipped++
-			case strings.Contains(message, "completed"):
-				result.PublishSucceeded++
-			case strings.ToLower(strings.TrimSpace(event.Level)) == "error":
-				result.PublishFailed++
-			}
-		}
-		if strings.Contains(strings.ToLower(event.Message), "rate limited") {
-			result.RetryEvents++
-		}
-		if payload, err := loadEventPayload(event.PayloadRef); err == nil {
-			if durationMS, ok := payloadInt64(payload, "duration_ms"); ok {
-				if phaseName := phaseNameForEvent(event); phaseName != "" {
-					result.PhaseTimingsMS[phaseName] = durationMS
-				}
-			}
-			if highlight := progressHighlightForEvent(event, payload); highlight != "" {
-				result.ProgressHighlights = append(result.ProgressHighlights, highlight)
-				if len(result.ProgressHighlights) > 8 {
-					result.ProgressHighlights = result.ProgressHighlights[len(result.ProgressHighlights)-8:]
-				}
-			}
-		}
-		if strings.ToLower(strings.TrimSpace(event.Level)) == "error" && len(result.RecentErrors) > 5 {
-			result.RecentErrors = result.RecentErrors[len(result.RecentErrors)-5:]
-		}
+	result := &RunForensics{
+		Run:                 bundle.Run,
+		LogText:             filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
+		LogJSON:             filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
+		InfoEvents:          record.InfoEvents,
+		WarningEvents:       record.WarningEvents,
+		ErrorEvents:         record.ErrorEvents,
+		RetryEvents:         record.RetryEvents,
+		EventPayloadCount:   record.EventPayloadCount,
+		ComponentCounts:     record.ComponentCounts,
+		EntityCounts:        record.EntityCounts,
+		PhaseTimingsMS:      record.PhaseTimingsMS,
+		ClassifiedMatched:   record.KindCounts[observe.KindClassifyMatched],
+		ClassifiedUnmatched: record.KindCounts[observe.KindClassifyUnmatched],
+		ReleaseSynced:       record.KindCounts[observe.KindReleaseSynced],
+		ReleaseUnchanged:    record.KindCounts[observe.KindReleaseUnchanged],
+		PublishPlanned:      record.KindCounts[observe.KindPublishPlanned],
+		PublishSkipped:      record.KindCounts[observe.KindPublishSkipped],
+		PublishSucceeded:    record.KindCounts[observe.KindPublishCompleted],
+		PublishFailed:       record.KindCounts[observe.KindPublishFailed],
+		ProgressHighlights:  record.ProgressHighlights,
+	}
+	for _, event := range record.RecentErrors {
+		result.RecentErrors = append(result.RecentErrors, eventRecordFromLog(event))
 	}
 	result.Highlights = append(result.Highlights, explainRunHighlights(bundle, result)...)
 	return result, nil
@@ -1187,122 +1145,6 @@ func collectRunSourceIDs(bundle *domain.RunBundle) []string {
 	}
 	sort.Strings(sourceIDs)
 	return sourceIDs
-}
-
-func loadEventPayload(path string) (map[string]any, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, os.ErrNotExist
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
-	}
-	return payload, nil
-}
-
-func payloadInt64(payload map[string]any, key string) (int64, bool) {
-	if payload == nil {
-		return 0, false
-	}
-	value, ok := payload[key]
-	if !ok {
-		return 0, false
-	}
-	switch typed := value.(type) {
-	case float64:
-		return int64(typed), true
-	case int64:
-		return typed, true
-	case int:
-		return int64(typed), true
-	}
-	return 0, false
-}
-
-func phaseNameForEvent(event domain.EventRecord) string {
-	switch strings.TrimSpace(event.Message) {
-	case "resolved Patreon session":
-		return "provider_session_resolution"
-	case "bootstrapped Patreon session":
-		return "provider_session_bootstrap"
-	case "Patreon collection scan complete":
-		return "provider_collection_scan"
-	case "Patreon feed pagination complete":
-		return "provider_feed_pagination"
-	case "Patreon post detail fetch complete":
-		return "provider_post_detail_fetch"
-	case "Patreon live release listing complete":
-		return "provider_list_releases"
-	case "downloaded Patreon attachment":
-		return "provider_attachment_download"
-	}
-	return ""
-}
-
-func progressHighlightForEvent(event domain.EventRecord, payload map[string]any) string {
-	switch strings.TrimSpace(event.Message) {
-	case "Patreon feed pagination complete":
-		return fmt.Sprintf(
-			"feed pagination discovered=%d pages=%d stop=%s duration=%dms",
-			intOrZero(payload["discovered_ids"]),
-			intOrZero(payload["pages"]),
-			stringOrEmpty(payload["stop_reason"]),
-			intOrZero(payload["duration_ms"]),
-		)
-	case "Patreon post detail fetch complete":
-		return fmt.Sprintf(
-			"post detail fetch completed=%d total=%d failed=%d duration=%dms",
-			intOrZero(payload["completed"]),
-			intOrZero(payload["total_posts"]),
-			intOrZero(payload["failed"]),
-			intOrZero(payload["duration_ms"]),
-		)
-	case "Patreon rate limited request; backing off":
-		return fmt.Sprintf(
-			"rate limited attempt=%d delay=%dms",
-			intOrZero(payload["attempt"]),
-			intOrZero(payload["delay_ms"]),
-		)
-	case "Patreon request budget reduced", "Patreon request budget increased":
-		budget, _ := payload["budget"].(map[string]any)
-		return fmt.Sprintf(
-			"%s limit=%d inflight=%d",
-			strings.ToLower(strings.TrimSpace(event.Message)),
-			intOrZero(budget["limit"]),
-			intOrZero(budget["in_flight"]),
-		)
-	case "Patreon live release listing complete":
-		return fmt.Sprintf(
-			"live listing documents=%d duration=%dms",
-			intOrZero(payload["documents"]),
-			intOrZero(payload["duration_ms"]),
-		)
-	}
-	return ""
-}
-
-func intOrZero(value any) int {
-	switch typed := value.(type) {
-	case float64:
-		return int(typed)
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	}
-	return 0
-}
-
-func stringOrEmpty(value any) string {
-	if typed, ok := value.(string); ok {
-		return typed
-	}
-	return ""
 }
 
 func copySupportFile(src, dstDir string) (string, error) {

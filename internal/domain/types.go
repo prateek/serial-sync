@@ -170,6 +170,7 @@ type EventRecord struct {
 	RunID      string    `json:"run_id"`
 	Timestamp  time.Time `json:"timestamp"`
 	Level      string    `json:"level"`
+	Kind       string    `json:"kind,omitempty"`
 	Component  string    `json:"component"`
 	Message    string    `json:"message"`
 	EntityKind string    `json:"entity_kind"`

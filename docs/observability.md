@@ -24,6 +24,14 @@ Event payload files are stored under:
 
 This is the authoritative per-event history. `serial-sync` no longer duplicates the full event stream into SQLite.
 
+Each event carries a `kind`, a stable name for what the event records, such as
+`release_synced`, `publish_completed` or `publish_failed`. A kind also names the
+event's component, so the two always agree. `internal/observe` owns both writing
+and reading this record: `debug explain` reports counts, phase timings and
+progress highlights read back from the JSONL, keyed on `kind` rather than on
+message text. Run logs written before kinds existed are still classified by
+their message, a fallback that is scheduled for removal after 2026-12-01.
+
 ## What Is Logged
 
 - run start and finish

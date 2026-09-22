@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/observe"
 )
 
 type runLogEvent struct {
@@ -17,6 +18,7 @@ type runLogEvent struct {
 	EventID    string `json:"event_id"`
 	RunID      string `json:"run_id"`
 	Level      string `json:"level"`
+	Kind       string `json:"kind"`
 	Component  string `json:"component"`
 	Message    string `json:"message"`
 	EntityKind string `json:"entity_kind"`
@@ -79,6 +81,7 @@ func runLogEventRecord(entry runLogEvent, runID string, index int) (domain.Event
 		RunID:      logRunID,
 		Timestamp:  timestamp,
 		Level:      entry.Level,
+		Kind:       entry.Kind,
 		Component:  entry.Component,
 		Message:    entry.Message,
 		EntityKind: entry.EntityKind,
@@ -93,4 +96,21 @@ func syntheticRunEventID(runID string, index int) string {
 
 func parseRunLogTimestamp(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+}
+
+// eventRecordFromLog shapes a run-log event as the record the debug commands
+// serialize, so forensics reports the same identity the event listing does.
+func eventRecordFromLog(event observe.LogEvent) domain.EventRecord {
+	return domain.EventRecord{
+		ID:         event.EventID,
+		RunID:      event.RunID,
+		Timestamp:  event.Timestamp,
+		Level:      event.Level,
+		Kind:       string(event.Kind),
+		Component:  event.Component,
+		Message:    event.Message,
+		EntityKind: event.EntityKind,
+		EntityID:   event.EntityID,
+		PayloadRef: event.PayloadRef,
+	}
 }

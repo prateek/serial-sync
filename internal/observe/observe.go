@@ -35,6 +35,7 @@ type logEntry struct {
 	SourceScope string    `json:"source_scope"`
 	DryRun      bool      `json:"dry_run"`
 	Level       string    `json:"level"`
+	Kind        Kind      `json:"kind,omitempty"`
 	Component   string    `json:"component"`
 	Message     string    `json:"message"`
 	EntityKind  string    `json:"entity_kind,omitempty"`
@@ -64,7 +65,7 @@ func Start(ctx context.Context, repo store.Repository, command string, sourceSco
 		recorder.closeLogs()
 		return nil, err
 	}
-	if err := recorder.Event(ctx, "info", "run", "run started", "", ""); err != nil {
+	if err := recorder.EventK(ctx, "info", KindRunStarted, "run started", "", ""); err != nil {
 		return nil, err
 	}
 	return recorder, nil
@@ -78,7 +79,29 @@ func (r *Recorder) Event(ctx context.Context, level, component, message, entityK
 	return r.EventData(ctx, level, component, message, entityKind, entityID, nil)
 }
 
+// EventData records an event without a declared kind. Prefer EventK /
+// EventDataK at new emit sites so forensics reads a stable field; the
+// reader keeps a marked-for-removal substring fallback for these lines.
 func (r *Recorder) EventData(ctx context.Context, level, component, message, entityKind, entityID string, payload any) error {
+	return r.eventData(ctx, level, "", component, message, entityKind, entityID, payload)
+}
+
+// EventK records a kinded event without a payload; the kind also names the
+// component, so the writer declares what happened exactly once.
+func (r *Recorder) EventK(ctx context.Context, level string, kind Kind, message, entityKind, entityID string) error {
+	return r.event(ctx, level, kind, message, entityKind, entityID, nil)
+}
+
+// EventDataK records a kinded event with a payload.
+func (r *Recorder) EventDataK(ctx context.Context, level string, kind Kind, message, entityKind, entityID string, payload any) error {
+	return r.event(ctx, level, kind, message, entityKind, entityID, payload)
+}
+
+func (r *Recorder) event(ctx context.Context, level string, kind Kind, message, entityKind, entityID string, payload any) error {
+	return r.eventData(ctx, level, string(kind), kind.Component(), message, entityKind, entityID, payload)
+}
+
+func (r *Recorder) eventData(ctx context.Context, level, kind, component, message, entityKind, entityID string, payload any) error {
 	payloadRef, err := r.writePayload(payload)
 	if err != nil {
 		return err
@@ -88,6 +111,7 @@ func (r *Recorder) EventData(ctx context.Context, level, component, message, ent
 		RunID:      r.run.ID,
 		Timestamp:  time.Now().UTC(),
 		Level:      strings.ToLower(level),
+		Kind:       kind,
 		Component:  component,
 		Message:    message,
 		EntityKind: entityKind,
@@ -97,11 +121,11 @@ func (r *Recorder) EventData(ctx context.Context, level, component, message, ent
 	if err := r.repo.AddEvent(ctx, event); err != nil {
 		return err
 	}
-	return r.log(event.ID, event.Level, event.Component, event.Message, event.EntityKind, event.EntityID, event.PayloadRef)
+	return r.log(event.ID, event.Level, kind, event.Component, event.Message, event.EntityKind, event.EntityID, event.PayloadRef)
 }
 
 func (r *Recorder) Finish(ctx context.Context, status domain.RunStatus, summary string) error {
-	if err := r.EventData(ctx, "info", "run", "run finished: "+string(status), "", "", map[string]any{
+	if err := r.EventDataK(ctx, "info", KindRunFinished, "run finished: "+string(status), "", "", map[string]any{
 		"status":  status,
 		"summary": summary,
 	}); err != nil {
@@ -173,7 +197,7 @@ func (r *Recorder) writePayload(payload any) (string, error) {
 	return payloadPath, nil
 }
 
-func (r *Recorder) log(eventID, level, component, message, entityKind, entityID, payloadRef string) error {
+func (r *Recorder) log(eventID, level, kind, component, message, entityKind, entityID, payloadRef string) error {
 	entry := logEntry{
 		Timestamp:   time.Now().UTC(),
 		EventID:     eventID,
@@ -182,6 +206,7 @@ func (r *Recorder) log(eventID, level, component, message, entityKind, entityID,
 		SourceScope: r.run.SourceScope,
 		DryRun:      r.run.DryRun,
 		Level:       strings.ToLower(level),
+		Kind:        Kind(kind),
 		Component:   component,
 		Message:     message,
 		EntityKind:  entityKind,

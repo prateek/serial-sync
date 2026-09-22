@@ -153,7 +153,7 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 					TargetRef:  identity.Ref,
 					Action:     "skipped",
 				})
-				_ = recorder.EventData(ctx, "info", "publish", "publish skipped: identical artifact already published", "artifact", candidate.Artifact.ID, map[string]any{
+				_ = recorder.EventDataK(ctx, "info", observe.KindPublishSkipped, "publish skipped: identical artifact already published", "artifact", candidate.Artifact.ID, map[string]any{
 					"artifact_id":  candidate.Artifact.ID,
 					"target_id":    target.ID,
 					"target_kind":  pt.Kind(),
@@ -175,7 +175,7 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 					Action:     "planned",
 				}
 				outcome.Items = append(outcome.Items, item)
-				_ = recorder.EventData(ctx, "info", "publish", "planned "+pt.Kind()+" publish", "artifact", candidate.Artifact.ID, item)
+				_ = recorder.EventDataK(ctx, "info", observe.KindPublishPlanned, "planned "+pt.Kind()+" publish", "artifact", candidate.Artifact.ID, item)
 				continue
 			}
 			record, pubErr := s.deliverCandidate(ctx, recorder.RunID(), pt, target, plan, candidate, identity, snapshot.Records)
@@ -202,7 +202,7 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 						Message:     pubErr.Error(),
 					})
 				}
-				_ = recorder.EventData(ctx, "error", "publish", pubErr.Error(), "artifact", candidate.Artifact.ID, outcome.Items[len(outcome.Items)-1])
+				_ = recorder.EventDataK(ctx, "error", observe.KindPublishFailed, pubErr.Error(), "artifact", candidate.Artifact.ID, outcome.Items[len(outcome.Items)-1])
 				continue
 			}
 			if err := s.Repo.UpsertPublishRecord(ctx, record); err != nil {
@@ -219,7 +219,7 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 				Action:     "published",
 				Message:    record.Message,
 			})
-			_ = recorder.EventData(ctx, "info", "publish", record.TargetKind+" publish completed", "artifact", candidate.Artifact.ID, record)
+			_ = recorder.EventDataK(ctx, "info", observe.KindPublishCompleted, record.TargetKind+" publish completed", "artifact", candidate.Artifact.ID, record)
 		}
 		if dryRun {
 			break

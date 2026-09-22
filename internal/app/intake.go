@@ -276,12 +276,12 @@ func (ri *releaseIntake) apply(ctx context.Context, recorder *observe.Recorder, 
 	}
 
 	if plan.Action == "noop" || plan.Action == "blocked" || plan.Action == "legacy_rebuild_available" {
-		_ = recorder.EventData(ctx, "info", "sync", "release unchanged", "release", plan.Release.ID, itemPlan)
+		_ = recorder.EventDataK(ctx, "info", observe.KindReleaseUnchanged, "release unchanged", "release", plan.Release.ID, itemPlan)
 		return itemPlan, false, false, nil
 	}
 
 	if plan.DryRun {
-		_ = recorder.EventData(ctx, "info", "sync", "planned release sync", "release", plan.Release.ID, itemPlan)
+		_ = recorder.EventDataK(ctx, "info", observe.KindReleasePlanned, "planned release sync", "release", plan.Release.ID, itemPlan)
 		return itemPlan, true, plan.NeedsMaterialize, nil
 	}
 
@@ -330,7 +330,7 @@ func (ri *releaseIntake) apply(ctx context.Context, recorder *observe.Recorder, 
 		return domain.SyncItemPlan{}, false, false, err
 	}
 
-	_ = recorder.EventData(ctx, "info", "sync", "release synced", "release", plan.Release.ID, map[string]any{
+	_ = recorder.EventDataK(ctx, "info", observe.KindReleaseSynced, "release synced", "release", plan.Release.ID, map[string]any{
 		"plan":         itemPlan,
 		"materialized": materialized,
 		"artifact_id":  art.ID,

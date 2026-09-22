@@ -31,11 +31,11 @@ func TestReadOnlyCatalogSortsLargeLibraryWithoutWriting(t *testing.T) {
 		id := fmt.Sprintf("release-%04d", i)
 		if err := writable.SaveSyncSnapshot(ctx, store.SyncSnapshot{
 			Source: domain.Source{ID: "fictional-source", Enabled: true},
-			Track: domain.StoryTrack{ID: "fictional-track", SourceID: "fictional-source", TrackKey: "story"},
+			Track:  domain.StoryTrack{ID: "fictional-track", SourceID: "fictional-source", TrackKey: "story"},
 			Release: domain.Release{ID: id, SourceID: "fictional-source", ProviderReleaseID: id,
 				Title: strings.Repeat("Synthetic title ", 300), PublishedAt: time.Unix(int64(i), 0)},
 			Assignment: domain.ReleaseAssignment{ReleaseID: id, TrackID: "fictional-track"},
-			Artifact: domain.Artifact{ID: "artifact-" + id, ReleaseID: id, IsCanonical: true},
+			Artifact:   domain.Artifact{ID: "artifact-" + id, ReleaseID: id, IsCanonical: true},
 		}); err != nil {
 			t.Fatal(err)
 		}
