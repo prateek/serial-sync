@@ -17,7 +17,6 @@ import (
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/publish"
-	"github.com/prateek/serial-sync/internal/sequence"
 )
 
 type canonicalSidecar struct {
@@ -187,7 +186,6 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 	var content []byte
 	var originalFileName string
 	var mimeType string
-	var kind string
 	var selectedAttachment bool
 	selection := classify.SelectContent(normalized, decision)
 	switch selection.Kind {
@@ -217,22 +215,27 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 	default:
 		return domain.ArtifactPlan{}, fmt.Errorf("unsupported content strategy %q", decision.ContentStrategy)
 	}
-	preserveEmbedded := selectedAttachment && (strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub"))
-	validateEPUBCheck := false
-	content, originalFileName, mimeType, validateEPUBCheck, err = applyOutputProfile(ctx, track, release, normalized, decision, content, originalFileName, mimeType, selectedAttachment)
-	if err != nil {
-		return domain.ArtifactPlan{}, err
+	preface := shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized)
+	outputFormat := decision.OutputFormat
+	if outputFormat == "" {
+		outputFormat = domain.OutputFormatPreserve
 	}
+	described := describeOutputProfile(outputFormat, originalFileName, mimeType, selectedAttachment, preface)
+	profile := applyOutputProfile(ctx, track, release, normalized, decision, content, originalFileName, mimeType, selectedAttachment)
+	if profile.Err != nil {
+		return domain.ArtifactPlan{}, profile.Err
+	}
+	content, originalFileName, mimeType = profile.Content, profile.FileName, profile.MIMEType
+	validateEPUBCheck := described.NeedsEPUBCheck
 	if validateEPUBCheck || decision.Publication != nil && mimeType == "application/epub+zip" {
-		info := sequence.Detect(normalized.Title, originalFileName)
-		position := info.Chapter
+		position := 0
 		if decision.Sequence != nil {
 			position = decision.Sequence.Position
 		}
 		content, err = withPublicationMetadata(content, publicationMetadata{
 			Title: release.Title, Author: firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName),
 			Series: track.TrackName, Position: position, PublishedAt: release.PublishedAt,
-			PreserveEmbedded: preserveEmbedded, Publication: decision.Publication,
+			PreserveEmbedded: described.PreserveEmbedded, Publication: decision.Publication,
 		})
 		if err != nil {
 			return domain.ArtifactPlan{}, err
@@ -250,7 +253,7 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 	if err != nil {
 		return domain.ArtifactPlan{}, err
 	}
-	kind = attachmentKind(fileName, mimeType)
+	kind := attachmentKind(fileName, mimeType)
 	sum := sha256.Sum256(content)
 	return domain.ArtifactPlan{
 		MetadataAssets:    assets,

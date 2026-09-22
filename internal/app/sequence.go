@@ -7,6 +7,10 @@ import (
 	"github.com/prateek/serial-sync/internal/sequence"
 )
 
+// archivedSequence answers where a stored chapter sits in its series. The
+// sidecar is the record of the last build; the Detect fallback below serves
+// ONLY sidecar-less legacy chapters (written before the sidecar existed) and
+// can go away once those are rebuilt.
 func archivedSequence(candidate domain.PublishCandidate, series config.SeriesConfig) domain.Sequence {
 	if recorded := artifact.ArchivedSequence(candidate.Artifact); recorded != nil {
 		return *recorded

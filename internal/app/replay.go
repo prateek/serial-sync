@@ -355,7 +355,7 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 			track := domain.StoryTrack{ID: source + "/" + decision.TrackKey, TrackKey: decision.TrackKey, TrackName: decision.TrackName, CanonicalAuthor: decision.CanonicalAuthor}
 			stored := domain.Release{ID: source + "/" + release.ProviderReleaseID, ProviderReleaseID: release.ProviderReleaseID, PublishedAt: release.PublishedAt, Title: release.Title}
 			description := artifact.Describe(track, stored, release, decision)
-			filename := artifact.PreviewFilenameFor(track, stored, release, decision, description)
+			filename := description.FileName
 			classification, _ := replayStates(cfg, source, release, decisions[i])
 			if options.ShowPosts {
 				preview.Posts[i].Sequence = decision.Sequence

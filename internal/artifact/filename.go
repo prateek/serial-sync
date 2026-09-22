@@ -6,44 +6,13 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/domain"
-	"github.com/prateek/serial-sync/internal/sequence"
 )
 
-type OutputDescription struct {
-	Filename string
-	MIMEType string
-}
-
-// Describe is the one cheap description of a planned output: its filename and
-// MIME type. Plan and both previews share it, so preview names cannot drift
-// from materialization.
-func Describe(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision) OutputDescription {
-	name, mime := "chapter.html", "text/html"
-	if classify.SelectContent(normalized, decision).Kind == "attachment" {
-		if attachment, ok := classify.SelectAttachment(normalized, decision); ok {
-			name, mime = attachment.FileName, attachment.MIMEType
-		}
-	}
-	if decision.OutputFormat == domain.OutputFormatEPUB {
-		name, mime = forceExtension(name, ".epub"), "application/epub+zip"
-	}
-	return OutputDescription{Filename: name, MIMEType: mime}
-}
-
-func PreviewFilename(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision) string {
-	description := Describe(track, release, normalized, decision)
-	return PreviewFilenameFor(track, release, normalized, decision, description)
-}
-
-// PreviewFilenameFor is the naming step for a caller that already described
-// the output, so Describe runs once.
-func PreviewFilenameFor(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, description OutputDescription) string {
-	return canonicalFileName(track, release, normalized, description.Filename, description.MIMEType, decision.Sequence)
-}
-
-func canonicalFileName(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, originalFileName, mimeType string, override ...*domain.Sequence) string {
+// canonicalFileName builds the final file name from the profiled name, type
+// and the sequence the decider resolved. A nil sequence means no chapter
+// identity, which falls back to the dated title form.
+func canonicalFileName(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, originalFileName, mimeType string, seq *domain.Sequence) string {
 	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(originalFileName)))
 	if ext == "" {
 		ext = extensionForMime(mimeType)
@@ -57,9 +26,9 @@ func canonicalFileName(track domain.StoryTrack, release domain.Release, normaliz
 		trackName = "Release"
 	}
 
-	info := sequence.Detect(normalized.Title, originalFileName)
-	if len(override) > 0 && override[0] != nil {
-		info = *override[0]
+	info := domain.Sequence{}
+	if seq != nil {
+		info = *seq
 	}
 	if info.HasChapter() || info.Part != "" {
 		parts := []string{trackName}

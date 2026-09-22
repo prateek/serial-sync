@@ -28,7 +28,7 @@ func TestApplyOutputProfileWrapsEPUBWithPreface(t *testing.T) {
 		t.Fatalf("buildSimpleEPUB: %v", err)
 	}
 
-	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+	profile := applyOutputProfile(
 		context.Background(),
 		domain.StoryTrack{TrackName: "The Sixth School", CanonicalAuthor: "BlaQQuill"},
 		domain.Release{Title: "Book Two Chapter 058"},
@@ -46,9 +46,10 @@ func TestApplyOutputProfileWrapsEPUBWithPreface(t *testing.T) {
 		"application/epub+zip",
 		true,
 	)
-	if err != nil {
-		t.Fatalf("applyOutputProfile: %v", err)
+	if profile.Err != nil {
+		t.Fatalf("applyOutputProfile: %v", profile.Err)
 	}
+	content, fileName, mimeType, validateEPUBCheck := profile.Content, profile.FileName, profile.MIMEType, profile.NeedsCheck
 	if got, want := fileName, "chapter-058.epub"; got != want {
 		t.Fatalf("fileName = %q, want %q", got, want)
 	}
@@ -76,7 +77,7 @@ func TestApplyOutputProfileWrapsEPUB2PrefacePassesEPUBCheck(t *testing.T) {
 	t.Parallel()
 
 	original := buildEPUB2Fixture(t)
-	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+	profile := applyOutputProfile(
 		context.Background(),
 		domain.StoryTrack{TrackName: "Wrapped Book", CanonicalAuthor: "Author Name"},
 		domain.Release{
@@ -98,9 +99,10 @@ func TestApplyOutputProfileWrapsEPUB2PrefacePassesEPUBCheck(t *testing.T) {
 		"application/epub+zip",
 		true,
 	)
-	if err != nil {
-		t.Fatalf("applyOutputProfile: %v", err)
+	if profile.Err != nil {
+		t.Fatalf("applyOutputProfile: %v", profile.Err)
 	}
+	content, fileName, mimeType, validateEPUBCheck := profile.Content, profile.FileName, profile.MIMEType, profile.NeedsCheck
 	if got, want := fileName, "chapter-1.epub"; got != want {
 		t.Fatalf("fileName = %q, want %q", got, want)
 	}
@@ -120,7 +122,7 @@ func TestApplyOutputProfileWrapsEPUB2PrefacePassesEPUBCheck(t *testing.T) {
 func TestApplyOutputProfileBuildsEPUBFromHTML(t *testing.T) {
 	t.Parallel()
 
-	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+	profile := applyOutputProfile(
 		context.Background(),
 		domain.StoryTrack{TrackName: "Main Series", CanonicalAuthor: "Author Name"},
 		domain.Release{Title: "Chapter 1"},
@@ -136,9 +138,10 @@ func TestApplyOutputProfileBuildsEPUBFromHTML(t *testing.T) {
 		"text/html",
 		false,
 	)
-	if err != nil {
-		t.Fatalf("applyOutputProfile: %v", err)
+	if profile.Err != nil {
+		t.Fatalf("applyOutputProfile: %v", profile.Err)
 	}
+	content, fileName, mimeType, validateEPUBCheck := profile.Content, profile.FileName, profile.MIMEType, profile.NeedsCheck
 	if got, want := fileName, "chapter-1.epub"; got != want {
 		t.Fatalf("fileName = %q, want %q", got, want)
 	}
@@ -162,7 +165,7 @@ func TestApplyOutputProfileAcceptsMultiIdentifierEPUBWithoutPreface(t *testing.T
 	t.Parallel()
 
 	original := buildMultiIdentifierEPUB3Fixture(t)
-	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+	profile := applyOutputProfile(
 		context.Background(),
 		domain.StoryTrack{TrackName: "Main Series", CanonicalAuthor: "Author Name"},
 		domain.Release{
@@ -182,9 +185,10 @@ func TestApplyOutputProfileAcceptsMultiIdentifierEPUBWithoutPreface(t *testing.T
 		"application/epub+zip",
 		false,
 	)
-	if err != nil {
-		t.Fatalf("applyOutputProfile: %v", err)
+	if profile.Err != nil {
+		t.Fatalf("applyOutputProfile: %v", profile.Err)
 	}
+	content, fileName, mimeType, validateEPUBCheck := profile.Content, profile.FileName, profile.MIMEType, profile.NeedsCheck
 	if !bytes.Equal(content, original) {
 		t.Fatalf("no-preface EPUB path should preserve the original archive")
 	}

@@ -230,28 +230,25 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 			return result, err
 		}
 		description := artifact.Describe(track, release, normalized, decision)
-		name := artifact.PreviewFilenameFor(track, release, normalized, decision, description)
-		plan := domain.SyncItemPlan{SourceID: candidate.Source.ID, ProviderReleaseID: release.ProviderReleaseID, Title: release.Title, TrackKey: track.TrackKey, Filename: name, Action: "rebuild"}
+		plan := domain.SyncItemPlan{SourceID: candidate.Source.ID, ProviderReleaseID: release.ProviderReleaseID, Title: release.Title, TrackKey: track.TrackKey, Filename: description.FileName, Action: "rebuild"}
 		if artifact.IsCurrent(candidate.Artifact, release, track, decision) {
 			plan.Action = "unchanged"
 		} else {
-			// The rebuild artifacts do not exist yet; the planned: id marks a
-			// to-be-built candidate so the planner treats it as pending
-			// delivery rather than an already-published artifact. A dedicated
-			// planned-release value carrying the decision would be cleaner and
-			// is tracked separately.
-			candidate.Artifact.ID = "planned:" + release.ID
+			// The rebuild artifact does not exist yet. Planned marks the
+			// candidate as not-yet-stored: it never clears a delivered
+			// record from the desired set and cannot match one as unchanged.
+			candidate.Planned = true
 			candidate.Artifact.SHA256 = ""
 		}
 		candidate.Track = track
 		candidate.Assignment.ReleaseRole = decision.ReleaseRole
-		candidate.Artifact.Filename = name
+		candidate.Artifact.Filename = description.FileName
 		candidate.Artifact.MIMEType = description.MIMEType
 		result.Plans = append(result.Plans, plan)
 	}
 	materializable := candidates[:0]
 	for _, candidate := range candidates {
-		if candidate.Artifact.ID != "" {
+		if candidate.Artifact.ID != "" || candidate.Planned {
 			materializable = append(materializable, candidate)
 		}
 	}

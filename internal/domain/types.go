@@ -277,8 +277,12 @@ type SyncResult struct {
 	MaterializedArtifacts int                  `json:"materialized_artifacts"`
 	Plans                 []SyncItemPlan       `json:"plans"`
 }
-
 type PublishCandidate struct {
+	// Planned marks a candidate whose reading copy is not materialized yet
+	// (a rebuild preview). It can replace a delivered record's destination
+	// but never counts as that record's desired successor: the copy it
+	// points at does not exist until the rebuild runs.
+	Planned    bool              `json:"planned,omitempty"`
 	Source     Source            `json:"source"`
 	Track      StoryTrack        `json:"track"`
 	Release    Release           `json:"release"`

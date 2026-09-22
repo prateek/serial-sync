@@ -3,9 +3,11 @@ package artifact
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,44 +16,88 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
-// Direct tests for the artifact module's output description and metadata
+// Direct tests for the artifact module's reading-copy description and metadata
 // steps: no store, provider or EPUB checker is involved.
 
-func describeCase(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision) OutputDescription {
-	return Describe(track, release, normalized, decision)
-}
-
-func TestDescribeMatchesPlanNaming(t *testing.T) {
+// The describe-only preview and the materializing Plan must agree on the
+// reading copy's file name and type for the same inputs. The PDF row needs
+// Calibre and runs only in the container.
+func TestReadingCopyDescribeAgreesWithMaterialize(t *testing.T) {
 	track := domain.StoryTrack{TrackKey: "harbor", TrackName: "Harbor", CanonicalAuthor: "Test Author"}
-	release := domain.Release{ID: "rel_1", ProviderReleaseID: "r1", Title: "Harbor Chapter 1"}
-	normalized := domain.NormalizedRelease{ProviderReleaseID: "r1", Title: "Harbor Chapter 1", TextPlain: "body"}
-	textDecision := domain.TrackDecision{SeriesID: "harbor", TrackKey: "harbor", TrackName: "Harbor", ContentStrategy: domain.ContentStrategyTextPost, OutputFormat: domain.OutputFormatPreserve, CanonicalAuthor: "Test Author", Matched: true}
-	description := describeCase(track, release, normalized, textDecision)
-	if description.MIMEType != "text/html" || description.Filename == "" {
-		t.Fatalf("preserve description: %+v", description)
+	release := domain.Release{ID: "rel_1", SourceID: "fictional", ProviderReleaseID: "r1", Title: "Harbor Chapter 1"}
+	seq := domain.Sequence{Chapter: 1, Position: 1}
+	epubBytes := func(t *testing.T) []byte {
+		t.Helper()
+		content, err := buildSimpleEPUB("Harbor", "Test Author", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), []epubChapter{{FileName: "chapter-001.xhtml", Title: "Harbor Chapter 1", BodyHTML: "<p>body</p>"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return content
 	}
-	if got := PreviewFilename(track, release, normalized, textDecision); got != "harbor-ch0001.html" {
-		t.Fatalf("PreviewFilename = %q, want harbor-ch0001.html", got)
+	write := func(t *testing.T, name string, data []byte) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	epubDecision := textDecision
-	epubDecision.OutputFormat = domain.OutputFormatEPUB
-	epubDescription := describeCase(track, release, normalized, epubDecision)
-	if epubDescription.MIMEType != "application/epub+zip" || !strings.HasSuffix(epubDescription.Filename, ".epub") {
-		t.Fatalf("epub description: %+v", epubDescription)
+
+	textPost := domain.NormalizedRelease{ProviderReleaseID: "r1", Title: "Harbor Chapter 1", TextPlain: "body"}
+	epubAttachment := func(path string) domain.NormalizedRelease {
+		return domain.NormalizedRelease{ProviderReleaseID: "r1", Title: "Harbor Chapter 1", TextPlain: "body", Attachments: []domain.Attachment{{FileName: "chapter.epub", MIMEType: "application/epub+zip", LocalPath: path}}}
 	}
-	attachment := filepath.Join(t.TempDir(), "chapter.pdf")
-	if err := os.WriteFile(attachment, []byte("bytes"), 0o644); err != nil {
-		t.Fatal(err)
+	pdfAttachment := func(path string) domain.NormalizedRelease {
+		return domain.NormalizedRelease{ProviderReleaseID: "r1", Title: "Harbor Chapter 1", TextPlain: "body", Attachments: []domain.Attachment{{FileName: "chapter.pdf", MIMEType: "application/pdf", LocalPath: path}}}
 	}
-	attachmentDecision := textDecision
-	attachmentDecision.ContentStrategy = domain.ContentStrategyAttachmentOnly
-	attachmentDecision.OutputFormat = domain.OutputFormatPreserve
-	file := domain.Attachment{FileName: "chapter.pdf", MIMEType: "application/pdf", LocalPath: attachment}
-	attachmentNormalized := normalized
-	attachmentNormalized.Attachments = []domain.Attachment{file}
-	attachmentDescription := describeCase(track, release, attachmentNormalized, attachmentDecision)
-	if attachmentDescription.MIMEType != "application/pdf" || attachmentDescription.Filename != "chapter.pdf" {
-		t.Fatalf("preserved attachment description: %+v", attachmentDescription)
+	base := domain.TrackDecision{SeriesID: "harbor", TrackKey: "harbor", TrackName: "Harbor", CanonicalAuthor: "Test Author", Matched: true, Sequence: &seq}
+	strategy := func(decision domain.TrackDecision, format domain.OutputFormat, contentStrategy domain.ContentStrategy, preface domain.PrefaceMode) domain.TrackDecision {
+		decision.OutputFormat = format
+		decision.ContentStrategy = contentStrategy
+		decision.PrefaceMode = preface
+		return decision
+	}
+
+	for _, tc := range []struct {
+		name         string
+		normalized   domain.NormalizedRelease
+		decision     domain.TrackDecision
+		needsCalibre bool
+	}{
+		{name: "text_post preserve", normalized: textPost, decision: strategy(base, domain.OutputFormatPreserve, domain.ContentStrategyTextPost, "")},
+		{name: "text_post epub", normalized: textPost, decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyTextPost, "")},
+		{name: "epub attachment preserve", normalized: epubAttachment(""), decision: strategy(base, domain.OutputFormatPreserve, domain.ContentStrategyAttachmentOnly, "")},
+		{name: "epub attachment epub", normalized: epubAttachment(""), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, "")},
+		{name: "epub attachment epub with preface", normalized: epubAttachment(""), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, domain.PrefaceModePrependPost)},
+		{name: "pdf attachment epub", normalized: pdfAttachment("../../testdata/fixtures/reader/chapter.pdf"), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, ""), needsCalibre: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.needsCalibre {
+				if _, err := exec.LookPath("ebook-convert"); err != nil {
+					t.Skip("Calibre-backed conversion runs in the container")
+				}
+			}
+			normalized := tc.normalized
+			for i := range normalized.Attachments {
+				if normalized.Attachments[i].LocalPath == "" {
+					data := epubBytes(t)
+					name := "chapter.epub"
+					normalized.Attachments[i].LocalPath = write(t, name, data)
+				}
+			}
+			described := Describe(track, release, normalized, tc.decision)
+			m := New(t.TempDir())
+			planned, err := m.Plan(context.Background(), domain.Source{ID: "fictional"}, track, release, normalized, tc.decision, nil)
+			if err != nil {
+				t.Fatalf("Plan: %v", err)
+			}
+			if planned.Filename != described.FileName {
+				t.Fatalf("describe/materialize name mismatch: describe=%q plan=%q", described.FileName, planned.Filename)
+			}
+			if planned.MIMEType != described.MIMEType {
+				t.Fatalf("describe/materialize type mismatch: describe=%q plan=%q", described.MIMEType, planned.MIMEType)
+			}
+		})
 	}
 }
 

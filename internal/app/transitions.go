@@ -97,6 +97,9 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 			if pt.MatchesDestination(record, candidate) {
 				action = "replace"
 			}
+			if candidate.Planned {
+				continue
+			}
 			if candidate.Artifact.ID == record.Artifact.ID && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == publish.PublishHash(target.ID, candidate.Artifact.SHA256, hashInput) {
 				action = "unchanged"
 				if already, checkErr := pt.AlreadyDelivered(ref, candidate.Artifact.SHA256); checkErr != nil || !already {
@@ -312,7 +315,7 @@ func sameDelivery(left, right []domain.PublishCandidate) bool {
 	fingerprint := func(candidates []domain.PublishCandidate) string {
 		items := make([]string, 0, len(candidates))
 		for _, candidate := range candidates {
-			data, _ := json.Marshal([]string{candidate.Artifact.ID, candidate.Artifact.SHA256, candidate.Artifact.Filename, candidate.Source.ID, candidate.Track.TrackKey})
+			data, _ := json.Marshal([]any{candidate.Artifact.ID, candidate.Artifact.SHA256, candidate.Artifact.Filename, candidate.Source.ID, candidate.Track.TrackKey, candidate.Planned})
 			items = append(items, string(data))
 		}
 		sort.Strings(items)

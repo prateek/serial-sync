@@ -8,7 +8,9 @@ The implementation follows the PRD’s ports-and-adapters shape:
 - `internal/store/sqlite`: SQLite backend
 - `internal/config`: the authored document plus a compiled, read-only rule set
   built lazily behind one access path
-- `internal/artifact`: canonical artifact planning and storage
+- `internal/artifact`: canonical artifact planning and storage; the planned
+  reading copy (name, type, validation) is one module shared by previews and
+  materialization
 - `internal/publish`: replayable downstream publishers behind one target seam
   (filesystem and exec adapters)
 - `internal/observe`: run logs, structured events, and support-bundle inputs

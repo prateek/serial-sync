@@ -11,53 +11,72 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
-func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, content []byte, originalFileName, mimeType string, selectedAttachment bool) ([]byte, string, string, bool, error) {
+// outputProfile is applyOutputProfile's answer: the profiled bytes plus the
+// name, type and validation the plan will record. A struct, so callers read
+// named fields instead of five positional values.
+type outputProfile struct {
+	Content    []byte
+	FileName   string
+	MIMEType   string
+	NeedsCheck bool
+	Err        error
+}
+
+// applyOutputProfile turns the selected content into the bytes the library
+// will hold. Name and type follow describeOutputProfile — the same function
+// previews call — so the two modes cannot disagree about what a copy is
+// called; this switch only does the byte work the description promised.
+func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, content []byte, originalFileName, mimeType string, selectedAttachment bool) outputProfile {
 	outputFormat := decision.OutputFormat
 	if outputFormat == "" {
 		outputFormat = domain.OutputFormatPreserve
 	}
+	preface := shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized)
+	described := describeOutputProfile(outputFormat, originalFileName, mimeType, selectedAttachment, preface)
 
 	switch outputFormat {
 	case domain.OutputFormatPreserve:
-		if shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized) &&
-			(strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub")) {
+		if preface && isEPUB(originalFileName, mimeType) {
 			prefaceHTML := renderPrefaceHTML(track, release, normalized)
 			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), prefaceHTML)
 			if err != nil {
-				return nil, "", "", false, err
+				return outputProfile{Err: err}
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
+			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
 		}
-		return content, originalFileName, mimeType, false, nil
+		return outputProfile{Content: content, FileName: originalFileName, MIMEType: mimeType}
 	case domain.OutputFormatEPUB:
 		prefaceHTML := ""
-		if shouldPrependPostPreface(decision, mimeType, selectedAttachment, normalized) {
+		if preface {
 			prefaceHTML = renderPrefaceHTML(track, release, normalized)
 		}
-		if strings.EqualFold(strings.TrimSpace(mimeType), "application/epub+zip") || strings.EqualFold(filepath.Ext(originalFileName), ".epub") {
+		author := firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName)
+		identifier := epubIdentifierForRelease(release, normalized.Title)
+		modified := epubModifiedForRelease(release)
+		if isEPUB(originalFileName, mimeType) {
 			if prefaceHTML == "" {
-				return content, forceExtension(originalFileName, ".epub"), "application/epub+zip", false, nil
+				return outputProfile{Content: content, FileName: described.FileName, MIMEType: described.MIMEType}
 			}
-			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), prefaceHTML)
+			epubContent, err := wrapEPUBWithPreface(content, track.TrackName, author, identifier, modified, prefaceHTML)
 			if err != nil {
-				return nil, "", "", false, err
+				return outputProfile{Err: err}
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
+			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
 		}
-		if strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(originalFileName), ".pdf") {
-			epubContent, err := convertPDFToEPUB(ctx, content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release))
+		if isPDFSource(originalFileName, mimeType) {
+			epubContent, err := convertPDFToEPUB(ctx, content, track.TrackName, author, identifier, modified)
 			if err != nil {
-				return nil, "", "", false, err
+				return outputProfile{Err: err}
 			}
 			if prefaceHTML != "" {
-				epubContent, err = wrapEPUBWithPreface(epubContent, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), prefaceHTML)
+				epubContent, err = wrapEPUBWithPreface(epubContent, track.TrackName, author, identifier, modified, prefaceHTML)
 				if err != nil {
-					return nil, "", "", false, err
+					return outputProfile{Err: err}
 				}
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
+			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
 		}
-		if strings.EqualFold(strings.TrimSpace(mimeType), "text/html") {
+		if isHTMLSource(originalFileName, mimeType) {
 			chapters := []epubChapter{{
 				FileName: "chapter-001.xhtml",
 				Title:    normalized.Title,
@@ -70,16 +89,24 @@ func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release do
 					BodyHTML: prefaceHTML,
 				}}, chapters...)
 			}
-			epubContent, err := buildSimpleEPUB(track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release), chapters)
+			epubContent, err := buildSimpleEPUB(track.TrackName, author, identifier, modified, chapters)
 			if err != nil {
-				return nil, "", "", false, err
+				return outputProfile{Err: err}
 			}
-			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
+			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
 		}
-		return nil, "", "", false, fmt.Errorf("output format %q is only supported for EPUB attachments or HTML/text sources", outputFormat)
+		return outputProfile{Err: fmt.Errorf("output format %q is only supported for EPUB attachments or HTML/text sources", outputFormat)}
 	default:
-		return nil, "", "", false, fmt.Errorf("unsupported output format %q", outputFormat)
+		return outputProfile{Err: fmt.Errorf("unsupported output format %q", outputFormat)}
 	}
+}
+
+func isPDFSource(fileName, mimeType string) bool {
+	return strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(fileName), ".pdf")
+}
+
+func isHTMLSource(fileName, mimeType string) bool {
+	return strings.EqualFold(strings.TrimSpace(mimeType), "text/html")
 }
 
 func shouldPrependPostPreface(decision domain.TrackDecision, mimeType string, selectedAttachment bool, normalized domain.NormalizedRelease) bool {
