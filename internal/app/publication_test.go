@@ -192,3 +192,73 @@ func writePublicationIdentityFixture(t *testing.T, file string) {
 		t.Fatal(err)
 	}
 }
+
+func TestPublicationFormatUpgradeRequiresExplicitRebuild(t *testing.T) {
+	s, _ := newReaderService(t)
+	s.Config.Series[0].Output.Format = "epub"
+	if _, err := s.RunOnce(context.Background(), "", "", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := s.Repo.ListPublishCandidates(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) == 0 {
+		t.Fatal("no stored editions")
+	}
+	before := map[string][]byte{}
+	for _, candidate := range candidates {
+		var sidecar map[string]any
+		if err := json.Unmarshal(mustReadFile(t, candidate.Artifact.MetadataRef), &sidecar); err != nil {
+			t.Fatal(err)
+		}
+		sidecar["output_version"] = 2
+		data, err := json.Marshal(sidecar)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(candidate.Artifact.MetadataRef, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range findFiles(t, s.Config.Publishers[0].Path, ".epub") {
+		before[file] = mustReadFile(t, file)
+	}
+	if result, err := s.RunOnce(context.Background(), "", "", "ordinary sync"); err != nil || result.Publish.Published != 0 {
+		t.Fatalf("format upgrade changed existing copies during sync: %+v %v", result, err)
+	}
+	s.Providers = provider.NewRegistry()
+	preview, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilds := 0
+	for _, plan := range preview.Plans {
+		if plan.Action == "rebuild" {
+			rebuilds++
+		}
+	}
+	if rebuilds != len(candidates) {
+		t.Fatalf("preview selected %d editions, want %d", rebuilds, len(candidates))
+	}
+	for file, data := range before {
+		if !bytes.Equal(data, mustReadFile(t, file)) {
+			t.Fatal("preview or ordinary sync changed published bytes")
+		}
+	}
+	if result, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "upgrade"); err != nil || result.Publish.Published != 0 {
+		t.Fatalf("recipe-only upgrade republished identical bytes: %+v %v", result, err)
+	}
+	again, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "repeat preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range again.Plans {
+		if plan.Action != "unchanged" {
+			t.Fatalf("upgraded edition still needs work: %+v", plan)
+		}
+	}
+	if result, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "repeat"); err != nil || result.Publish.Published != 0 {
+		t.Fatalf("repeat rebuild republished: %+v %v", result, err)
+	}
+}

@@ -18,8 +18,15 @@ func removeAboutNavigation(files map[string][]byte, pkg opfPackage, packagePath,
 	base, about := path.Dir(packagePath), ""
 	for _, item := range pkg.Manifest.Items {
 		if item.ID == aboutID {
-			about, _ = resolveManifestHref(base, item.Href)
+			var err error
+			about, err = resolveManifestHref(base, item.Href)
+			if err != nil {
+				return err
+			}
 		}
+	}
+	if about == "" {
+		return nil
 	}
 	for _, item := range pkg.Manifest.Items {
 		if !strings.Contains(" "+item.Properties+" ", " nav ") && item.MediaType != "application/x-dtbncx+xml" {
@@ -29,55 +36,60 @@ func removeAboutNavigation(files map[string][]byte, pkg opfPackage, packagePath,
 		if err != nil {
 			return err
 		}
-		data := files[entry]
-		decoder := xml.NewDecoder(bytes.NewReader(data))
-		type container struct {
-			start  int64
-			remove bool
-		}
-		var stack []container
 		for {
-			offset := decoder.InputOffset()
-			token, err := decoder.Token()
-			if err == io.EOF {
-				break
+			data := files[entry]
+			decoder := xml.NewDecoder(bytes.NewReader(data))
+			type container struct {
+				start  int64
+				remove bool
 			}
-			if err != nil {
-				return err
-			}
-			switch value := token.(type) {
-			case xml.StartElement:
-				if value.Name.Local == "li" || value.Name.Local == "navPoint" {
-					stack = append(stack, container{start: offset})
+			var stack []container
+			for {
+				offset := decoder.InputOffset()
+				token, err := decoder.Token()
+				if err == io.EOF {
+					break
 				}
-				if len(stack) == 0 {
-					continue
+				if err != nil {
+					return err
 				}
-				for _, attr := range value.Attr {
-					if attr.Name.Local != "href" && attr.Name.Local != "src" {
+				switch value := token.(type) {
+				case xml.StartElement:
+					if value.Name.Local == "li" || value.Name.Local == "navPoint" {
+						stack = append(stack, container{start: offset})
+					}
+					if len(stack) == 0 {
 						continue
 					}
-					u, parseErr := url.Parse(attr.Value)
-					if parseErr != nil || u.IsAbs() {
+					for _, attr := range value.Attr {
+						if attr.Name.Local != "href" && attr.Name.Local != "src" {
+							continue
+						}
+						u, parseErr := url.Parse(attr.Value)
+						if parseErr != nil || u.IsAbs() {
+							continue
+						}
+						linked, _ := resolveManifestHref(path.Dir(entry), u.EscapedPath())
+						if linked == about {
+							stack[len(stack)-1].remove = true
+						}
+					}
+				case xml.EndElement:
+					if (value.Name.Local != "li" && value.Name.Local != "navPoint") || len(stack) == 0 {
 						continue
 					}
-					linked, _ := resolveManifestHref(path.Dir(entry), u.EscapedPath())
-					if linked == about {
-						stack[len(stack)-1].remove = true
+					last := stack[len(stack)-1]
+					stack = stack[:len(stack)-1]
+					if last.remove {
+						files[entry] = append(append([]byte{}, data[:last.start]...), data[decoder.InputOffset():]...)
+						break
 					}
 				}
-			case xml.EndElement:
-				if (value.Name.Local != "li" && value.Name.Local != "navPoint") || len(stack) == 0 {
-					continue
-				}
-				last := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				if last.remove {
-					files[entry] = append(append([]byte{}, data[:last.start]...), data[decoder.InputOffset():]...)
+				if !bytes.Equal(files[entry], data) {
 					break
 				}
 			}
-			if !bytes.Equal(files[entry], data) {
+			if bytes.Equal(files[entry], data) {
 				break
 			}
 		}
@@ -93,14 +105,8 @@ type ncxPoint struct {
 	Points []ncxPoint `xml:"navPoint"`
 }
 
-func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, prefix, aboutID string) ([]epubChapter, error) {
+func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, prefix string) ([]epubChapter, error) {
 	base := path.Dir(packagePath)
-	aboutPath := ""
-	for _, item := range pkg.Manifest.Items {
-		if item.ID == aboutID {
-			aboutPath, _ = resolveManifestHref(base, item.Href)
-		}
-	}
 	for _, item := range pkg.Manifest.Items {
 		if !strings.Contains(" "+item.Properties+" ", " nav ") {
 			continue
@@ -130,7 +136,7 @@ func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, pref
 		}
 		find(document)
 		if toc != nil {
-			return navigationList(toc, entry, prefix, aboutPath), nil
+			return navigationList(toc, entry, prefix), nil
 		}
 	}
 	for _, item := range pkg.Manifest.Items {
@@ -151,7 +157,7 @@ func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, pref
 		convert = func(points []ncxPoint) []epubChapter {
 			var result []epubChapter
 			for _, point := range points {
-				href := relocatedNavigationHref(point.Content.Src, entry, prefix, aboutPath)
+				href := relocatedNavigationHref(point.Content.Src, entry, prefix)
 				if href != "" {
 					result = append(result, epubChapter{FileName: href, Title: point.Label, Children: convert(point.Points)})
 				}
@@ -163,7 +169,7 @@ func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, pref
 	return nil, nil
 }
 
-func navigationList(list *html.Node, documentPath, prefix, aboutPath string) []epubChapter {
+func navigationList(list *html.Node, documentPath, prefix string) []epubChapter {
 	var result []epubChapter
 	for li := list.FirstChild; li != nil; li = li.NextSibling {
 		if li.Type != html.ElementNode || li.Data != "li" {
@@ -188,7 +194,7 @@ func navigationList(list *html.Node, documentPath, prefix, aboutPath string) []e
 		if label.Data == "a" {
 			for _, attr := range label.Attr {
 				if attr.Key == "href" {
-					chapter.FileName = relocatedNavigationHref(attr.Val, documentPath, prefix, aboutPath)
+					chapter.FileName = relocatedNavigationHref(attr.Val, documentPath, prefix)
 				}
 			}
 			if chapter.FileName == "" {
@@ -196,14 +202,14 @@ func navigationList(list *html.Node, documentPath, prefix, aboutPath string) []e
 			}
 		}
 		if children != nil {
-			chapter.Children = navigationList(children, documentPath, prefix, aboutPath)
+			chapter.Children = navigationList(children, documentPath, prefix)
 		}
 		result = append(result, chapter)
 	}
 	return result
 }
 
-func relocatedNavigationHref(href, documentPath, prefix, aboutPath string) string {
+func relocatedNavigationHref(href, documentPath, prefix string) string {
 	u, err := url.Parse(href)
 	if err != nil || u.IsAbs() || u.Host != "" || href == "" {
 		return ""
@@ -212,7 +218,7 @@ func relocatedNavigationHref(href, documentPath, prefix, aboutPath string) strin
 	if u.Path != "" {
 		entry, err = resolveManifestHref(path.Dir(documentPath), u.EscapedPath())
 	}
-	if err != nil || entry == aboutPath {
+	if err != nil {
 		return ""
 	}
 	u.Path, u.RawPath = path.Join(prefix, entry), ""

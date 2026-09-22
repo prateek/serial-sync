@@ -44,7 +44,7 @@ func readCanonicalSidecar(artifact domain.Artifact) (*canonicalSidecar, bool) {
 // release, track and decision, matching the sidecar the planner wrote.
 func IsCurrent(artifact domain.Artifact, release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
 	meta, ok := readCanonicalSidecar(artifact)
-	if !ok || meta.OutputVersion != 2 {
+	if !ok || meta.OutputVersion != outputVersion(decision) {
 		return false
 	}
 	if meta.Decision.SelectedContent == nil && meta.Normalized != nil {
@@ -97,11 +97,17 @@ func PublicationFingerprint(metadata *domain.PublicationMetadata) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// IsLegacy answers whether a stored artifact predates the output_version: 2
-// sidecar and still needs an explicit migration rebuild.
+// IsLegacy identifies artifacts whose output format requires an explicit rebuild.
 func IsLegacy(artifact domain.Artifact) bool {
 	meta, ok := readCanonicalSidecar(artifact)
-	return !ok || meta.OutputVersion < 2
+	return !ok || meta.OutputVersion < outputVersion(meta.Decision)
+}
+
+func outputVersion(decision domain.TrackDecision) int {
+	if decision.OutputFormat == domain.OutputFormatEPUB {
+		return 3
+	}
+	return 2
 }
 
 // ArchivedSequence returns the sequence this stored artifact was built with,
@@ -137,7 +143,7 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 		return domain.ArtifactPlan{}, errors.New("release does not produce a materializable canonical artifact")
 	}
 	meta := map[string]any{
-		"output_version": 2,
+		"output_version": outputVersion(decision),
 		"source":         source,
 		"track":          track,
 		"release":        release,

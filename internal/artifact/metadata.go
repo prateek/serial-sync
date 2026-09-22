@@ -18,6 +18,7 @@ type publicationMetadata struct {
 	Position              int
 	PublishedAt           time.Time
 	PreserveEmbedded      bool
+	IncludeAbout          bool
 	Publication           *domain.PublicationMetadata
 }
 
@@ -60,6 +61,11 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 		kept = append(kept, meta)
 	}
 	pkg.Metadata.Meta = kept
+	if metadata.Publication != nil {
+		if err := decoratePublication(files, &pkg, packagePath, *metadata.Publication, metadata.IncludeAbout); err != nil {
+			return nil, err
+		}
+	}
 	if metadata.Series != "" {
 		pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: "calibre:series", Content: metadata.Series})
 		if metadata.Position > 0 {
@@ -67,7 +73,7 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 		}
 		if strings.HasPrefix(pkg.Version, "3") {
 			id := "serial-sync-series"
-			for suffix := 1; bytes.Contains(files[packagePath], []byte(`id="`+id+`"`)); suffix++ {
+			for suffix := 1; bytes.Contains(mustXML(pkg), []byte(`id="`+id+`"`)); suffix++ {
 				id = fmt.Sprintf("serial-sync-series-%d", suffix)
 			}
 			pkg.Metadata.Meta = append(pkg.Metadata.Meta,
@@ -79,12 +85,11 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 			}
 		}
 	}
-	if metadata.Publication != nil {
-		if err := decoratePublication(files, &pkg, packagePath, *metadata.Publication); err != nil {
-			return nil, err
-		}
+	data, err := xml.Marshal(pkg)
+	if err != nil {
+		return nil, err
 	}
-	files[packagePath] = mustXML(pkg)
+	files[packagePath] = append([]byte(xml.Header), data...)
 	return writeStructurallyValidatedEPUBArchive(files)
 }
 

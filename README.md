@@ -67,7 +67,7 @@ Both reject unknown config keys and invalid rule values before provider work.
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem` and `exec` publishing are implemented
-- series output can preserve source attachments or emit EPUBCheck-validated EPUB with portable metadata, artwork, and a final About page, including EPUB 2 attachments
+- series output can preserve source attachments or emit EPUBCheck-validated EPUB with portable metadata and artwork, including EPUB 2 attachments; standalone chapters end with their original content, and assembled books/volumes can carry one author page
 - published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
 - generated chapter EPUBs have distinct titles and Calibre/EPUB 3 series positions
 - curated author profiles and series/book artwork are retained outside content identity; `metadata.identity_source = "release"` repairs unreliable attachment titles/authors from the post and configured author; existing copies adopt metadata edits only through explicit rebuild

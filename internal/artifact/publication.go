@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -11,54 +12,56 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
 const aboutMarker = "serial-sync:about"
+const authorMarker = "serial-sync:author"
 
-func decoratePublication(files map[string][]byte, pkg *opfPackage, packagePath string, metadata domain.PublicationMetadata) error {
-	if !metadata.DescriptionOverride {
-		for _, element := range pkg.Metadata.DCElements {
-			if element.Name == "description" && strings.TrimSpace(element.Value) != "" {
-				metadata.Description = element.Value
-				break
-			}
-		}
+type publicationAuthor struct {
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	Biography string `json:"biography,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Portrait  string `json:"portrait,omitempty"`
+}
+
+func decoratePublication(files map[string][]byte, pkg *opfPackage, packagePath string, metadata domain.PublicationMetadata, includeAbout bool) error {
+	if err := removeGeneratedAbout(files, pkg, packagePath); err != nil {
+		return err
 	}
+	authors, err := embedPublicationMetadata(files, pkg, packagePath, metadata)
+	if err != nil {
+		return err
+	}
+	if includeAbout {
+		return appendAboutPage(files, pkg, packagePath, authors, metadata.Links, metadata.SourceURL)
+	}
+	return nil
+}
+
+func embedPublicationMetadata(files map[string][]byte, pkg *opfPackage, packagePath string, metadata domain.PublicationMetadata) ([]publicationAuthor, error) {
 	if metadata.Description != "" && (metadata.DescriptionOverride || !hasDCElement(pkg.Metadata.DCElements, "description")) {
 		setPublicationDC(&pkg.Metadata, "description", metadata.Description)
 	}
 	if metadata.Language != "" {
 		setPublicationDC(&pkg.Metadata, "language", metadata.Language)
 	}
-	base := path.Dir(packagePath)
-	directory := "serial-sync"
-	for n := 1; files[path.Join(base, directory, "about.xhtml")] != nil; n++ {
-		directory = fmt.Sprintf("serial-sync-%d", n)
+	addLink := func(name, link string) {
+		if validPublicationURL(link) && !slices.ContainsFunc(pkg.Metadata.DCElements, func(element opfDCElement) bool {
+			return element.Name == name && element.Value == link
+		}) {
+			pkg.Metadata.DCElements = append(pkg.Metadata.DCElements, opfDCElement{Name: name, Value: link})
+		}
 	}
-	addAsset := func(asset *domain.MetadataAsset, name string) (string, error) {
-		if asset == nil || asset.Path == "" {
-			return "", nil
+	addLink("source", metadata.SourceURL)
+	for _, link := range metadata.Links {
+		if link != metadata.SourceURL {
+			addLink("relation", link)
 		}
-		data, err := os.ReadFile(asset.Path)
-		if err != nil {
-			return "", err
-		}
-		hash := sha256.Sum256(data)
-		if hex.EncodeToString(hash[:]) != asset.SHA256 {
-			return "", fmt.Errorf("metadata asset changed after selection: %s", asset.Path)
-		}
-		ext := map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif"}[asset.MediaType]
-		if ext == "" {
-			return "", fmt.Errorf("unsupported metadata image type %q", asset.MediaType)
-		}
-		href := path.Join(directory, name+ext)
-		files[path.Join(base, href)] = data
-		id := uniqueManifestID(pkg.Manifest.Items, "serial-sync-"+name)
-		pkg.Manifest.Items = append(pkg.Manifest.Items, opfItem{ID: id, Href: href, MediaType: asset.MediaType})
-		return id, nil
 	}
 	existingCover := ""
 	for _, item := range pkg.Manifest.Items {
@@ -72,68 +75,150 @@ func decoratePublication(files map[string][]byte, pkg *opfPackage, packagePath s
 		}
 	}
 	if metadata.Cover != nil && (existingCover == "" || metadata.CoverOverride) {
-		id, err := addAsset(metadata.Cover, "cover")
+		item, err := addPublicationAsset(files, pkg, packagePath, metadata.Cover, "cover")
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if id != "" {
+		if item.ID != "" {
 			for i := range pkg.Manifest.Items {
 				pkg.Manifest.Items[i].Properties = strings.TrimSpace(strings.ReplaceAll(" "+pkg.Manifest.Items[i].Properties+" ", " cover-image ", " "))
-				if pkg.Manifest.Items[i].ID == id && strings.HasPrefix(pkg.Version, "3") {
+				if pkg.Manifest.Items[i].ID == item.ID && strings.HasPrefix(pkg.Version, "3") {
 					pkg.Manifest.Items[i].Properties = "cover-image"
 				}
 			}
-			kept := pkg.Metadata.Meta[:0]
-			for _, meta := range pkg.Metadata.Meta {
-				if meta.Name != "cover" {
-					kept = append(kept, meta)
-				}
-			}
-			pkg.Metadata.Meta = append(kept, opfMeta{Name: "cover", Content: id})
+			pkg.Metadata.Meta = slices.DeleteFunc(pkg.Metadata.Meta, func(meta opfMeta) bool { return meta.Name == "cover" })
+			pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: "cover", Content: item.ID})
 		}
 	}
-	body := "<h1>About</h1>"
-	if metadata.Description != "" {
-		body += "<p>" + escapeHTML(metadata.Description) + "</p>"
-	}
-	links := append([]string{}, metadata.Links...)
-	for i, author := range metadata.Authors {
-		body += "<h2>" + escapeHTML(firstNonEmptyString(author.Name, "About the author")) + "</h2>"
-		id, err := addAsset(author.Portrait, fmt.Sprintf("portrait-%d", i+1))
+	pkg.Metadata.Meta = slices.DeleteFunc(pkg.Metadata.Meta, func(meta opfMeta) bool { return meta.Name == authorMarker })
+	var authors []publicationAuthor
+	for i, profile := range metadata.Authors {
+		portrait, err := addPublicationAsset(files, pkg, packagePath, profile.Portrait, fmt.Sprintf("portrait-%d", i+1))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if id != "" {
-			for _, item := range pkg.Manifest.Items {
-				if item.ID == id {
-					body += `<p><img src="` + escapeHTML(path.Base(item.Href)) + `" alt="` + escapeHTML(author.Name) + `" style="max-width:100%;height:auto" /></p>`
+		author := publicationAuthor{ID: profile.ID, Name: profile.Name, Biography: profile.Biography, Portrait: portrait.Href}
+		if validPublicationURL(profile.URL) {
+			author.URL = profile.URL
+			addLink("relation", profile.URL)
+		}
+		data, err := json.Marshal(author)
+		if err != nil {
+			return nil, err
+		}
+		pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: authorMarker, Content: string(data)})
+		authors = append(authors, author)
+	}
+	return authors, nil
+}
+
+func addPublicationAsset(files map[string][]byte, pkg *opfPackage, packagePath string, asset *domain.MetadataAsset, name string) (opfItem, error) {
+	if asset == nil || asset.Path == "" {
+		return opfItem{}, nil
+	}
+	data, err := os.ReadFile(asset.Path)
+	if err != nil {
+		return opfItem{}, err
+	}
+	hash := sha256.Sum256(data)
+	if hex.EncodeToString(hash[:]) != asset.SHA256 {
+		return opfItem{}, fmt.Errorf("metadata asset changed after selection: %s", asset.Path)
+	}
+	ext := map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif"}[asset.MediaType]
+	if ext == "" {
+		return opfItem{}, fmt.Errorf("unsupported metadata image type %q", asset.MediaType)
+	}
+	base := path.Dir(packagePath)
+	for n := 0; ; n++ {
+		directory := "serial-sync"
+		if n > 0 {
+			directory = fmt.Sprintf("serial-sync-%d", n)
+		}
+		href := path.Join(directory, name+ext)
+		entry := path.Join(base, href)
+		if existing, ok := files[entry]; ok {
+			if bytes.Equal(existing, data) {
+				for _, item := range pkg.Manifest.Items {
+					resolved, err := resolveManifestHref(base, item.Href)
+					if err == nil && resolved == entry && item.MediaType == asset.MediaType {
+						return item, nil
+					}
 				}
 			}
-		}
-		if author.Biography != "" {
-			body += "<p>" + escapeHTML(author.Biography) + "</p>"
-		}
-		if author.URL != "" {
-			links = append(links, author.URL)
-		}
-	}
-	seen := map[string]bool{}
-	for _, link := range links {
-		u, err := url.Parse(link)
-		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || seen[link] {
 			continue
 		}
-		body += `<p><a href="` + escapeHTML(link) + `">` + escapeHTML(link) + `</a></p>`
+		item := opfItem{ID: uniqueManifestID(pkg.Manifest.Items, "serial-sync-"+name), Href: href, MediaType: asset.MediaType}
+		files[entry] = data
+		pkg.Manifest.Items = append(pkg.Manifest.Items, item)
+		return item, nil
+	}
+}
+
+func validPublicationURL(link string) bool {
+	u, err := url.Parse(link)
+	return err == nil && u.Host != "" && u.User == nil && (u.Scheme == "https" || u.Scheme == "http")
+}
+
+func appendAboutPage(files map[string][]byte, pkg *opfPackage, packagePath string, authors []publicationAuthor, links []string, sourceURL string) error {
+	base := path.Dir(packagePath)
+	directory := "serial-sync"
+	for n := 1; files[path.Join(base, directory, "about.xhtml")] != nil; n++ {
+		directory = fmt.Sprintf("serial-sync-%d", n)
+	}
+	var body strings.Builder
+	heading := "About this edition"
+	if len(authors) == 1 {
+		heading = "About the author"
+	}
+	if len(authors) > 1 {
+		heading = "About the authors"
+	}
+	body.WriteString("<h1>" + heading + "</h1>\n")
+	seen := map[string]bool{}
+	addLink := func(link, label string) {
+		if !validPublicationURL(link) || seen[link] {
+			return
+		}
+		body.WriteString(`<p><a href="` + escapeHTML(link) + `">` + escapeHTML(label) + "</a></p>\n")
 		seen[link] = true
+	}
+	for _, author := range authors {
+		if author.Name != "" {
+			body.WriteString("<h2>" + escapeHTML(author.Name) + "</h2>\n")
+		}
+		if author.Portrait != "" {
+			href, err := filepath.Rel(directory, author.Portrait)
+			if err != nil {
+				return err
+			}
+			body.WriteString(`<p><img src="` + escapeHTML(filepath.ToSlash(href)) + `" alt="` + escapeHTML(author.Name) + `" style="max-width:12em;height:auto" /></p>` + "\n")
+		}
+		for _, paragraph := range strings.Split(strings.ReplaceAll(author.Biography, "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(paragraph) != "" {
+				body.WriteString("<p>" + escapeHTML(strings.TrimSpace(paragraph)) + "</p>\n")
+			}
+		}
+		addLink(author.URL, firstNonEmptyString(author.Name, "Author")+" — author page")
+	}
+	for _, link := range links {
+		if link != sourceURL && validPublicationURL(link) && !seen[link] {
+			u, _ := url.Parse(link)
+			addLink(link, "Related reading on "+u.Hostname())
+		}
+	}
+	addLink(sourceURL, "Original publication")
+	if len(authors) == 0 && len(seen) == 0 {
+		return nil
 	}
 	aboutPath := path.Join(directory, "about.xhtml")
 	viewport := fixedLayoutViewport(packageIsPrePaginated(*pkg), *pkg, files, base)
-	document, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName("About", body, pkg.Version, viewport, "")
+	document, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName("About", body.String(), pkg.Version, viewport, "")
 	if err != nil {
 		return err
 	}
+	content := strings.Replace(document.Content, "</head>", `<style type="text/css">body { margin: 1.5em; line-height: 1.5; } h1 { margin: 0 0 1.5em; } h2 { margin: 1.5em 0 0.75em; } p { margin: 0 0 1em; } img { display: block; max-width: 100%; height: auto; }</style></head>`, 1)
 	id := uniqueManifestID(pkg.Manifest.Items, "serial-sync-about")
-	files[path.Join(base, aboutPath)] = []byte(document.Content)
+	files[path.Join(base, aboutPath)] = []byte(content)
 	pkg.Manifest.Items = append(pkg.Manifest.Items, opfItem{ID: id, Href: aboutPath, MediaType: "application/xhtml+xml"})
 	pkg.Spine.Itemrefs = append(pkg.Spine.Itemrefs, opfItemref{IDRef: id})
 	pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: aboutMarker, Content: id})
@@ -157,6 +242,31 @@ func decoratePublication(files map[string][]byte, pkg *opfPackage, packagePath s
 		}
 		files[entry] = updated
 	}
+	return nil
+}
+
+func removeGeneratedAbout(files map[string][]byte, pkg *opfPackage, packagePath string) error {
+	removed := map[string]bool{}
+	for _, meta := range pkg.Metadata.Meta {
+		if meta.Name == aboutMarker && meta.Content != "" {
+			removed[meta.Content] = true
+			if err := removeAboutNavigation(files, *pkg, packagePath, meta.Content); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range pkg.Manifest.Items {
+		if removed[item.ID] {
+			entry, err := resolveManifestHref(path.Dir(packagePath), item.Href)
+			if err != nil {
+				return err
+			}
+			delete(files, entry)
+		}
+	}
+	pkg.Manifest.Items = slices.DeleteFunc(pkg.Manifest.Items, func(item opfItem) bool { return removed[item.ID] })
+	pkg.Spine.Itemrefs = slices.DeleteFunc(pkg.Spine.Itemrefs, func(ref opfItemref) bool { return removed[ref.IDRef] })
+	pkg.Metadata.Meta = slices.DeleteFunc(pkg.Metadata.Meta, func(meta opfMeta) bool { return meta.Name == aboutMarker })
 	return nil
 }
 

@@ -357,7 +357,7 @@ Recommended default:
 - use book definitions and input `book_id` for reading order within a shared series
 - published filenames are lowercase and dash-slugged, so shell use and URL/path handling stay predictable
 
-EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Only `preserve` EPUB attachments without wrapping remain byte-preserving. `epub` output includes selected metadata and a final About page.
+EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Only `preserve` EPUB attachments without wrapping remain byte-preserving. `epub` output includes selected metadata without generated back matter on standalone releases. Only assembled books/volumes can receive a final author page; a book label or attachment role alone does not establish completeness.
 
 For EPUB 2 attachments, wrapping retains author metadata and guide links while repairing empty guide sections. See the [output compatibility notes](config.md) before changing a series to pass-through output to avoid a validation failure.
 

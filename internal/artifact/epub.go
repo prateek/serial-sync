@@ -896,6 +896,10 @@ func sanitizeMetadataMeta(existing []opfMeta, modified time.Time, declaredPrefix
 	for _, item := range existing {
 		property := strings.TrimSpace(item.Property)
 		refines := strings.TrimSpace(item.Refines)
+		if property == "" && (item.Name == aboutMarker || item.Name == authorMarker) {
+			meta = append(meta, opfMeta{Name: item.Name, Content: item.Content})
+			continue
+		}
 		if property == "" || strings.HasPrefix(property, "calibre:") {
 			continue
 		}

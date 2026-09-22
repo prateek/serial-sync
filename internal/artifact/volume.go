@@ -67,19 +67,10 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 		prefix := fmt.Sprintf("members/%04d", i+1)
 		memberDir := path.Dir(memberPath)
 		items := map[string]opfItem{}
-		aboutID := ""
-		for _, meta := range memberPackage.Metadata.Meta {
-			if meta.Name == aboutMarker {
-				aboutID = meta.Content
-			}
-		}
-		if err := removeAboutNavigation(memberFiles, memberPackage, memberPath, aboutID); err != nil {
+		if err := removeGeneratedAbout(memberFiles, &memberPackage, memberPath); err != nil {
 			return domain.Artifact{}, err
 		}
 		for _, item := range memberPackage.Manifest.Items {
-			if item.ID == aboutID {
-				continue
-			}
 			originalID := item.ID
 			entry, err := resolveManifestHref(memberDir, item.Href)
 			if err != nil {
@@ -108,7 +99,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			items[originalID] = item
 		}
 		first := true
-		memberNav, err := memberNavigation(memberFiles, memberPackage, memberPath, prefix, aboutID)
+		memberNav, err := memberNavigation(memberFiles, memberPackage, memberPath, prefix)
 		if err != nil {
 			return domain.Artifact{}, fmt.Errorf("chapter %s navigation: %w", chapter.Release.Title, err)
 		}
@@ -136,7 +127,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 	if err != nil {
 		return domain.Artifact{}, err
 	}
-	content, err = withPublicationMetadata(content, publicationMetadata{Title: title, Author: chapters[0].Track.CanonicalAuthor, Series: chapters[0].Track.TrackName, Position: volume.Members[0].Position, PublishedAt: chapters[0].Release.PublishedAt, Publication: volume.Publication})
+	content, err = withPublicationMetadata(content, publicationMetadata{Title: title, Author: chapters[0].Track.CanonicalAuthor, Series: chapters[0].Track.TrackName, Position: volume.Members[0].Position, PublishedAt: chapters[0].Release.PublishedAt, Publication: volume.Publication, IncludeAbout: true})
 	if err != nil {
 		return domain.Artifact{}, err
 	}

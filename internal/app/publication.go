@@ -23,7 +23,7 @@ func publicationMetadataFor(cfg *config.Config, sourceID string, release domain.
 	if decision.OutputFormat != domain.OutputFormatEPUB {
 		return nil, nil
 	}
-	result := &domain.PublicationMetadata{}
+	result := &domain.PublicationMetadata{SourceURL: release.URL}
 	var profiles []string
 	if source, ok := cfg.SourceByID(sourceID); ok && source.AuthorProfile != "" {
 		profiles = []string{source.AuthorProfile}

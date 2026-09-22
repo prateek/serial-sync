@@ -9,6 +9,7 @@ const (
 
 // PublicationMetadata is an edition input, separate from upstream content identity.
 type PublicationMetadata struct {
+	SourceURL           string                    `json:"source_url,omitempty"`
 	IdentitySource      PublicationIdentitySource `json:"identity_source,omitempty"`
 	Description         string                    `json:"description,omitempty"`
 	DescriptionOverride bool                      `json:"description_override,omitempty"`

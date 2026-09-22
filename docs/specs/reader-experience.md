@@ -15,7 +15,7 @@ The accepted product contract is:
 | Reading position | Ordinary arrivals preserve the exact location in an existing chapter in the mobile web reader. A rare correction to the current chapter may return to its beginning with a notice. |
 | External apps | Provide self-contained downloadable EPUBs. Automatic progress synchronization between arbitrary reading apps is outside the first version. |
 | Metadata ownership | Serial-sync retains curated author profiles, artwork, descriptions, and overrides. The reader owns reading progress. Supplementary library enrichment is reproducible from retained choices. |
-| EPUB contents | Embed publication metadata, suitable cover art, and a usable table of contents. Add one short About page at the end with available author biography/portrait and source links. Missing enrichment does not delay chapters. |
+| EPUB contents | Embed publication metadata, suitable cover art, and a usable table of contents. Keep standalone chapters free of generated back matter. Assembled books/volumes may have one author page with biography/portrait and descriptive source links; retain author/source information in embedded metadata. Missing enrichment does not delay chapters. |
 | Existing EPUB inputs | Publish enriched copies while preserving captured originals and the author's story text/layout. Apply this through EPUB output; retain the documented `preserve` mode contract. |
 | Curation | Use configuration edits with the existing offline dump/preview workflow. Explicit overrides win; preserve suitable embedded metadata and fill gaps from clearly matched creator sources. Ambiguous public-web matches need review. |
 | Sources | Patreon profiles and captured material are starting points; author websites and other public sources are eligible. Portraits, campaign banners, and series/book covers retain their distinct meanings. |
@@ -34,7 +34,7 @@ The following stages preserve the accepted implementation and validation require
 
    Include an author-supplied EPUB with its own cover/TOC and a release containing multiple chapters. Existing volume assembly has one entry per release, so a single-chapter fixture would miss a real limitation. Preserve internal chapter navigation where available; report ambiguous segmentation rather than inventing chapter boundaries. Exercise missing chapters and unknown author-book endpoints without presenting an incomplete capture as a complete book.
 
-   Open an enriched EPUB offline and import it into a clean library using only that file. Check readable content, cover, author, description, series order, language, and About page. Separately test supplemental author-profile API updates; reading the file must not depend on them.
+   Open an enriched EPUB offline and import it into a clean library using only that file. Check readable content, cover, author, description, series order and language. Verify chapters end with their original content and assembled volumes have at most one readable author page. Separately test supplemental author-profile API updates; reading the file must not depend on them.
 
    Produce an evidence matrix and a reader/output decision. If a stock reader supports a growing copy with exact position retention, specify its append and closure rules before implementation. If it fails, evaluate a small Previous/Next patch while preserving stable reading copies. If neither approach meets the position contract at reasonable scope, return with the observed trade-off before weakening that contract or undertaking a larger fork. Switching to BookOrbit is conditional on the results.
 
@@ -50,7 +50,7 @@ The following stages preserve the accepted implementation and validation require
 
    Implement the navigation approach selected by the trial, including the append/closure lifecycle or the narrowly scoped reader patch it requires. Cover forward and backward movement across publication boundaries and the arrival of new content after reaching the current end. Keep the reader-specific change separate from portable metadata selection and EPUB construction.
 
-   Extend the shared artifact path for generated chapters, enriched EPUB attachments, converted PDFs, and volumes. Preserve suitable original metadata unless an override supersedes it. Embed compatible series/order fields and selected assets without changing story text or breaking existing links. Apply decoration at the final publication boundary so a volume receives one cover and one About page, rather than a copy after every member chapter.
+   Extend the shared artifact path for generated chapters, enriched EPUB attachments, converted PDFs, and volumes. Preserve suitable original metadata unless an override supersedes it. Embed compatible series/order fields and selected assets without changing story text or breaking existing links. Apply decoration at the final publication boundary so standalone releases have no generated About page and an assembled book/volume has at most one. Preserve original author back matter and post-prefaces.
 
    Snapshot publication inputs with each edition. A metadata-only edit must appear in rebuild preview without replacing existing copies during ordinary sync. An unchanged rebuild must reproduce unchanged output. Pending deliveries continue using their saved bytes even if newer metadata or corrections arrive.
 
@@ -78,7 +78,7 @@ The acceptance cases for implementation are:
 
 | Scenario | Required observation |
 | --- | --- |
-| EPUB used by itself | Story, embedded artwork, About page, and navigation work offline; a clean import gets supported catalog fields without sidecars or a prefilled database. |
+| EPUB used by itself | Story, embedded artwork/metadata, and navigation work offline; generated author pages are limited to assembled books/volumes; a clean import gets supported catalog fields without sidecars or a prefilled database. |
 | Chapter 54 arrives | It appears through normal hourly operation; a saved position partway through 53 remains exact. Desired Previous/Next behavior is recorded explicitly. |
 | Volume/book boundary | Available next content is reachable without losing place; incomplete or ambiguous coverage remains visible. |
 | Multi-chapter release | Internal chapters remain readable and navigable; unsupported segmentation is recorded, not hidden by a release-level TOC. |

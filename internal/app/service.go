@@ -1021,7 +1021,7 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 			case existingArtifact == nil && artifactPlan.SHA256 == "":
 				action = "noop"
 				changed = false
-			case existingArtifact != nil && existingBytesValid && existingArtifact.SHA256 == artifactPlan.SHA256 && existingArtifact.Filename == artifactPlan.Filename:
+			case existingArtifact != nil && existingBytesValid && existingArtifact.SHA256 == artifactPlan.SHA256 && existingArtifact.Filename == artifactPlan.Filename && (!rebuild || artifact.IsCurrent(*existingArtifact, release, track, decision)):
 				action = "noop"
 				changed = false
 			case frozen != nil:

@@ -440,7 +440,7 @@ func volumeRecipe(series config.SeriesConfig, metadata *domain.PublicationMetada
 		Series          config.SeriesConfig
 		Metadata        string
 		AssemblyVersion int
-	}{series, artifact.PublicationFingerprint(metadata), 4})
+	}{series, artifact.PublicationFingerprint(metadata), 5})
 	return recipe
 }
 

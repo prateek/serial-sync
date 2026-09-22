@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,11 +59,14 @@ func TestPortableMetadataPreservesStoryAndNavigation(t *testing.T) {
 			if afterPkg.Metadata.Title != beforePkg.Metadata.Title || afterPkg.Metadata.Creator != beforePkg.Metadata.Creator {
 				t.Fatal("original title or creator replaced")
 			}
-			if len(afterPkg.Spine.Itemrefs) != len(beforePkg.Spine.Itemrefs)+1 {
-				t.Fatal("About was not appended exactly once")
+			if len(afterPkg.Spine.Itemrefs) != len(beforePkg.Spine.Itemrefs) {
+				t.Fatal("standalone publication appended back matter")
 			}
 			if !strings.Contains(string(after[packagePath]), "A curated description.") {
 				t.Fatal("description not embedded")
+			}
+			if !strings.Contains(string(after[packagePath]), "Writes serials.") {
+				t.Fatal("author biography not retained in metadata")
 			}
 			if err := validateEPUBArchive(content); err != nil {
 				t.Fatal(err)
@@ -69,6 +74,16 @@ func TestPortableMetadataPreservesStoryAndNavigation(t *testing.T) {
 			again, err := withPublicationMetadata(original, metadata)
 			if err != nil || !bytes.Equal(content, again) {
 				t.Fatalf("identical inputs not deterministic: %v", err)
+			}
+			again, err = withPublicationMetadata(content, metadata)
+			if err != nil || !bytes.Equal(content, again) {
+				againFiles, _, _, _ := unpackEPUB(again)
+				for name, before := range after {
+					if !bytes.Equal(before, againFiles[name]) {
+						t.Logf("changed %s\nbefore: %s\nafter: %s", name, before, againFiles[name])
+					}
+				}
+				t.Fatalf("reprocessing changed publication: %v", err)
 			}
 		})
 	}
@@ -116,7 +131,7 @@ func TestVolumeKeepsInternalChaptersAndOneFinalAbout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := withPublicationMetadata(original, publicationMetadata{Title: "Two chapters", Author: "Author", Publication: metadata})
+	member, err := withPublicationMetadata(original, publicationMetadata{Title: "Two chapters", Author: "Author", Publication: metadata, IncludeAbout: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,5 +275,171 @@ func TestVolumePreservesNavigationGroupsAndFragmentLinks(t *testing.T) {
 		if nav.Group.Chapters[i].Href != "members/0001/OEBPS/nav.xhtml#"+fragment || nav.Group.Chapters[i].Title != []string{"First chapter", "Second chapter"}[i] {
 			t.Fatalf("chapter %d lost its title or relocated target: %+v", i, nav.Group.Chapters[i])
 		}
+	}
+}
+
+func TestPublicationRemovesOnlyGeneratedBackMatter(t *testing.T) {
+	for _, version := range []string{"2", "3"} {
+		for _, includeAbout := range []bool{false, true} {
+			t.Run(fmt.Sprintf("epub%s/about=%t", version, includeAbout), func(t *testing.T) {
+				original := buildEPUB2Fixture(t)
+				if version == "3" {
+					var err error
+					original, err = buildSimpleEPUB("Story", "Author", "urn:test:backmatter", time.Unix(0, 0), []epubChapter{
+						{FileName: "chapter.xhtml", Title: "Chapter", BodyHTML: "<p>Story ending.</p>"},
+						{FileName: "about.xhtml", Title: "Author's afterword", BodyHTML: "<p>Original author back matter.</p>"},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				original, err := wrapEPUBWithPreface(original, "Story", "Author", "urn:test:backmatter", time.Unix(0, 0), "<p>Configured post preface.</p>")
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, beforePkg, packagePath, err := unpackEPUB(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files, pkg, _, err := unpackEPUB(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < 2; i++ {
+					if err := appendAboutPage(files, &pkg, packagePath, []publicationAuthor{{Name: "Old author", Biography: "Old biography."}}, nil, ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, item := range pkg.Manifest.Items {
+					isNCX := item.MediaType == "application/x-dtbncx+xml"
+					if !isNCX && !strings.Contains(item.Properties, "nav") {
+						continue
+					}
+					entry, err := resolveManifestHref(path.Dir(packagePath), item.Href)
+					if err != nil {
+						t.Fatal(err)
+					}
+					files[entry], err = appendAboutNavigation(files[entry], "serial-sync/about.xhtml", "duplicate-about", isNCX)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				files[packagePath] = mustXML(pkg)
+				legacy, err := writeStructurallyValidatedEPUBArchive(files)
+				if err != nil {
+					t.Fatal(err)
+				}
+				metadata := publicationMetadata{PreserveEmbedded: true, Series: "Series", Position: 2, IncludeAbout: includeAbout, Publication: &domain.PublicationMetadata{
+					Description: "Book synopsis.", SourceURL: "https://example.com/post", Cover: testMetadataAsset(t), CoverOverride: true,
+					Authors: []domain.AuthorProfile{{ID: "author", Name: "Author", Biography: "First paragraph.\n\nSecond paragraph.", URL: "https://example.com/author", Portrait: testMetadataAsset(t)}},
+					Links:   []string{"https://example.com/post", "https://example.com/author", "https://example.org/reading", "javascript:alert(1)"},
+				}}
+				result, err := withPublicationMetadata(legacy, metadata)
+				if err != nil {
+					t.Fatal(err)
+				}
+				after, resultPkg, _, err := unpackEPUB(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantSpine := len(beforePkg.Spine.Itemrefs)
+				if includeAbout {
+					wantSpine++
+				}
+				if len(resultPkg.Spine.Itemrefs) != wantSpine {
+					t.Fatalf("spine = %d, want %d", len(resultPkg.Spine.Itemrefs), wantSpine)
+				}
+				for _, item := range beforePkg.Manifest.Items {
+					entry, err := resolveManifestHref(path.Dir(packagePath), item.Href)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(item.Properties, "nav") || item.MediaType == "application/x-dtbncx+xml" {
+						count := bytes.Count(after[entry], []byte(">About<"))
+						want := 0
+						if includeAbout {
+							want = 1
+						}
+						if count != want {
+							t.Fatalf("About navigation count = %d, want %d: %s", count, want, after[entry])
+						}
+					} else if !bytes.Equal(before[entry], after[entry]) {
+						t.Fatalf("original resource changed: %s", entry)
+					}
+				}
+				if !bytes.Contains(after[packagePath], []byte("<dc:source>https://example.com/post</dc:source>")) {
+					t.Fatal("source metadata missing")
+				}
+				if bytes.Contains(after[packagePath], []byte("javascript:")) {
+					t.Fatal("unsafe URL embedded")
+				}
+				for entry, content := range after {
+					if !strings.HasSuffix(entry, ".xhtml") {
+						continue
+					}
+					if bytes.Contains(content, []byte("Old biography.")) {
+						t.Fatalf("old page survived: %s", entry)
+					}
+					if includeAbout && strings.Contains(entry, "serial-sync/about.xhtml") {
+						for _, want := range []string{"<p>First paragraph.</p>", "<p>Second paragraph.</p>", "Original publication", "author page", "Related reading on example.org"} {
+							if !bytes.Contains(content, []byte(want)) {
+								t.Fatalf("About missing %q: %s", want, content)
+							}
+						}
+						if bytes.Contains(content, []byte(">https://")) || bytes.Contains(content, []byte("Book synopsis.")) {
+							t.Fatal("About contains raw URL label or repeats synopsis")
+						}
+					}
+				}
+				if err := validateEPUBArchive(result); err != nil {
+					t.Fatal(err)
+				}
+				again, err := withPublicationMetadata(result, metadata)
+				if err != nil || !bytes.Equal(result, again) {
+					t.Fatalf("repeat decoration changed EPUB: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestWrappedChapterRemovesGeneratedAbout(t *testing.T) {
+	original, err := buildSimpleEPUB("Chapter", "Author", "urn:test:wrapped-about", time.Unix(0, 0), []epubChapter{{FileName: "chapter.xhtml", Title: "Chapter", BodyHTML: "<p>Story ending.</p>"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := &domain.PublicationMetadata{Authors: []domain.AuthorProfile{{ID: "author", Name: "Author", Biography: "Generated biography."}}}
+	original, err = withPublicationMetadata(original, publicationMetadata{Publication: metadata, IncludeAbout: true, PreserveEmbedded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "chapter.epub")
+	if err := os.WriteFile(file, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	normalized := domain.NormalizedRelease{Title: "Chapter", TextPlain: "Configured post preface.", Attachments: []domain.Attachment{{FileName: "chapter.epub", MIMEType: "application/epub+zip", LocalPath: file}}}
+	decision := domain.TrackDecision{OutputFormat: domain.OutputFormatEPUB, ContentStrategy: domain.ContentStrategyAttachmentOnly, PrefaceMode: domain.PrefaceModePrependPost, Publication: metadata}
+	plan, err := New(t.TempDir()).Plan(context.Background(), domain.Source{ID: "source"}, domain.StoryTrack{TrackKey: "story"}, domain.Release{Title: "Chapter"}, normalized, decision, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, pkg, _, err := unpackEPUB(plan.SelectedContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkg.Spine.Itemrefs) != 2 {
+		t.Fatalf("wrapped chapter has %d reading sections, want preface + chapter", len(pkg.Spine.Itemrefs))
+	}
+	if _, ok := files["OEBPS/serial-sync/about.xhtml"]; ok {
+		t.Fatal("generated page survived wrapping")
+	}
+	if !bytes.Contains(files["OEBPS/serial-sync-preface.xhtml"], []byte("Configured post preface.")) {
+		t.Fatal("configured preface lost")
+	}
+	if !bytes.Contains(files["OEBPS/chapter.xhtml"], []byte("Story ending.")) {
+		t.Fatal("story lost")
+	}
+	if err := validateEPUBArchive(plan.SelectedContent); err != nil {
+		t.Fatal(err)
 	}
 }
