@@ -40,6 +40,42 @@ func readCanonicalSidecar(artifact domain.Artifact) (*canonicalSidecar, bool) {
 	return &meta, true
 }
 
+// StoredState aggregates the sidecar-derived facts about a stored artifact in
+// one read. Current is not part of it: currency depends on the planned
+// release, track and decision and stays on IsCurrent.
+type StoredState struct {
+	Intact      bool
+	Legacy      bool
+	Blocked     bool
+	BlockReason string
+	Publication *domain.PublicationMetadata
+	Sequence    *domain.Sequence
+}
+
+// Inspect reads the artifact's sidecar once and returns its stored state.
+// Intake passes canonical artifacts only; volume sidecars (VolumeEdition JSON)
+// never reach it.
+func Inspect(artifact domain.Artifact) StoredState {
+	state := StoredState{Legacy: IsLegacy(artifact)}
+	if meta, ok := readCanonicalSidecar(artifact); ok {
+		state.Publication = meta.Decision.Publication
+		state.Sequence = meta.Decision.Sequence
+	} else {
+		state.Blocked = true
+		state.BlockReason = "unreadable sidecar"
+	}
+	// Intactness is checked separately since it requires filesystem access.
+	state.Intact, _ = IntactOnDisk(artifact)
+	return state
+}
+
+// IsLegacy answers whether a stored artifact predates the output_version: 2
+// sidecar and still needs an explicit migration rebuild.
+func IsLegacy(artifact domain.Artifact) bool {
+	meta, ok := readCanonicalSidecar(artifact)
+	return !ok || meta.OutputVersion < outputVersion(meta.Decision)
+}
+
 // IsCurrent answers whether this stored artifact is current for the planned
 // release, track and decision, matching the sidecar the planner wrote.
 func IsCurrent(artifact domain.Artifact, release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
@@ -95,12 +131,6 @@ func PublicationFingerprint(metadata *domain.PublicationMetadata) string {
 	data, _ = json.Marshal(copy)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-// IsLegacy identifies artifacts whose output format requires an explicit rebuild.
-func IsLegacy(artifact domain.Artifact) bool {
-	meta, ok := readCanonicalSidecar(artifact)
-	return !ok || meta.OutputVersion < outputVersion(meta.Decision)
 }
 
 func outputVersion(decision domain.TrackDecision) int {

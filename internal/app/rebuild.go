@@ -111,7 +111,7 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 				continue
 			}
 			decision := authoringDecisionFor(source.ID, normalized, history, cfg, rules)
-			if options.SeriesID != "" && decision.SeriesID != options.SeriesID {
+			if options.SeriesID != "" && decision.SeriesID != options.SeriesID && oldSeries != options.SeriesID {
 				continue
 			}
 			raw, loadErr := os.ReadFile(release.RawPayloadRef)
@@ -120,10 +120,15 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
 				continue
 			}
-			plan, _, _, rebuildErr := s.handleRelease(ctx, recorder, source, provider.ReleaseDocument{Normalized: normalized, RawJSON: raw}, decision, false, true)
+			plan, _, _, rebuildErr := s.intakeHandleRelease(ctx, recorder, source, provider.ReleaseDocument{Normalized: normalized, RawJSON: raw}, decision, false, true)
 			if rebuildErr != nil {
 				blockedSeries[oldSeries], blockedSeries[decision.TrackKey] = true, true
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, rebuildErr))
+				continue
+			}
+			if plan.Action == "blocked" {
+				blockedSeries[oldSeries], blockedSeries[decision.TrackKey] = true, true
+				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, plan.BlockReason))
 				continue
 			}
 			result.Plans = append(result.Plans, plan)

@@ -11,11 +11,9 @@ The implementation follows the PRD’s ports-and-adapters shape:
 - `internal/artifact`: canonical artifact planning and storage
 - `internal/publish`: replayable downstream publishers behind one target seam
   (filesystem and exec adapters)
-- `internal/sequence`: the single chapter sequence detector
 - `internal/observe`: run logs, structured events, and support-bundle inputs
-- `internal/app`: orchestration shared by CLI commands
+- `internal/app`: orchestration shared by CLI commands; release intake plans and applies release actions
 - `internal/runtime/display`: hidden-display helpers for containerized headed browser bootstrap
-- `internal/runtime/daemon`: local health and metrics endpoints
 
 The first runtime slice is:
 

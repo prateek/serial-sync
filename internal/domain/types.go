@@ -263,6 +263,7 @@ type SyncItemPlan struct {
 	ArtifactKind      string          `json:"artifact_kind"`
 	Filename          string          `json:"filename"`
 	Action            string          `json:"action"`
+	BlockReason       string          `json:"block_reason,omitempty"`
 }
 
 type SyncResult struct {
