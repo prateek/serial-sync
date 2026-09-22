@@ -9,6 +9,7 @@ import (
 	"github.com/prateek/serial-sync/internal/discovery"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
+	"github.com/prateek/serial-sync/internal/sequence"
 )
 
 // decideReleases is the one release decider: history of normalized releases
@@ -107,3 +108,68 @@ func (s *Service) decideCandidates(ctx context.Context, source string, documents
 func (s *Service) authoringDecisions(ctx context.Context, cfg *config.Config, source string, documents []provider.ReleaseDocument) (map[string]classify.ExplainedDecision, error) {
 	return s.decideSource(ctx, source, documents, time.Time{}, cfg)
 }
+
+// RunDecisions is the run-scoped answer to "what does this release mean".
+// One value is created per run (sync, run-once, rebuild and replay): each
+// source's history is decided at most once and shared by the sync loop, the
+// volume planner and the delivery preview, so a release cannot be decided
+// twice in a run and disagree with itself. Stored history is read only when
+// a source's decisions are first needed.
+type RunDecisions struct {
+	svc     *Service
+	cfg     *config.Config
+	sources map[string]map[string]classify.ExplainedDecision
+	loaded  map[string]bool
+	errs    map[string]error
+}
+
+func NewRunDecisions(svc *Service, cfg *config.Config) *RunDecisions {
+	return &RunDecisions{svc: svc, cfg: cfg, sources: map[string]map[string]classify.ExplainedDecision{}, loaded: map[string]bool{}, errs: map[string]error{}}
+}
+
+// Observe records decisions a run already computed for a source (the sync
+// pass decides live documents), so later phases reuse them verbatim.
+func (r *RunDecisions) Observe(sourceID string, decisions map[string]classify.ExplainedDecision) {
+	r.sources[sourceID] = decisions
+	r.loaded[sourceID] = true
+}
+
+// History returns the source's explained decisions, computing them from the
+// stored releases on first use and memoising the result.
+func (r *RunDecisions) History(ctx context.Context, sourceID string) (map[string]classify.ExplainedDecision, error) {
+	if !r.loaded[sourceID] {
+		r.sources[sourceID], r.errs[sourceID] = r.svc.authoringDecisions(ctx, r.cfg, sourceID, nil)
+		r.loaded[sourceID] = true
+	}
+	return r.sources[sourceID], r.errs[sourceID]
+}
+
+// Decision answers one release's decision: the memoised history when it
+// covers the release, otherwise the same explain-and-number path applied to
+// the stored history (a release observed mid-run).
+func (r *RunDecisions) Decision(ctx context.Context, sourceID string, release domain.NormalizedRelease) (classify.ExplainedDecision, error) {
+	history, err := r.History(ctx, sourceID)
+	if err != nil {
+		return classify.ExplainedDecision{}, err
+	}
+	if explained, ok := history[release.ProviderReleaseID]; ok {
+		return explained, nil
+	}
+	rules := r.cfg.Compiled()
+	explained := classify.Explain(sourceID, release, rules.ForSource(sourceID))
+	explained.Decision = sequence.Apply(r.cfg, sourceID, release, explained.Decision)
+	return explained, nil
+}
+
+// Histories snapshots the decided sources so the pure volume planner receives
+// them as a value; the planner never triggers a read itself.
+func (r *RunDecisions) Histories() map[string]map[string]classify.ExplainedDecision {
+	snapshot := map[string]map[string]classify.ExplainedDecision{}
+	for source, history := range r.sources {
+		snapshot[source] = history
+	}
+	return snapshot
+}
+
+// isDecided reports whether the run already holds decisions for a source.
+func (r *RunDecisions) isDecided(sourceID string) bool { return r.loaded[sourceID] }

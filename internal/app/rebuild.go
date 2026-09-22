@@ -75,14 +75,13 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 		}
 	}()
 	rules := cfg.Compiled()
-	histories := map[string]map[string]classify.ExplainedDecision{}
+	decisions := NewRunDecisions(s, cfg)
 	for _, source := range sources {
-		history, historyErr := s.authoringDecisions(ctx, cfg, source.ID, nil)
+		_, historyErr := decisions.History(ctx, source.ID)
 		if historyErr != nil {
 			result.Blocked = append(result.Blocked, source.ID+": "+historyErr.Error())
 			return result, fmt.Errorf("rebuild history unavailable for %s: %w", source.ID, historyErr)
 		}
-		histories[source.ID] = history
 		storedSource, readErr := s.Repo.GetSource(ctx, source.ID)
 		if readErr != nil {
 			return result, readErr
@@ -110,7 +109,7 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
 				continue
 			}
-			decision := authoringDecisionFor(source.ID, normalized, history, cfg, rules)
+			decision := authoringDecisionFor(source.ID, normalized, decisions.Histories()[source.ID], cfg, rules)
 			if options.SeriesID != "" && decision.SeriesID != options.SeriesID && oldSeries != options.SeriesID {
 				continue
 			}
@@ -139,7 +138,7 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 			}
 		}
 	}
-	result.Publish, err = s.publish(ctx, scope, options.TargetID, false, command+" publish", blockedSeries, histories)
+	result.Publish, err = s.publish(ctx, scope, options.TargetID, false, command+" publish", blockedSeries, decisions)
 	if err != nil {
 		return result, err
 	}
@@ -183,11 +182,11 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 	}
 	inputs := map[string]domain.NormalizedRelease{}
 	blocked := map[string]bool{}
-	histories := map[string]map[string]classify.ExplainedDecision{}
+	decisions := NewRunDecisions(s, cfg)
 	historyErrors := map[string]error{}
 	for _, candidate := range candidates {
-		if _, ok := histories[candidate.Source.ID]; !ok {
-			histories[candidate.Source.ID], historyErrors[candidate.Source.ID] = s.authoringDecisions(ctx, cfg, candidate.Source.ID, nil)
+		if _, ok := historyErrors[candidate.Source.ID]; !ok {
+			_, historyErrors[candidate.Source.ID] = decisions.History(ctx, candidate.Source.ID)
 		}
 	}
 	rules := cfg.Compiled()
@@ -199,7 +198,7 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 		release := candidate.Release
 		normalized, loadErr := s.loadStoredNormalized(ctx, release)
 
-		decision := authoringDecisionFor(candidate.Source.ID, normalized, histories[candidate.Source.ID], cfg, rules)
+		decision := authoringDecisionFor(candidate.Source.ID, normalized, decisions.Histories()[candidate.Source.ID], cfg, rules)
 		if loadErr == nil {
 			decision.Publication, loadErr = publicationMetadataFor(cfg, candidate.Source.ID, normalized, decision)
 		}
@@ -254,7 +253,7 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 	}
 	candidates = materializable
 	var volumes []domain.VolumeEdition
-	result.Publish.Volumes, volumes, err = s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: options.SourceID, seriesFilter: options.SeriesID, rebuild: true, blockedSeries: blocked, candidates: candidates, existing: existing, inputs: inputs, histories: histories, series: cfg.Series, config: cfg}, false)
+	result.Publish.Volumes, volumes, err = s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: options.SourceID, seriesFilter: options.SeriesID, rebuild: true, blockedSeries: blocked, candidates: candidates, existing: existing, inputs: inputs, histories: decisions.Histories(), series: cfg.Series, config: cfg}, false)
 	if err != nil {
 		result.Blocked = append(result.Blocked, err.Error())
 	}

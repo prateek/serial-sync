@@ -292,10 +292,12 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 	}
 	var candidates []domain.PublishCandidate
 	inputs := map[string]domain.NormalizedRelease{}
-	histories := map[string]map[string]classify.ExplainedDecision{}
+	// The dump corpus is this run's deciding evidence; later phases (volume
+	// planning) read decisions from the same value instead of re-deciding.
+	decisions := NewRunDecisions(s, cfg)
 	for _, item := range corpus {
 		source := item.Creator.SourceID
-		histories[source] = map[string]classify.ExplainedDecision{}
+		decisions.Observe(source, map[string]classify.ExplainedDecision{})
 		sort.SliceStable(item.Releases, func(i, j int) bool {
 			a, b := item.Releases[i], item.Releases[j]
 			if a.PublishedAt.Equal(b.PublishedAt) {
@@ -314,7 +316,7 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 		// files rather than the store, so the releases and previous candidates
 		// come from the dump workspace and the configured repositories.
 		decided, decidedCandidates := decideReleases(source, item.Releases, nil, cfg, previous, time.Now().UTC())
-		histories[source] = decided
+		decisions.Observe(source, decided)
 		result.Candidates = append(result.Candidates, decidedCandidates...)
 		result.Labels = append(result.Labels, discovery.Labels(source, item.Releases, cfg.Compiled().ForSource(source), decided, labelHistory))
 		var baselineDecisions map[string]classify.ExplainedDecision
@@ -387,7 +389,7 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 			result.Comparison.RequiresRebuild = true
 		}
 	}
-	result.Volumes, _, err = s.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs, histories: histories, series: cfg.Series, config: cfg}, false)
+	result.Volumes, _, err = s.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs, histories: decisions.Histories(), series: cfg.Series, config: cfg}, false)
 	return result, err
 }
 

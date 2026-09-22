@@ -133,7 +133,10 @@ func New(cfg *config.Config, roots config.Roots, configPath string, repo store.R
 	}
 }
 
-func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, command string, decisionsOut *map[string]map[string]classify.ExplainedDecision) (result domain.SyncResult, err error) {
+func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, command string, decisions *RunDecisions) (result domain.SyncResult, err error) {
+	if decisions == nil {
+		decisions = NewRunDecisions(s, s.Config)
+	}
 	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun, s.observeOptions())
 	if err != nil {
 		return domain.SyncResult{}, err
@@ -183,14 +186,17 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 			observedAt := time.Now().UTC()
 			observed = append(observed, observedBatch{Source: sourceCfg.ID, Documents: listResult.Documents, At: observedAt})
 			batch := &observed[len(observed)-1]
-			decisions, decideErr := s.decideSource(ctx, sourceCfg.ID, listResult.Documents, observedAt, s.Config)
+			sourceDecisions, decideErr := s.decideSource(ctx, sourceCfg.ID, listResult.Documents, observedAt, s.Config)
 			if decideErr != nil {
 				// The deferred candidate pass recomputes with a cancel-tolerant
 				// context so a canceled or otherwise interrupted sync still
 				// retains fetched evidence.
 				return result, decideErr
 			}
-			batch.Decisions = decisions
+			batch.Decisions = sourceDecisions
+			// The rest of the run (volumes, delivery) reuses these decisions
+			// instead of re-deciding the same releases from the store.
+			decisions.Observe(sourceCfg.ID, sourceDecisions)
 			rules := s.Config.Compiled()
 			for _, doc := range listResult.Documents {
 				result.Discovered++
@@ -201,7 +207,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 						result.DiscoveryNotices = append(result.DiscoveryNotices, fmt.Sprintf("%s enrichment persistence failed: %v", sourceCfg.ID, err))
 					}
 				}
-				decision := authoringDecisionFor(sourceCfg.ID, doc.Normalized, decisions, s.Config, rules)
+				decision := authoringDecisionFor(sourceCfg.ID, doc.Normalized, sourceDecisions, s.Config, rules)
 				classificationMessage := "classified release"
 				if !decision.Matched {
 					classificationMessage = "release unmatched fallback"
@@ -265,13 +271,6 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 	summary := fmt.Sprintf("discovered=%d changed=%d unchanged=%d materialized=%d", result.Discovered, result.Changed, result.Unchanged, result.MaterializedArtifacts)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
-	}
-	if decisionsOut != nil {
-		for _, batch := range observed {
-			if len(batch.Decisions) > 0 {
-				(*decisionsOut)[batch.Source] = batch.Decisions
-			}
-		}
 	}
 	return result, nil
 }
@@ -510,7 +509,13 @@ func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string
 	return s.publish(ctx, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter, dryRun, command, nil, nil)
 }
 
-func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter string, dryRun bool, command string, blockedSeries map[string]bool, syncedHistories map[string]map[string]classify.ExplainedDecision) (result domain.PublishResult, err error) {
+// publish takes the run's decisions value: a sync pass that just decided the
+// sources hands those decisions to volume planning through it rather than
+// re-deciding the same releases.
+func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter string, dryRun bool, command string, blockedSeries map[string]bool, decisions *RunDecisions) (result domain.PublishResult, err error) {
+	if decisions == nil {
+		decisions = NewRunDecisions(s, s.Config)
+	}
 	if err := s.validatePublishTargets(s.Config, scope, targetFilter); err != nil {
 		return domain.PublishResult{}, err
 	}
@@ -535,7 +540,7 @@ func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter
 			blockedSeries = map[string]bool{}
 		}
 		var volumeErr error
-		result.Volumes, volumeErr = s.prepareVolumes(ctx, scope.SourceID, scope.SeriesID, scope.Rebuild, blockedSeries, syncedHistories)
+		result.Volumes, volumeErr = s.prepareVolumes(ctx, scope.SourceID, scope.SeriesID, scope.Rebuild, blockedSeries, decisions)
 		if volumeErr != nil {
 			result.Failed++
 			result.Items = append(result.Items, domain.PublishItemResult{Action: "failed", Message: volumeErr.Error()})
@@ -643,13 +648,13 @@ func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, comma
 	if err := s.validatePublishTargets(s.Config, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter); err != nil {
 		return result, err
 	}
-	var syncedHistories = map[string]map[string]classify.ExplainedDecision{}
-	syncResult, err := s.Sync(ctx, sourceFilter, false, command+" sync", &syncedHistories)
+	runDecisions := NewRunDecisions(s, s.Config)
+	syncResult, err := s.Sync(ctx, sourceFilter, false, command+" sync", runDecisions)
 	result.Sync = syncResult
 	if err != nil {
 		return result, err
 	}
-	publishResult, err := s.publish(ctx, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter, false, command+" publish", nil, syncedHistories)
+	publishResult, err := s.publish(ctx, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter, false, command+" publish", nil, runDecisions)
 	result.Publish = publishResult
 	if err != nil {
 		return result, err

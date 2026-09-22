@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"github.com/prateek/serial-sync/internal/classify"
 	"strings"
 	"testing"
 	"time"
@@ -93,5 +95,50 @@ func TestDecideWithoutReasonsDoesNotHold(t *testing.T) {
 	decisions, _ := decideReleases("fictional", []domain.NormalizedRelease{mid}, map[string]bool{}, &cfg, nil, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
 	if len(decisions["2"].Explanation.HeldReasons) > 0 || decisions["2"].Decision.Sequence == nil {
 		t.Fatalf("a mid-series chapter with no trigger must pass through: %+v", decisions["2"])
+	}
+}
+
+// The run-scoped decisions value decides each source once: an observed
+// history is reused verbatim, an unobserved release falls back to the same
+// explain-and-number path, and the planner snapshot carries the decided
+// sources so volume planning never re-reads them.
+func TestRunDecisionsMemoisePerSource(t *testing.T) {
+	one := domain.NormalizedRelease{ProviderReleaseID: "1", Title: "Tide Lantern - Chapter 1", TextPlain: "body"}
+	two := domain.NormalizedRelease{ProviderReleaseID: "2", Title: "Tide Lantern - Chapter 2", TextPlain: "body"}
+	cfg := &config.Config{Sources: []config.SourceConfig{{ID: "fictional", Enabled: true}}, Series: []config.SeriesConfig{{ID: "tide", Title: "Tide", Authors: []string{"Test Author"}, Inputs: []config.SeriesInputConfig{{Source: "fictional", Priority: 10, MatchType: "title_regex", MatchValue: "^Tide Lantern", ReleaseRole: "chapter", ContentStrategy: "text_post"}}}}}
+	rules := cfg.Compiled()
+	history, _ := decideReleases("fictional", []domain.NormalizedRelease{one, two}, map[string]bool{}, cfg, nil, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
+
+	decisions := NewRunDecisions(&Service{Config: cfg}, cfg)
+	decisions.Observe("fictional", history)
+	if !decisions.isDecided("fictional") {
+		t.Fatal("observed source must count as decided")
+	}
+	got, err := decisions.Decision(context.Background(), "fictional", two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := history["2"]; got.Decision.TrackKey != want.Decision.TrackKey || got.Decision.RuleID != want.Decision.RuleID {
+		t.Fatalf("observed decision not reused: %+v vs %+v", got, want)
+	}
+	// An unobserved release in the same source decides through the same
+	// path without a store read (no repo on this service).
+	three := domain.NormalizedRelease{ProviderReleaseID: "3", Title: "Tide Lantern - Chapter 3", TextPlain: "body"}
+	got, err = decisions.Decision(context.Background(), "fictional", three)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Decision.Matched || got.Decision.RuleID == "" || got.Decision.Sequence == nil || got.Decision.Sequence.Chapter != 3 {
+		t.Fatalf("fallback decision wrong: %+v", got.Decision)
+	}
+	if want := classify.Explain("fictional", three, rules.ForSource("fictional")); want.Decision.OutputFormat != got.Decision.OutputFormat {
+		t.Fatalf("fallback must match the shared explain path: %+v vs %+v", got.Decision, want.Decision)
+	}
+	snapshot := decisions.Histories()
+	if len(snapshot["fictional"]) != 2 {
+		t.Fatalf("planner snapshot lost decided releases: %v", snapshot)
+	}
+	if _, ok := snapshot["other"]; ok {
+		t.Fatal("undecided source leaked into the snapshot")
 	}
 }

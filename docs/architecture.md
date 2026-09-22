@@ -12,10 +12,16 @@ The implementation follows the PRD’s ports-and-adapters shape:
   reading copy (name, type, validation) is one module shared by previews and
   materialization
 - `internal/publish`: replayable downstream publishers behind one target seam
-  (filesystem and exec adapters)
+  that states each target's capabilities (filesystem and exec adapters, plus an
+  in-memory adapter for tests)
+- `internal/filehash`: the one content hash shared by artifact and publish
+- `internal/sequence`: the single chapter sequence detector
 - `internal/observe`: run logs, structured events, and support-bundle inputs
-- `internal/app`: orchestration shared by CLI commands; release intake plans and applies release actions
+- `internal/app`: orchestration shared by CLI commands; release intake plans and
+  applies release actions, and one run-scoped decisions value keeps a single
+  decision per release within a run
 - `internal/runtime/display`: hidden-display helpers for containerized headed browser bootstrap
+- `internal/runtime/daemon`: local health and metrics endpoints
 
 The first runtime slice is:
 

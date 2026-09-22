@@ -24,7 +24,7 @@ type volumeGroup struct {
 	sequences map[string]domain.Sequence
 }
 
-func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter string, rebuild bool, blockedSeries map[string]bool, syncedHistories map[string]map[string]classify.ExplainedDecision) ([]domain.VolumePlan, error) {
+func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter string, rebuild bool, blockedSeries map[string]bool, decisions *RunDecisions) ([]domain.VolumePlan, error) {
 	candidates, err := s.Repo.ListPublishCandidates(ctx, "")
 	if err != nil {
 		return nil, err
@@ -47,7 +47,6 @@ func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter
 		}
 	}
 	inputs := map[string]domain.NormalizedRelease{}
-	histories := map[string]map[string]classify.ExplainedDecision{}
 	for _, candidate := range candidates {
 		if !s.sourceInScope(candidate.Source.ID, sourceFilter, rebuild, s.Config) {
 			continue
@@ -56,19 +55,17 @@ func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter
 		if err == nil {
 			inputs[candidate.Release.ID] = normalized
 		}
-		if _, ok := histories[candidate.Source.ID]; ok {
+		// Histories only matter for sources feeding a volume-bundled series,
+		// and a run that just decided the sources already observes its
+		// decisions in the value; authoringDecisions is not re-run.
+		if decisions.isDecided(candidate.Source.ID) || !volumeSources[candidate.Source.ID] {
 			continue
 		}
-		if passed, ok := syncedHistories[candidate.Source.ID]; ok {
-			histories[candidate.Source.ID] = passed
-		} else if volumeSources[candidate.Source.ID] {
-			histories[candidate.Source.ID], err = s.authoringDecisions(ctx, s.Config, candidate.Source.ID, nil)
-			if err != nil {
-				return nil, err
-			}
+		if _, err := decisions.History(ctx, candidate.Source.ID); err != nil {
+			return nil, err
 		}
 	}
-	plans, _, err := s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: sourceFilter, seriesFilter: seriesFilter, rebuild: rebuild, blockedSeries: blockedSeries, candidates: candidates, existing: existing, inputs: inputs, histories: histories, series: s.Config.Series}, true)
+	plans, _, err := s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: sourceFilter, seriesFilter: seriesFilter, rebuild: rebuild, blockedSeries: blockedSeries, candidates: candidates, existing: existing, inputs: inputs, histories: decisions.Histories(), series: s.Config.Series}, true)
 	return plans, err
 }
 
