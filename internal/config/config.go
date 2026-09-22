@@ -31,6 +31,8 @@ type Config struct {
 	Sources        []SourceConfig    `toml:"sources"`
 	Series         []SeriesConfig    `toml:"series"`
 	Rules          []RuleConfig      `toml:"rules"`
+	compiled       *RuleSet          `json:"-"`
+	compiledFor    string            `json:"-"`
 }
 
 type RuntimeConfig struct {
@@ -246,8 +248,15 @@ func Load(path string) (*Config, Roots, error) {
 	if err := cfg.expandPaths(roots); err != nil {
 		return nil, Roots{}, err
 	}
-	cfg.Rules = cfg.CompileRules()
-	if err := cfg.Validate(); err != nil {
+	// Validate in authored order with the inheritance defaults applied, so a
+	// rules[N] error still points at the authored file line; the sorted
+	// compiled set is derived state and is not an error index.
+	checked := cfg
+	checked.Rules = make([]RuleConfig, 0, len(cfg.Rules))
+	for _, rule := range cfg.Rules {
+		checked.Rules = append(checked.Rules, cfg.inheritRule(rule))
+	}
+	if err := checked.Validate(); err != nil {
 		return nil, Roots{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return &cfg, roots, nil
@@ -527,16 +536,6 @@ func (c *Config) SourceByID(id string) (SourceConfig, bool) {
 	return SourceConfig{}, false
 }
 
-func (c *Config) RulesForSource(sourceID string) []RuleConfig {
-	var rules []RuleConfig
-	for _, rule := range c.Rules {
-		if rule.Source == sourceID {
-			rules = append(rules, rule)
-		}
-	}
-	return rules
-}
-
 func SeriesOutputDefaults(output SeriesOutputConfig) SeriesOutputConfig {
 	if output.Bundling == "" {
 		output.Bundling = "none"
@@ -551,10 +550,6 @@ func SeriesOutputDefaults(output SeriesOutputConfig) SeriesOutputConfig {
 		output.PrefaceMode = "none"
 	}
 	return output
-}
-
-func CompileSeriesRules(series []SeriesConfig) []RuleConfig {
-	return (&Config{Series: series}).compileSeriesRules()
 }
 
 func (c *Config) PublisherByID(id string) (PublisherConfig, bool) {

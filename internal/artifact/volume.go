@@ -20,8 +20,6 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
-func ChapterNumber(title string) int { return detectSequenceInfo(title).Chapter }
-
 func VolumeFilename(title string, number int) string {
 	return fmt.Sprintf("%s-vol%02d.epub", slug(title), number)
 }

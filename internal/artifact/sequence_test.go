@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/sequence"
 )
 
 func TestSequenceKeepsNonIntegralChapterIdentity(t *testing.T) {
@@ -21,7 +22,7 @@ func TestSequenceKeepsNonIntegralChapterIdentity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.title, func(t *testing.T) {
-			got := DetectSequence(tc.title)
+			got := sequence.Detect(tc.title)
 			if got.Book != tc.book || got.Chapter != tc.chapter || got.ChapterLabel != tc.label || got.Part != tc.part || got.MatchedText == "" {
 				t.Fatalf("%q: %+v", tc.title, got)
 			}
@@ -31,7 +32,7 @@ func TestSequenceKeepsNonIntegralChapterIdentity(t *testing.T) {
 		})
 	}
 	for _, title := range []string{"A 2026 update", "Update 12", "Harbor", "Release v2.0 notes"} {
-		if got := DetectSequence(title); got.HasChapter() || got.Part != "" {
+		if got := sequence.Detect(title); got.HasChapter() || got.Part != "" {
 			t.Fatalf("invented sequence in %q: %+v", title, got)
 		}
 	}
@@ -40,7 +41,7 @@ func TestSequenceKeepsNonIntegralChapterIdentity(t *testing.T) {
 func TestExtendedSequenceFilenamesRemainDistinct(t *testing.T) {
 	names := map[string]string{}
 	for _, title := range []string{"Chapter 61", "Chapter 61.5", "Chapter 615", "Chapter 24D", "Chapter 24", "Chapter -186", "Chapter 186", "[Part K8]", "[Part K9]", "Chapter 4 [Part 1]", "Chapter 4 [Part 2]", "Chapter 5 [Part 1]"} {
-		seq := DetectSequence(title)
+		seq := sequence.Detect(title)
 		name := canonicalFileName(domain.StoryTrack{TrackName: "Harbor"}, domain.Release{}, domain.NormalizedRelease{Title: title}, "chapter.html", "text/html", &seq)
 		if earlier, ok := names[name]; ok {
 			t.Fatalf("%q and %q collide as %s", earlier, title, name)
@@ -51,7 +52,7 @@ func TestExtendedSequenceFilenamesRemainDistinct(t *testing.T) {
 
 func TestSelectedFilenamePartSurvivesAnAlreadyNumberedTitle(t *testing.T) {
 	for _, title := range []string{"Harbor Chapter 4", "Harbor Book 2 Chapter 4"} {
-		got := DetectSequence(title, "Harbor Chapter 4 [Part 1].epub")
+		got := sequence.Detect(title, "Harbor Chapter 4 [Part 1].epub")
 		if got.Chapter != 4 || got.Part != "1" || !got.KeepSingle {
 			t.Fatalf("attachment part lost: %+v", got)
 		}

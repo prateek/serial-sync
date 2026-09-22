@@ -22,7 +22,6 @@ func TestMetadataChangesNeedRebuildAndDoNotRepublishUnchangedEditions(t *testing
 			s, _ := newReaderService(t)
 			s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: bundling, ChaptersPerVolume: 2}
 			s.Config.Series[0].Metadata.Description = "First description"
-			s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
 			if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +74,6 @@ func TestReleaseIdentityPolicyRequiresRebuildAndStaysStable(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output.Format = "epub"
 	s.Config.Series[0].Inputs[0].ContentStrategy = "attachment_only"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
 	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
 	for i := range upstream.docs["alpha"] {
 		file := filepath.Join(t.TempDir(), "chapter.epub")

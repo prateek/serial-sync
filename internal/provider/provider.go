@@ -65,13 +65,8 @@ type AuthBootstrapResult struct {
 }
 
 type DiscoverOptions struct {
-	SampleLimit       int      `json:"sample_limit,omitempty"`
-	FullHistory       bool     `json:"full_history,omitempty"`
-	MembershipFilter  string   `json:"membership_filter,omitempty"`
-	CreatorFilters    []string `json:"creator_filters,omitempty"`
-	IncludeConfigured bool     `json:"include_configured,omitempty"`
-	ShowPosts         bool     `json:"show_posts,omitempty"`
-	MetadataOnly      bool     `json:"metadata_only,omitempty"`
+	MembershipFilter string   `json:"membership_filter,omitempty"`
+	CreatorFilters   []string `json:"creator_filters,omitempty"`
 }
 
 type DiscoveryPreviewGroup struct {
@@ -122,12 +117,6 @@ type SourceSuggestion struct {
 	MembershipKind    string              `json:"membership_kind"`
 	AlreadyConfigured bool                `json:"already_configured"`
 	ExistingSourceID  string              `json:"existing_source_id,omitempty"`
-	SampledPosts      int                 `json:"sampled_posts,omitempty"`
-	SampleTitles      []string            `json:"sample_titles,omitempty"`
-	SampleTags        []string            `json:"sample_tags,omitempty"`
-	SampleCollections []string            `json:"sample_collections,omitempty"`
-	SuggestedRules    []config.RuleConfig `json:"suggested_rules,omitempty"`
-	Preview           DiscoveryPreview    `json:"preview,omitempty"`
 }
 
 type DiscoverResult struct {
@@ -192,4 +181,11 @@ func (r *Registry) EnrichCaptured(release domain.NormalizedRelease, raw []byte) 
 // ProfileAuthenticator bootstraps a saved session before a source is configured.
 type ProfileAuthenticator interface {
 	BootstrapProfile(context.Context, config.AuthProfile, bool) (AuthBootstrapResult, error)
+}
+
+// DumpWorkerLimit states the number of creator dumps a provider may run side
+// by side; the provider's request budget is the rate control. Providers that
+// do not implement it fall back to the app default.
+type DumpWorkerLimit interface {
+	DumpWorkerLimit() int
 }

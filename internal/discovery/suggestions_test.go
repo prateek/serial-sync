@@ -28,7 +28,7 @@ func TestAttachmentSuggestionMatchesItsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision := classify.Decide("fictional", post, cfg.RulesForSource("fictional"))
+	decision := classify.Decide("fictional", post, cfg.Compiled().ForSource("fictional"))
 	if !decision.Matched || decision.ContentStrategy != domain.ContentStrategyAttachmentOnly {
 		t.Fatalf("draft cannot match its evidence: %+v", decision)
 	}

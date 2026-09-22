@@ -120,7 +120,11 @@ docker run --rm --network none \
 ```
 
 Stop active runs before previewing. The preview lists replacement destinations,
-retirements and blocked inputs without changing the catalog or calling hooks.
+retirements, blocked inputs and rejected replacement sets without changing the
+catalog or calling hooks: a same-path replacement that would not cover its old
+volume, a cyclic rename, or a retirement whose file was edited outside the
+library fails the run, and a plan that collides with edited destination bytes is
+blocked until the file is restored or the ownership resolved.
 Preview and rebuild both exclude disabled sources and retain their published files.
 If the publisher lives outside `/state`, mount its folder too, read-only for the
 preview. See [the rebuild walkthrough](docs/first-source.md#rebuild-stored-output)

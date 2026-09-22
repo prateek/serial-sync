@@ -94,6 +94,9 @@ Legacy hooks (`protocol_version` absent or `1`) continue to receive their origin
 release-oriented payload. Selecting volumes or a required rename/retirement with
 one of these hooks fails before replacement delivery to any selected target, with
 an instruction to upgrade. Serial-sync does not send a new action to a legacy hook.
+A correction that keeps its filename is delivered to a legacy hook as an ordinary
+publish; the earlier delivery record stays published because the hook has no
+supersede event, and dry runs plan no retirement for such a target.
 
 ## Optional batch lifecycle
 

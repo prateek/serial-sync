@@ -3,8 +3,6 @@ package classify
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/prateek/serial-sync/internal/config"
@@ -17,27 +15,21 @@ type ExplainedDecision struct {
 	Explanation domain.DecisionExplanation `json:"explanation"`
 }
 
-func Decide(sourceID string, release domain.NormalizedRelease, rules []config.RuleConfig) domain.TrackDecision {
+func Decide(sourceID string, release domain.NormalizedRelease, rules []config.CompiledRule) domain.TrackDecision {
 	return Explain(sourceID, release, rules).Decision
 }
 
-func Explain(sourceID string, release domain.NormalizedRelease, rules []config.RuleConfig) ExplainedDecision {
-	sorted := append([]config.RuleConfig(nil), rules...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if sorted[i].Override != sorted[j].Override {
-			return sorted[i].Override
-		}
-		return sorted[i].Priority < sorted[j].Priority
-	})
+func Explain(sourceID string, release domain.NormalizedRelease, rules []config.CompiledRule) ExplainedDecision {
 	result := ExplainedDecision{Decision: reviewDecision(sourceID)}
-	for idx, rule := range sorted {
+	for idx, compiled := range rules {
+		rule := compiled.Rule
 		if rule.Source != sourceID {
 			continue
 		}
-		selectors := selectMatches(rule, release)
+		selectors := selectMatches(compiled, release)
 		attempt := domain.RuleAttempt{Input: ruleID(sourceID, idx, rule), Series: fallback(rule.SeriesID, rule.TrackKey), Selectors: selectors, Reason: rule.Reason, Matched: len(selectors) > 0}
 		if attempt.Matched {
-			attempt.Guards = evaluateGuards(rule.Guards, release)
+			attempt.Guards = evaluateGuards(rule.Guards, compiled.Selectors, release)
 			for _, guard := range attempt.Guards {
 				if !guard.Passed {
 					attempt.Matched = false
@@ -71,6 +63,9 @@ func Explain(sourceID string, release domain.NormalizedRelease, rules []config.R
 			AttachmentPriority: append([]string(nil), rule.AttachmentPriority...),
 			Matched:            true,
 		}
+	}
+	if result.Decision.CanonicalAuthor == "" {
+		result.Decision.CanonicalAuthor = release.CreatorName
 	}
 	selection := SelectContent(release, result.Decision)
 	if result.Rule != nil && (result.Decision.ContentStrategy == domain.ContentStrategyAttachmentOnly || result.Decision.ContentStrategy == domain.ContentStrategyAttachmentPreferred) {
@@ -117,7 +112,8 @@ func reviewDecision(sourceID string) domain.TrackDecision {
 	}
 }
 
-func matches(rule config.RuleConfig, release domain.NormalizedRelease) bool {
+func matches(compiled config.CompiledRule, release domain.NormalizedRelease) bool {
+	rule := compiled.Rule
 	switch rule.MatchType {
 	case "tag":
 		for _, tag := range release.Tags {
@@ -134,18 +130,13 @@ func matches(rule config.RuleConfig, release domain.NormalizedRelease) bool {
 		}
 		return false
 	case "title_regex":
-		re, err := regexp.Compile(rule.MatchValue)
-		if err != nil {
-			return false
-		}
-		return re.MatchString(release.Title)
+		return compiled.Selectors.LegacyTitle != nil && compiled.Selectors.LegacyTitle.MatchString(release.Title)
 	case "attachment_filename_regex":
-		re, err := regexp.Compile(rule.MatchValue)
-		if err != nil {
+		if compiled.Selectors.LegacyAttachment == nil {
 			return false
 		}
 		for _, attachment := range release.Attachments {
-			if re.MatchString(attachment.FileName) {
+			if compiled.Selectors.LegacyAttachment.MatchString(attachment.FileName) {
 				return true
 			}
 		}

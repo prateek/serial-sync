@@ -146,10 +146,8 @@ func (s *Service) DumpSources(ctx context.Context, authFilter string, options So
 	defer capture.close()
 
 	discovered, err := client.DiscoverSources(ctx, auth, s.Config.Sources, provider.DiscoverOptions{
-		MembershipFilter:  firstNonEmpty(strings.TrimSpace(options.MembershipFilter), "paid"),
-		CreatorFilters:    options.CreatorFilters,
-		IncludeConfigured: true,
-		MetadataOnly:      true,
+		MembershipFilter: firstNonEmpty(strings.TrimSpace(options.MembershipFilter), "paid"),
+		CreatorFilters:   options.CreatorFilters,
 	})
 	if err != nil {
 		return result, err
@@ -259,12 +257,10 @@ func (s *Service) dumpCreators(ctx context.Context, auth config.AuthProfile, cli
 }
 
 func dumpWorkerLimit(client provider.Client) int {
-	// Patreon uses per-session request budgeting inside each live client. Running
-	// multiple creator dumps in parallel stacks those budgets and reintroduces
-	// account-level 429s during one-shot authoring dumps, so keep creator dumps
-	// serialized for that provider.
-	if client != nil && client.Name() == "patreon" {
-		return 1
+	// The provider owns its dump concurrency; its request budget is the rate
+	// control. A provider without the optional interface keeps the default.
+	if limited, ok := client.(provider.DumpWorkerLimit); ok {
+		return limited.DumpWorkerLimit()
 	}
 	return sourceDumpWorkerLimit
 }

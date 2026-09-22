@@ -26,10 +26,8 @@ type Repository interface {
 	Close() error
 
 	UpsertSource(ctx context.Context, source domain.Source) error
-	ListSources(ctx context.Context) ([]domain.Source, error)
 	GetSource(ctx context.Context, id string) (*domain.Source, error)
 
-	UpsertTrack(ctx context.Context, track domain.StoryTrack) (*domain.StoryTrack, error)
 	GetTrackBySourceAndKey(ctx context.Context, sourceID, trackKey string) (*domain.StoryTrack, error)
 	GetTrack(ctx context.Context, id string) (*domain.StoryTrack, error)
 	ListTracks(ctx context.Context, sourceID string) ([]domain.StoryTrack, error)
@@ -40,7 +38,6 @@ type Repository interface {
 
 	GetCanonicalArtifactByReleaseID(ctx context.Context, releaseID string) (*domain.Artifact, error)
 	GetArtifact(ctx context.Context, id string) (*domain.Artifact, error)
-	ListArtifactsByReleaseID(ctx context.Context, releaseID string) ([]domain.Artifact, error)
 	SaveSyncSnapshot(ctx context.Context, snapshot SyncSnapshot) error
 	ListVolumeEditions(ctx context.Context) ([]domain.VolumeEdition, error)
 	ReplaceVolumes(ctx context.Context, seriesID string, volumes []domain.VolumeEdition, deactivatedGroups []string) error

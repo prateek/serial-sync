@@ -27,12 +27,14 @@ func TestFilenameMatchMaterializesThePinnedFileAndDoesNotFallBack(t *testing.T) 
 		{FileName: filepath.Base(other), LocalPath: other, MIMEType: "application/epub+zip"},
 		{FileName: filepath.Base(selected), LocalPath: selected, MIMEType: "application/pdf"},
 	}}
-	decision := classify.Explain("fictional", normalized, []config.RuleConfig{{Source: "fictional", MatchType: "attachment_filename_regex", MatchValue: "^Harbor", TrackKey: "harbor", ContentStrategy: "attachment_preferred", AttachmentPriority: []string{"epub", "pdf"}, OutputFormat: "preserve"}}).Decision
+	authored := config.RuleConfig{Source: "fictional", MatchType: "attachment_filename_regex", MatchValue: "^Harbor", TrackKey: "harbor", ContentStrategy: "attachment_preferred", AttachmentPriority: []string{"epub", "pdf"}, OutputFormat: "preserve"}
+	ruleSet := (&config.Config{Rules: []config.RuleConfig{authored}}).CompileRuleSet()
+	decision := classify.Explain("fictional", normalized, ruleSet.ForSource("fictional")).Decision
 	materializer := New(filepath.Join(root, "artifacts"))
 	source := domain.Source{ID: "fictional"}
 	track := domain.StoryTrack{ID: "harbor", TrackKey: "harbor", TrackName: "Harbor"}
 	release := domain.Release{ID: "1", ProviderReleaseID: "1"}
-	plan, err := materializer.Plan(source, track, release, normalized, decision, nil)
+	plan, err := materializer.Plan(context.Background(), source, track, release, normalized, decision, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func TestFilenameMatchMaterializesThePinnedFileAndDoesNotFallBack(t *testing.T) 
 	if err := os.Remove(selected); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := materializer.Plan(source, track, release, normalized, decision, nil); err == nil {
+	if _, err := materializer.Plan(context.Background(), source, track, release, normalized, decision, nil); err == nil {
 		t.Fatal("missing pinned attachment silently fell back")
 	}
 }

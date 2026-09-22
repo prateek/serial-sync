@@ -6,66 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prateek/serial-sync/internal/discovery"
+	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
 )
-
-func (s *Service) discoverCaptured(ctx context.Context, source string, observed []provider.ReleaseDocument, observedAt time.Time, dryRun bool) ([]domain.DiscoveryCandidate, error) {
-	releases, err := s.storedReleases(ctx, source)
-	if err != nil {
-		return nil, err
-	}
-	current := map[string]int{}
-	fresh := map[string]bool{}
-	for i, release := range releases {
-		current[release.ProviderReleaseID] = i
-	}
-	for _, doc := range observed {
-		if !dryRun && doc.Normalized.Enrichment != nil {
-			if err := s.saveEnrichment(ctx, source, doc.Normalized); err != nil {
-				return nil, err
-			}
-		}
-		release := doc.Normalized
-		fresh[release.ProviderReleaseID] = true
-		if index, ok := current[release.ProviderReleaseID]; ok {
-			captured := releases[index]
-			if release.Title == captured.Title && release.TextHTML == captured.TextHTML && release.TextPlain == captured.TextPlain && release.EditedAt.Equal(captured.EditedAt) {
-				release.Attachments = append([]domain.Attachment(nil), release.Attachments...)
-				for i := range release.Attachments {
-					for _, file := range captured.Attachments {
-						if file.FileName == release.Attachments[i].FileName {
-							release.Attachments[i].SHA256 = file.SHA256
-							break
-						}
-					}
-				}
-			}
-			releases[index] = release
-		} else {
-			current[release.ProviderReleaseID] = len(releases)
-			releases = append(releases, release)
-		}
-	}
-
-	previous, err := s.Repo.ListDiscoveryCandidates(ctx, source)
-	if err != nil {
-		return nil, err
-	}
-	candidates := discovery.Observe(source, releases, fresh, s.Config, previous, observedAt)
-	if !dryRun {
-		for i := range candidates {
-			if candidates[i].Status != "resolved" {
-				candidates[i].LastReportedFingerprint = candidates[i].EvidenceFingerprint
-			}
-		}
-		if err := s.Repo.SaveDiscoveryCandidates(ctx, candidates); err != nil {
-			return nil, err
-		}
-	}
-	return candidates, nil
-}
 
 func FormatCandidates(candidates []domain.DiscoveryCandidate) string {
 	var changed, unresolved []domain.DiscoveryCandidate
@@ -99,20 +43,43 @@ func FormatCandidates(candidates []domain.DiscoveryCandidate) string {
 	return strings.Join(lines, "\n")
 }
 
+// observedBatch carries the decider output of one source so the candidate
+// pass can recompute with the stored state for the run.
 type observedBatch struct {
 	Source    string
 	Documents []provider.ReleaseDocument
 	At        time.Time
+	Decisions map[string]classify.ExplainedDecision
 }
 
 func (s *Service) reportObservedCandidates(ctx context.Context, batches []observedBatch, dryRun bool, result *domain.SyncResult) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	for _, batch := range batches {
-		candidates, err := s.discoverCaptured(ctx, batch.Source, batch.Documents, batch.At, dryRun)
+	for i := range batches {
+		batch := &batches[i]
+		// Candidates are computed after releases are stored so the captured
+		// attachment hashes sit in the evidence fingerprints, making the
+		// candidate report stable across syncs. Discovery stays advisory: a
+		// decision or store failure degrades to a notice, never an aborted
+		// source.
+		candidates, noPrevious, err := s.decideCandidates(ctx, batch.Source, batch.Documents, batch.At)
 		if err != nil {
 			result.DiscoveryNotices = append(result.DiscoveryNotices, fmt.Sprintf("%s discovery unavailable: %v", batch.Source, err))
 			continue
+		}
+		if noPrevious {
+			result.DiscoveryNotices = append(result.DiscoveryNotices, fmt.Sprintf("%s discovery unavailable: candidate history could not be read", batch.Source))
+		}
+		if !dryRun {
+			for i := range candidates {
+				if candidates[i].Status != "resolved" {
+					candidates[i].LastReportedFingerprint = candidates[i].EvidenceFingerprint
+				}
+			}
+			if err := s.Repo.SaveDiscoveryCandidates(ctx, candidates); err != nil {
+				result.DiscoveryNotices = append(result.DiscoveryNotices, fmt.Sprintf("%s discovery persistence failed: %v", batch.Source, err))
+				continue
+			}
 		}
 		result.Candidates = append(result.Candidates, candidates...)
 	}

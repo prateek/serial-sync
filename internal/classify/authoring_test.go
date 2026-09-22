@@ -61,7 +61,7 @@ unless_title_patterns=["(?i)question"]
 				post.TextHTML = "<p>ééééé &amp; 字字字</p><script>ignored</script>"
 				post.TextPlain = "wrong"
 			}
-			got := classify.Explain("fictional", post, cfg.RulesForSource("fictional"))
+			got := classify.Explain("fictional", post, cfg.Compiled().ForSource("fictional"))
 			if got.Decision.SeriesID != tc.want {
 				t.Fatalf("decision: %+v", got)
 			}
@@ -98,7 +98,7 @@ tags=["harbor"]
 min_body_chars=0
 `)
 	for _, tc := range []struct{ id, want string }{{"normal", "unmatched"}, {"bonus", "harbor"}, {"exclude", "unmatched"}} {
-		got := classify.Explain("fictional", domain.NormalizedRelease{ProviderReleaseID: tc.id, Tags: []string{"news", "harbor"}, TextPlain: strings.Repeat("x", 2000)}, cfg.RulesForSource("fictional"))
+		got := classify.Explain("fictional", domain.NormalizedRelease{ProviderReleaseID: tc.id, Tags: []string{"news", "harbor"}, TextPlain: strings.Repeat("x", 2000)}, cfg.Compiled().ForSource("fictional"))
 		if got.Decision.SeriesID != tc.want {
 			t.Fatalf("%s: %+v", tc.id, got)
 		}
@@ -136,7 +136,7 @@ collections=["Harbor"]
 		role                          domain.ReleaseRole
 	}{{"Body prelude", "short", "text_post", "epub", domain.ReleaseRoleExtra}, {"Chapter 9", strings.Repeat("x", 12), "attachment_only", "preserve", domain.ReleaseRoleExtra}}
 	for _, tc := range cases {
-		got := classify.Decide("fictional", domain.NormalizedRelease{Title: tc.title, TextPlain: tc.body, Collections: []string{"Harbor"}, CreatorName: "Provider Author"}, cfg.RulesForSource("fictional"))
+		got := classify.Decide("fictional", domain.NormalizedRelease{Title: tc.title, TextPlain: tc.body, Collections: []string{"Harbor"}, CreatorName: "Provider Author"}, cfg.Compiled().ForSource("fictional"))
 		if got.SeriesID != "harbor" || string(got.ContentStrategy) != tc.strategy || string(got.OutputFormat) != tc.format || got.ReleaseRole != tc.role || got.CanonicalAuthor != "Fictional Author" || got.PrefaceMode != domain.PrefaceModePrependPost {
 			t.Fatalf("inheritance for %s: %+v", tc.title, got)
 		}
@@ -161,7 +161,7 @@ release_role="chapter"
 content_strategy="text_post"
 `)
 	for _, tc := range []struct{ title, body, want string }{{"Prelude", strings.Repeat("x", 1499), "unmatched"}, {"Prelude", strings.Repeat("x", 1500), "guarded"}, {"Legacy Chapter 1", "short", "legacy"}} {
-		got := classify.Decide("fictional", domain.NormalizedRelease{Title: tc.title, TextPlain: tc.body, Tags: []string{"story"}}, cfg.RulesForSource("fictional"))
+		got := classify.Decide("fictional", domain.NormalizedRelease{Title: tc.title, TextPlain: tc.body, Tags: []string{"story"}}, cfg.Compiled().ForSource("fictional"))
 		if got.SeriesID != tc.want {
 			t.Fatalf("%s: %+v", tc.title, got)
 		}
@@ -191,7 +191,7 @@ source="fictional"
 track_key="harbor"
 tags=["harbor"]
 `)
-	got := classify.Explain("fictional", domain.NormalizedRelease{Tags: []string{"harbor"}, TextPlain: "notice"}, cfg.RulesForSource("fictional"))
+	got := classify.Explain("fictional", domain.NormalizedRelease{Tags: []string{"harbor"}, TextPlain: "notice"}, cfg.Compiled().ForSource("fictional"))
 	if got.Decision.SeriesID != "unmatched" {
 		t.Fatalf("legacy location bypassed grouped guard: %+v", got)
 	}
@@ -209,7 +209,7 @@ attachment_priority=["epub","pdf"]
 min_body_chars=0
 `)
 	post := domain.NormalizedRelease{Title: "New installment", Attachments: []domain.Attachment{{FileName: "Other.epub"}, {FileName: "Harbor Chapter 1.pdf"}}}
-	decision := classify.Decide("fictional", post, cfg.RulesForSource("fictional"))
+	decision := classify.Decide("fictional", post, cfg.Compiled().ForSource("fictional"))
 	selected := classify.SelectContent(post, decision)
 	if selected.FileName != "Harbor Chapter 1.pdf" {
 		t.Fatalf("selector lost its matching file: %+v", selected)
@@ -230,12 +230,13 @@ collections=[{id="collection-1",name="Harbor"}]
 min_body_chars=0
 `)
 	post := domain.NormalizedRelease{Provider: "patreon", Title: "Epilogue", Collections: []string{"Harbor [completed]"}, Enrichment: &domain.ReleaseEnrichment{NormalizerVersion: domain.NormalizerVersion, Collections: []domain.LabelReference{{Provider: "patreon", Campaign: "campaign-1", Type: "collection", ID: "collection-1", Names: []string{"Harbor [completed]"}}}}}
-	got := classify.Explain("fictional", post, cfg.RulesForSource("fictional"))
+	got := classify.Explain("fictional", post, cfg.Compiled().ForSource("fictional"))
 	if got.Decision.SeriesID != "harbor" || got.Explanation.Attempts[0].Selectors[0].ID != "collection-1" {
 		t.Fatalf("ID lost rename: %+v", got)
 	}
-	cfg.Rules[0].Collections = []config.CollectionSelector{{Name: "Harbor"}}
-	if decision := classify.Decide("fictional", post, cfg.RulesForSource("fictional")); decision.SeriesID != "unmatched" {
+	cfg.Series[0].Inputs[0].Collections = []config.CollectionSelector{{Name: "Harbor"}}
+
+	if decision := classify.Decide("fictional", post, cfg.Compiled().ForSource("fictional")); decision.SeriesID != "unmatched" {
 		t.Fatalf("name silently matched rename: %+v", decision)
 	}
 }
@@ -260,30 +261,47 @@ min_body_chars=0
 `)
 	post := domain.NormalizedRelease{Title: "Tide Chapter 3", Collections: []string{"Harbor"}}
 	for _, want := range []string{"harbor", "tide"} {
-		got := classify.Explain("fictional", post, cfg.RulesForSource("fictional"))
+		got := classify.Explain("fictional", post, cfg.Compiled().ForSource("fictional"))
 		if got.Decision.SeriesID != want || len(got.Explanation.Conflicts) != 1 {
 			t.Fatalf("lost order or conflict: %+v", got)
 		}
-		cfg.Rules[1].Priority = 1
+		cfg.Series[1].Inputs[0].Priority = 1
+
 	}
 }
 
 func TestBookLabelsSelectSeriesAndBookThroughTheNormalRuleModel(t *testing.T) {
 	cfg := config.Config{Sources: []config.SourceConfig{{ID: "fictional", Provider: "patreon", URL: "https://example.invalid"}}, Series: []config.SeriesConfig{{ID: "harbor", Title: "Harbor", Source: "fictional", Books: []config.BookConfig{{ID: "arrival", Number: 1, Collection: &config.CollectionSelector{ID: "book-1", Name: "Old name"}}, {ID: "return", Number: 2, Tag: "Return"}}}}}
-	cfg.Rules = cfg.CompileRules()
+
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	release := domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "1", Title: "Chapter 2", TextPlain: strings.Repeat("Filler ", 250), Collections: []string{"Renamed"}, Enrichment: &domain.ReleaseEnrichment{Collections: []domain.LabelReference{{Provider: "patreon", Type: "collection", ID: "book-1", Names: []string{"Renamed"}}}}}
-	got := classify.Decide("fictional", release, cfg.Rules)
+	got := classify.Decide("fictional", release, cfg.Compiled().ForSource("fictional"))
 	if got.SeriesID != "harbor" || got.BookID != "arrival" {
 		t.Fatalf("collection did not select book: %+v", got)
 	}
 	release.Collections = nil
 	release.Enrichment = nil
 	release.Tags = []string{"return"}
-	got = classify.Decide("fictional", release, cfg.Rules)
+	got = classify.Decide("fictional", release, cfg.Compiled().ForSource("fictional"))
 	if got.BookID != "return" {
 		t.Fatalf("tag did not select book: %+v", got)
+	}
+}
+
+func TestSelectorMatchesStayAlignedAfterAnInvalidPattern(t *testing.T) {
+	rules := (&config.Config{Rules: []config.RuleConfig{{Source: "alpha", TrackKey: "harbor", Selection: config.Selection{TitlePatterns: []string{"(", "^Harbor"}}, ReleaseRole: "chapter", ContentStrategy: "text_post"}}}).CompileRuleSet().ForSource("alpha")
+	explained := classify.Explain("alpha", domain.NormalizedRelease{ProviderReleaseID: "p1", Title: "Harbor Chapter 1"}, rules)
+	attempts := explained.Explanation.Attempts
+	if len(attempts) != 1 || len(attempts[0].Selectors) != 1 || attempts[0].Selectors[0].Value != "^Harbor" {
+		t.Fatalf("selector match reports the wrong authored pattern: %+v", attempts)
+	}
+}
+
+func TestUnmatchedDecisionKeepsTheCreatorAsAuthor(t *testing.T) {
+	explained := classify.Explain("alpha", domain.NormalizedRelease{ProviderReleaseID: "p1", Title: "Note", CreatorName: "Alpha Author"}, nil)
+	if explained.Decision.Matched || explained.Decision.CanonicalAuthor != "Alpha Author" {
+		t.Fatalf("unmatched decision lost the creator as author: %+v", explained.Decision)
 	}
 }

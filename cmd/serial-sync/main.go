@@ -371,7 +371,7 @@ func (cmd *RunExecCmd) Run(cli *CLI) error {
 	}
 	return withService(cli.ConfigPath, func(ctx context.Context, service *app.Service) error {
 		if cmd.DryRun {
-			result, err := service.Sync(ctx, cmd.SourceID, true, "run --dry-run")
+			result, err := service.Sync(ctx, cmd.SourceID, true, "run --dry-run", nil)
 			if err != nil {
 				return err
 			}

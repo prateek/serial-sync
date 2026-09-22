@@ -93,7 +93,10 @@ catalog must be stopped/checkpointed before read-only catalog replay.
 With `--stored`, the applied-library section plans both configs against the same
 read-only catalog using the planner behind `run --rebuild --dry-run`. It lists
 additions, replacements, repairs, retirements, and blockers separately from
-classification and policy changes. Mount destination folders read-only so ownership
+classification and policy changes. Both the dry run and the real rebuild report
+the same blocked destinations and retirement-ownership conflicts with the same
+messages, and a dry run fails on a cyclic or non-covering replacement set just
+as the rebuild would. Mount destination folders read-only so ownership
 checks can inspect them. Disabled or removed sources and publishers retain delivered
 files. Creator filters limit the planned source scope; a partial mixed-source volume
 can block replacement. Workspace-only replay reports applied state as unavailable.

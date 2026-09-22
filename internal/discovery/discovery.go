@@ -66,9 +66,10 @@ func Analyze(source string, releases []domain.NormalizedRelease, fresh map[strin
 		}
 		return a.PublishedAt.Before(b.PublishedAt)
 	})
-	rules := cfg.RulesForSource(source)
+	rules := cfg.Compiled().ForSource(source)
 	references := map[string]bool{}
-	for _, rule := range rules {
+	for _, compiled := range rules {
+		rule := compiled.Rule
 		for _, name := range rule.Collections {
 			if name.ID != "" {
 				references["collection-id:"+name.ID] = true
@@ -182,7 +183,7 @@ func Analyze(source string, releases []domain.NormalizedRelease, fresh map[strin
 		if feature.Family != "" && feature.Sequence.HasChapter() && !mappedFamily && !confirmed {
 			evidence = append(evidence, domain.CandidateEvidence{Kind: "new-title-family", Value: feature.Family})
 		}
-		if !confirmed && decision.ContentStrategy == domain.ContentStrategyManual && (feature.BodyChars >= 1500 || feature.BookFile) {
+		if !confirmed && decision.ContentStrategy == domain.ContentStrategyManual && (feature.BodyChars >= config.MinBodyCharsDefault || feature.BookFile) {
 			evidence = append(evidence, domain.CandidateEvidence{Kind: "substantial-review"})
 		}
 		if feature.Teaser && decision.ContentStrategy == domain.ContentStrategyManual {

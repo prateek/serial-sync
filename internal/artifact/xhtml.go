@@ -14,18 +14,6 @@ type xhtmlDocument struct {
 	Content string
 }
 
-func buildXHTMLDocument(title, bodyHTML string) (xhtmlDocument, error) {
-	return buildXHTMLDocumentForEPUBVersion(title, bodyHTML, "3.0")
-}
-
-func buildXHTMLDocumentForEPUBVersion(title, bodyHTML, epubVersion string) (xhtmlDocument, error) {
-	return buildXHTMLDocumentForEPUBVersionWithViewport(title, bodyHTML, epubVersion, "")
-}
-
-func buildXHTMLDocumentForEPUBVersionWithViewport(title, bodyHTML, epubVersion, viewport string) (xhtmlDocument, error) {
-	return buildXHTMLDocumentForEPUBVersionWithViewportAndFileName(title, bodyHTML, epubVersion, viewport, "")
-}
-
 func buildXHTMLDocumentForEPUBVersionWithViewportAndFileName(title, bodyHTML, epubVersion, viewport, fileName string) (xhtmlDocument, error) {
 	nodes, err := parseHTMLBodyNodes(bodyHTML)
 	if err != nil {

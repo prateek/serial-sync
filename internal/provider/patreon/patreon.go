@@ -28,6 +28,7 @@ type Client struct {
 	apiBaseURL string
 	loginURL   string
 	bootstrap  sessionBootstrapper
+	profiles   map[string]*profileSessions
 }
 
 func New() *Client {
@@ -35,11 +36,19 @@ func New() *Client {
 		apiBaseURL: "https://www.patreon.com",
 		loginURL:   "https://www.patreon.com/login",
 		bootstrap:  bootstrapWithChromium,
+		profiles:   map[string]*profileSessions{},
 	}
 }
 
 func (c *Client) Name() string {
 	return "patreon"
+}
+
+func (c *Client) DumpWorkerLimit() int {
+	// Creator dumps against Patreon stay serialized: the shared per-profile
+	// request budget caps concurrency, and one worker keeps the steady-state
+	// dump rate at today's level.
+	return 1
 }
 
 func (c *Client) ValidateSource(source config.SourceConfig) error {
@@ -86,6 +95,9 @@ func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, sou
 	if err != nil {
 		return provider.AuthBootstrapResult{State: authState, Action: "bootstrapped"}, err
 	}
+	// The bootstrap wrote a new session; drop the cached bundle so the next
+	// profile use loads it instead of the stale one.
+	delete(c.profiles, auth.ID)
 	if _, err := loadSessionBundle(auth.SessionPath); err != nil {
 		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "bootstrapped"}, fmt.Errorf("load bootstrapped Patreon session: %w", err)
 	}

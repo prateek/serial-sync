@@ -136,6 +136,47 @@ type campaignInfo struct {
 	Name string
 }
 
+// profileSessions is the per-auth-profile session material: one saved bundle,
+// one HTTP client and one request budget for the life of the client. Every
+// live call for the profile shares them, so the request budget is one account
+// level choke point instead of a fresh budget at each session site. The
+// bundle tracks its file: a session refreshed by another process is picked up
+// while the client and budget stay put.
+type profileSessions struct {
+	budget   *requestBudget
+	bundle   sessionBundle
+	client   *http.Client
+	revision string
+}
+
+func sessionFileRevision(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%s", info.Size(), info.ModTime().String())
+}
+
+func (c *Client) profileSessions(auth config.AuthProfile) (*profileSessions, error) {
+	revision := sessionFileRevision(auth.SessionPath)
+	if cached, ok := c.profiles[auth.ID]; ok && cached.revision == revision {
+		return cached, nil
+	}
+	budget := newRequestBudget()
+	client, _ := httpClientFromSession()
+	if cached, ok := c.profiles[auth.ID]; ok {
+		budget = cached.budget
+		client = cached.client
+	}
+	bundle, err := loadSessionBundle(auth.SessionPath)
+	if err != nil {
+		return nil, fmt.Errorf("load Patreon session: %w", err)
+	}
+	cached := &profileSessions{budget: budget, bundle: *bundle, client: client, revision: revision}
+	c.profiles[auth.ID] = cached
+	return cached, nil
+}
+
 type liveSession struct {
 	metadata      *metadataAssetCache
 	sourceID      string
@@ -275,6 +316,7 @@ func (c *Client) ensureLiveSession(ctx context.Context, auth config.AuthProfile,
 		"auth_state":  authState,
 		"duration_ms": elapsedMillis(bootstrapStartedAt),
 	})
+	delete(c.profiles, auth.ID)
 	session, authState, err = c.resolveLiveSession(ctx, auth, source)
 	if err != nil {
 		return nil, authState, err
@@ -289,23 +331,19 @@ func (c *Client) ensureLiveSession(ctx context.Context, auth config.AuthProfile,
 }
 
 func (c *Client) resolveLiveSession(ctx context.Context, auth config.AuthProfile, source config.SourceConfig) (*liveSession, domain.AuthState, error) {
-	bundle, err := loadSessionBundle(auth.SessionPath)
+	profile, err := c.profileSessions(auth)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, domain.AuthStateReauthRequired, fmt.Errorf("no Patreon session found at %s", auth.SessionPath)
 		}
-		return nil, domain.AuthStateReauthRequired, fmt.Errorf("load Patreon session: %w", err)
-	}
-	client, err := httpClientFromSession()
-	if err != nil {
 		return nil, domain.AuthStateReauthRequired, err
 	}
 	session := &liveSession{
 		metadata: &metadataAssetCache{root: filepath.Join(sessionCacheRoot(auth.SessionPath), "metadata")},
 		sourceID: source.ID,
-		bundle:   *bundle,
-		client:   client,
-		budget:   newRequestBudget(),
+		bundle:   profile.bundle,
+		client:   profile.client,
+		budget:   profile.budget,
 	}
 	user, authState, err := c.fetchCurrentUser(ctx, session, source.URL)
 	if err != nil {
@@ -706,20 +744,16 @@ func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile
 }
 
 func (c *Client) newLiveDownloadSession(auth config.AuthProfile, source config.SourceConfig) (*liveSession, domain.AuthState, error) {
-	bundle, err := loadSessionBundle(auth.SessionPath)
-	if err != nil {
-		return nil, domain.AuthStateReauthRequired, fmt.Errorf("load Patreon session: %w", err)
-	}
-	client, err := httpClientFromSession()
+	profile, err := c.profileSessions(auth)
 	if err != nil {
 		return nil, domain.AuthStateReauthRequired, err
 	}
 	return &liveSession{
 		metadata: &metadataAssetCache{root: filepath.Join(sessionCacheRoot(auth.SessionPath), "metadata")},
 		sourceID: source.ID,
-		bundle:   *bundle,
-		client:   client,
-		budget:   newRequestBudget(),
+		bundle:   profile.bundle,
+		client:   profile.client,
+		budget:   profile.budget,
 	}, domain.AuthStateAuthenticated, nil
 }
 

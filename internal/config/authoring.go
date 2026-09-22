@@ -126,7 +126,7 @@ func (c *Config) inheritRule(rule RuleConfig) RuleConfig {
 		rule.MinBodyChars = defaults.MinBodyChars
 	}
 	if rule.MinBodyChars == nil && rule.Selection.Present() {
-		n := 1500
+		n := MinBodyCharsDefault
 		rule.MinBodyChars = &n
 	}
 	if rule.AttachmentGlob == nil {
@@ -151,50 +151,6 @@ func (c *Config) compileSeriesRules() []RuleConfig {
 	return rules
 }
 
-// CompileRules compiles the authored document once. Its result replaces Rules.
-func (c *Config) CompileRules() []RuleConfig {
-	rules := make([]RuleConfig, 0, len(c.Rules))
-	for _, rule := range c.Rules {
-		rules = append(rules, c.inheritRule(rule))
-	}
-
-	rules = append(rules, c.compileSeriesRules()...)
-	for i, review := range c.Review {
-		rule := c.compileInput(SeriesConfig{ID: "unmatched", Title: "Unmatched"}, SeriesInputConfig{Selection: review.Selection, Guards: review.Guards, Source: review.Source, Priority: review.Priority, ContentStrategy: "manual", ReleaseRole: "unknown"}, i)
-		// Review is deliberate routing; a body threshold applies only when requested.
-		if review.MinBodyChars == nil {
-			rule.MinBodyChars = nil
-		}
-		rule.SeriesID = ""
-		rule.Reason = review.Reason
-		rules = append(rules, rule)
-	}
-	for _, override := range c.Overrides {
-		target := SeriesConfig{ID: "unmatched", Title: "Unmatched"}
-		for _, series := range c.Series {
-			if series.ID == override.Series {
-				target = series
-				break
-			}
-		}
-		input := SeriesInputConfig{Source: override.Source, MatchType: "fallback"}
-		if override.Review {
-			input.ContentStrategy = "manual"
-			input.ReleaseRole = "unknown"
-		}
-		rule := c.compileInput(target, input, 0)
-		if override.Review {
-			rule.SeriesID = ""
-		}
-		rule.MinBodyChars = nil
-		rule.Override = true
-		rule.ReleaseID = override.ReleaseID
-		rule.Reason = override.Reason
-		rules = append(rules, rule)
-	}
-	return rules
-}
-
 func (c *Config) validateAuthoring() error {
 
 	if err := validateRuleDefaults("defaults", c.Defaults); err != nil {
@@ -208,6 +164,11 @@ func (c *Config) validateAuthoring() error {
 	for i, review := range c.Review {
 		if strings.TrimSpace(review.Reason) == "" {
 			return fmt.Errorf("review[%d] reason is required", i+1)
+		}
+		// Review rules compile into the same routing model as series inputs;
+		// their selectors and guards must validate the same way.
+		if err := validateRuleFields(c.compileReviewRule(i, review)); err != nil {
+			return fmt.Errorf("review[%d] for source %q: %w", i+1, review.Source, err)
 		}
 	}
 	seen := map[string]bool{}
@@ -237,6 +198,9 @@ func (c *Config) validateAuthoring() error {
 			if !found {
 				return fmt.Errorf("%s series %q is unknown", owner, override.Series)
 			}
+		}
+		if err := validateRuleFields(c.compileOverrideRule(override)); err != nil {
+			return fmt.Errorf("%s: %w", owner, err)
 		}
 	}
 	return nil

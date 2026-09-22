@@ -3,7 +3,6 @@ package app
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,12 +13,19 @@ import (
 )
 
 func (s *Service) publicationMetadata(sourceID string, release domain.NormalizedRelease, decision domain.TrackDecision) (*domain.PublicationMetadata, error) {
+	return publicationMetadataFor(s.Config, sourceID, release, decision)
+}
+
+// publicationMetadataFor resolves the publication metadata a reading copy
+// carries from an explicit config, so replay and applied-library previews
+// resolve against the candidate config rather than the live one.
+func publicationMetadataFor(cfg *config.Config, sourceID string, release domain.NormalizedRelease, decision domain.TrackDecision) (*domain.PublicationMetadata, error) {
 	if decision.OutputFormat != domain.OutputFormatEPUB {
 		return nil, nil
 	}
 	result := &domain.PublicationMetadata{}
 	var profiles []string
-	if source, ok := s.Config.SourceByID(sourceID); ok && source.AuthorProfile != "" {
+	if source, ok := cfg.SourceByID(sourceID); ok && source.AuthorProfile != "" {
 		profiles = []string{source.AuthorProfile}
 	}
 	apply := func(metadata config.PublicationConfig) error {
@@ -49,7 +55,7 @@ func (s *Service) publicationMetadata(sourceID string, release domain.Normalized
 		}
 		return nil
 	}
-	for _, series := range s.Config.Series {
+	for _, series := range cfg.Series {
 		if series.ID != decision.SeriesID {
 			continue
 		}
@@ -82,7 +88,7 @@ func (s *Service) publicationMetadata(sourceID string, release domain.Normalized
 		}
 	}
 	for _, id := range profiles {
-		for _, profile := range s.Config.AuthorProfiles {
+		for _, profile := range cfg.AuthorProfiles {
 			if profile.ID != id {
 				continue
 			}
@@ -123,37 +129,4 @@ func publicationAsset(asset config.AssetConfig) (*domain.MetadataAsset, error) {
 	}
 	hash := sha256.Sum256(data)
 	return &domain.MetadataAsset{Path: asset.Path, SHA256: hex.EncodeToString(hash[:]), MediaType: mediaType, SourceURL: asset.SourceURL}, nil
-}
-
-func artifactPublication(artifact domain.Artifact) (*domain.PublicationMetadata, error) {
-	var metadata struct {
-		Decision domain.TrackDecision `json:"decision"`
-	}
-	data, err := os.ReadFile(artifact.MetadataRef)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return nil, err
-	}
-	return metadata.Decision.Publication, nil
-}
-
-func publicationFingerprint(metadata *domain.PublicationMetadata) string {
-	// File locations are capture references; the selected bytes determine identity.
-	data, _ := json.Marshal(metadata)
-	var copy *domain.PublicationMetadata
-	_ = json.Unmarshal(data, &copy)
-	if copy != nil {
-		if copy.Cover != nil {
-			copy.Cover.Path = ""
-		}
-		for i := range copy.Authors {
-			if copy.Authors[i].Portrait != nil {
-				copy.Authors[i].Portrait.Path = ""
-			}
-		}
-	}
-	data, _ = json.Marshal(copy)
-	return hashBytes(data)
 }

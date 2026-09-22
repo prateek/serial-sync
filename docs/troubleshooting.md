@@ -21,6 +21,8 @@ Check:
 
 If the saved session is stale, remove the session file and its sibling profile directory, then run `serial-sync run --dry-run` again.
 
+A rebuild reports "cyclic same-path replacement; choose distinct output names", a replacement that does not cover its old volume, or a retirement-ownership conflict when a delivered file was edited outside the library or two planned deliveries share a destination. The run fails with the same messages the dry run printed, the pending plan and the published record stay untouched, and the conflict must be resolved (distinct output names, or restore the edited file) before the run proceeds.
+
 ## I already have a Patreon session bundle
 
 Import it directly:

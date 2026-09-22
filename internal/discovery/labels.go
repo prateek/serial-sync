@@ -26,7 +26,7 @@ type LabelReport struct {
 	PossibleDrift     []LabelDrift            `json:"possible_drift,omitempty"`
 }
 
-func Labels(source string, releases []domain.NormalizedRelease, rules []config.RuleConfig, decisions map[string]classify.ExplainedDecision, history []domain.LabelReference) LabelReport {
+func Labels(source string, releases []domain.NormalizedRelease, rules []config.CompiledRule, decisions map[string]classify.ExplainedDecision, history []domain.LabelReference) LabelReport {
 	report := LabelReport{Source: source, CapturedPosts: len(releases)}
 	observed := map[string]domain.LabelReference{}
 	merge := func(label domain.LabelReference) {
@@ -73,7 +73,8 @@ func Labels(source string, releases []domain.NormalizedRelease, rules []config.R
 	}
 	report.RecentPosts = len(recent)
 	seen := map[string]bool{}
-	for _, rule := range rules {
+	for _, compiled := range rules {
+		rule := compiled.Rule
 		collections := rule.Collections
 		if rule.MatchType == "collection" {
 			collections = append(append([]config.CollectionSelector(nil), collections...), config.CollectionSelector{Name: rule.MatchValue})

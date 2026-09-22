@@ -305,7 +305,9 @@ reason = "Confirmed fiction with an incorrect upstream label"
 An override runs before inputs. Set exactly one of `series` or `review = true`,
 and provide a nonempty reason. A series override inherits source defaults and
 series output; selector guards do not apply. Review also requires a reason.
-Unmatched posts need no fallback series.
+Review and override entries are validated like series inputs when the config
+loads: selector patterns must compile and guards must be well formed, reported
+as `review[N]` or `overrides[N]`. Unmatched posts need no fallback series.
 
 ### Collection identity and holding
 

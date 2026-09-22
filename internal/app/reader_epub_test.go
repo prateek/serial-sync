@@ -17,7 +17,7 @@ import (
 func TestVolumePreservesEscapedAttachmentResources(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub"}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
 	upstream.docs["alpha"][0].Normalized.TextHTML = "<p>A chapter with an escaped resource name.</p>"
 	if _, err := s.RunOnce(context.Background(), "", "", "generate chapter"); err != nil {
@@ -66,7 +66,7 @@ func TestVolumePreservesEscapedAttachmentResources(t *testing.T) {
 	target.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub"}
 	target.Config.Series[0].Inputs[0].ContentStrategy = "attachment_only"
 	target.Config.Series[0].Inputs[0].AttachmentGlob = []string{"*.epub"}
-	target.Config.Rules = config.CompileSeriesRules(target.Config.Series)
+
 	source.docs["alpha"] = source.docs["alpha"][:1]
 	source.docs["alpha"][0].Normalized.Attachments = []domain.Attachment{{FileName: "chapter.epub", MIMEType: "application/epub+zip", LocalPath: attachment}}
 	if _, err := target.RunOnce(context.Background(), "", "", "validate and publish attachment"); err != nil {
@@ -74,7 +74,7 @@ func TestVolumePreservesEscapedAttachmentResources(t *testing.T) {
 	}
 	target.Config.Series[0].Output.Bundling = "volume"
 	target.Config.Series[0].Output.ChaptersPerVolume = 1
-	target.Config.Rules = config.CompileSeriesRules(target.Config.Series)
+
 	if result, err := target.Publish(context.Background(), "", "", false, "bundle attachment"); err != nil {
 		t.Fatalf("bundle attachment: %+v %v", result, err)
 	}
@@ -87,5 +87,51 @@ func TestVolumePreservesEscapedAttachmentResources(t *testing.T) {
 	}
 	if nav := string(epubEntry(t, files[0], "nav.xhtml")); !strings.Contains(nav, "chapter%20001.xhtml") {
 		t.Fatalf("volume navigation lost the escaped resource link: %s", nav)
+	}
+}
+
+func TestBuildVolumeDirectlyBundlesStoredChapters(t *testing.T) {
+	s, upstream := newReaderService(t)
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub"}
+
+	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := s.Repo.ListPublishCandidates(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chapters []domain.PublishCandidate
+	for _, candidate := range candidates {
+		if candidate.Track.TrackKey == "alpha-saga" && candidate.Volume == nil {
+			chapters = append(chapters, candidate)
+		}
+	}
+	if len(chapters) != 2 {
+		t.Fatalf("expected two stored chapter artifacts, got %d", len(chapters))
+	}
+
+	volume := domain.VolumeEdition{
+		ID: "volume_test", SeriesID: "alpha-saga", SourceID: "alpha", TrackID: chapters[0].Track.ID,
+		GroupID: "range:1:2", First: 1, Last: 2, RecipeHash: "test",
+		Members:  []domain.VolumeMember{{ReleaseID: chapters[0].Release.ID, ContentHash: chapters[0].Release.ContentHash, Position: 1}, {ReleaseID: chapters[1].Release.ID, ContentHash: chapters[1].Release.ContentHash, Position: 2}},
+		Artifact: domain.Artifact{Filename: "alpha-saga-vol01.epub", MIMEType: "application/epub+zip"},
+	}
+	built, err := s.Files.BuildVolume(context.Background(), volume, "Harbor — Volume 1 (Chapters 1–2)", chapters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.SHA256 == "" || built.Filename == "" || built.StorageRef == "" {
+		t.Fatalf("volume artifact incomplete: %+v", built)
+	}
+	if _, err := os.Stat(built.StorageRef); err != nil {
+		t.Fatalf("volume bytes not recorded on disk: %v", err)
+	}
+	if opf := string(epubEntry(t, built.StorageRef, ".opf")); !strings.Contains(opf, "Chapters 1–2") || !strings.Contains(opf, "Alpha Author") {
+		t.Fatalf("volume metadata missing: %s", opf)
+	}
+	if toc := string(epubEntry(t, built.StorageRef, "contents.xhtml")); !strings.Contains(toc, "Harbor — Volume 1") {
+		t.Fatalf("volume contents missing: %s", toc)
 	}
 }

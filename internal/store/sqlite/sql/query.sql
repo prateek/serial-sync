@@ -57,11 +57,6 @@ ON CONFLICT(artifact_id, target_id, publish_hash) DO UPDATE SET filename = exclu
 -- name: GetPublishFilename :one
 SELECT filename FROM publish_filenames WHERE artifact_id = sqlc.arg(artifact_id) AND target_id = sqlc.arg(target_id) AND publish_hash = sqlc.arg(publish_hash);
 
--- name: ListSources :many
-SELECT id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at
-FROM sources
-ORDER BY id;
-
 -- name: GetSource :one
 SELECT id, provider, source_url, source_type, creator_id, creator_name, auth_profile_id, enabled, sync_cursor, last_synced_at
 FROM sources
@@ -267,52 +262,8 @@ JOIN artifacts art ON art.id = pr.artifact_id
 JOIN releases r ON r.id = art.release_id
 JOIN sources s ON s.id = r.source_id
 LEFT JOIN story_tracks t ON t.id = art.track_id
-ORDER BY pr.published_at DESC, pr.id DESC;
-
--- name: ListPublishRecordsBySource :many
-SELECT
-  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
-FROM publish_records pr
-JOIN artifacts art ON art.id = pr.artifact_id
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN story_tracks t ON t.id = art.track_id
-WHERE s.id = sqlc.arg(source_id)
-ORDER BY pr.published_at DESC, pr.id DESC;
-
--- name: ListPublishRecordsByTarget :many
-SELECT
-  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
-FROM publish_records pr
-JOIN artifacts art ON art.id = pr.artifact_id
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN story_tracks t ON t.id = art.track_id
-WHERE pr.target_id = sqlc.arg(target_id)
-ORDER BY pr.published_at DESC, pr.id DESC;
-
--- name: ListPublishRecordsBySourceAndTarget :many
-SELECT
-  pr.id, pr.artifact_id, pr.target_id, pr.target_kind, pr.target_ref, pr.publish_hash, pr.published_at, pr.status, pr.message,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at
-FROM publish_records pr
-JOIN artifacts art ON art.id = pr.artifact_id
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN story_tracks t ON t.id = art.track_id
-WHERE s.id = sqlc.arg(source_id)
-  AND pr.target_id = sqlc.arg(target_id)
+WHERE (sqlc.arg(source_id) = '' OR s.id = sqlc.arg(source_id))
+  AND (sqlc.arg(target_id) = '' OR pr.target_id = sqlc.arg(target_id))
 ORDER BY pr.published_at DESC, pr.id DESC;
 
 -- name: AcquireLease :execrows
@@ -342,21 +293,7 @@ JOIN sources s ON s.id = r.source_id
 LEFT JOIN release_assignments a ON a.release_id = r.id
 LEFT JOIN story_tracks t ON t.id = a.track_id
 WHERE art.is_canonical = 1
-ORDER BY s.id, t.track_key, r.published_at;
-
--- name: ListPublishCandidatesBySource :many
-SELECT
-  s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,
-  t.id, t.source_id, t.track_key, t.track_name, t.canonical_author, t.series_meta, t.output_policy, t.created_at, t.updated_at,
-  r.id, r.source_id, r.provider_release_id, r.url, r.title, r.published_at, r.edited_at, r.post_type, r.visibility_state, r.normalized_payload_ref, r.raw_payload_ref, r.content_hash, r.discovered_at, r.status,
-  a.release_id, a.track_id, a.rule_id, a.release_role, a.confidence,
-  art.id, art.release_id, art.track_id, art.artifact_kind, art.is_canonical, art.filename, art.mime_type, art.sha256, art.storage_ref, art.built_at, art.state, art.metadata_ref, art.normalized_ref, art.raw_ref
-FROM artifacts art
-JOIN releases r ON r.id = art.release_id
-JOIN sources s ON s.id = r.source_id
-LEFT JOIN release_assignments a ON a.release_id = r.id
-LEFT JOIN story_tracks t ON t.id = a.track_id
-WHERE art.is_canonical = 1 AND s.id = sqlc.arg(source_id)
+  AND (sqlc.arg(source_id) = '' OR s.id = sqlc.arg(source_id))
 ORDER BY s.id, t.track_key, r.published_at;
 
 -- name: ListDiscoveryCandidates :many

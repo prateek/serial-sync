@@ -11,7 +11,7 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
-func applyOutputProfile(track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, content []byte, originalFileName, mimeType string, selectedAttachment bool) ([]byte, string, string, bool, error) {
+func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, content []byte, originalFileName, mimeType string, selectedAttachment bool) ([]byte, string, string, bool, error) {
 	outputFormat := decision.OutputFormat
 	if outputFormat == "" {
 		outputFormat = domain.OutputFormatPreserve
@@ -45,7 +45,7 @@ func applyOutputProfile(track domain.StoryTrack, release domain.Release, normali
 			return epubContent, forceExtension(originalFileName, ".epub"), "application/epub+zip", true, nil
 		}
 		if strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(originalFileName), ".pdf") {
-			epubContent, err := convertPDFToEPUB(context.Background(), content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release))
+			epubContent, err := convertPDFToEPUB(ctx, content, track.TrackName, firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName), epubIdentifierForRelease(release, normalized.Title), epubModifiedForRelease(release))
 			if err != nil {
 				return nil, "", "", false, err
 			}

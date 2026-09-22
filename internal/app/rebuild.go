@@ -2,14 +2,13 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 
 	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/classify"
+	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/observe"
 	"github.com/prateek/serial-sync/internal/provider"
@@ -34,32 +33,33 @@ type RebuildResult struct {
 }
 
 func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command string) (result RebuildResult, err error) {
+	return s.rebuildWith(ctx, options, command, s.Config)
+}
+
+// rebuildWith is the rebuild engine with the config explicit; Rebuild runs it
+// against the service config and workspace replay against a dump-scoped one.
+func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, command string, cfg *config.Config) (result RebuildResult, err error) {
 	result.Scope = options
-	if err := s.validatePublishTargets(options.SourceID, options.TargetID, options.SeriesID, true); err != nil {
+	scope := deliveryScope{SourceID: options.SourceID, SeriesID: options.SeriesID, Rebuild: true}
+	if err := s.validatePublishTargets(cfg, scope, options.TargetID); err != nil {
 		return result, err
 	}
-	sources := selectSources(s.Config.Sources, options.SourceID)
+	sources := selectSources(cfg.Sources, options.SourceID)
 	if len(sources) == 0 {
 		return result, fmt.Errorf("no enabled sources match %q", options.SourceID)
 	}
-	if len(selectPublishers(s.Config.Publishers, options.TargetID)) == 0 {
+	if len(selectPublishers(cfg.Publishers, options.TargetID)) == 0 {
 		return result, fmt.Errorf("no enabled publishers match %q", options.TargetID)
 	}
 	if options.SeriesID != "" {
-		found := false
-		for _, rule := range s.Config.Rules {
-			if rule.SeriesID == options.SeriesID || rule.TrackKey == options.SeriesID {
-				found = true
-			}
-		}
-		if !found {
+		if !cfg.Compiled().SeriesExists(options.SeriesID) {
 			return result, fmt.Errorf("unknown series %q", options.SeriesID)
 		}
 	}
 	if options.DryRun {
-		return s.previewRebuild(ctx, options)
+		return s.previewRebuild(ctx, options, cfg)
 	}
-	recorder, err := observe.Start(ctx, s.Repo, command, options.SourceID, options.DryRun, s.observeOptions())
+	recorder, err := observe.Start(ctx, s.Repo, command, options.SourceID, false, s.observeOptions())
 	if err != nil {
 		return result, err
 	}
@@ -74,12 +74,15 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 			err = finishErr
 		}
 	}()
+	rules := cfg.Compiled()
+	histories := map[string]map[string]classify.ExplainedDecision{}
 	for _, source := range sources {
-		history, historyErr := s.authoringDecisions(ctx, source.ID, nil)
+		history, historyErr := s.authoringDecisions(ctx, cfg, source.ID, nil)
 		if historyErr != nil {
 			result.Blocked = append(result.Blocked, source.ID+": "+historyErr.Error())
 			return result, fmt.Errorf("rebuild history unavailable for %s: %w", source.ID, historyErr)
 		}
+		histories[source.ID] = history
 		storedSource, readErr := s.Repo.GetSource(ctx, source.ID)
 		if readErr != nil {
 			return result, readErr
@@ -107,7 +110,7 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
 				continue
 			}
-			decision := s.authoringDecision(source.ID, normalized, history)
+			decision := authoringDecisionFor(source.ID, normalized, history, cfg, rules)
 			if options.SeriesID != "" && decision.SeriesID != options.SeriesID {
 				continue
 			}
@@ -117,7 +120,7 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
 				continue
 			}
-			plan, _, _, rebuildErr := s.handleRelease(ctx, recorder, source, provider.ReleaseDocument{Normalized: normalized, RawJSON: raw}, decision, options.DryRun, true)
+			plan, _, _, rebuildErr := s.handleRelease(ctx, recorder, source, provider.ReleaseDocument{Normalized: normalized, RawJSON: raw}, decision, false, true)
 			if rebuildErr != nil {
 				blockedSeries[oldSeries], blockedSeries[decision.TrackKey] = true, true
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, rebuildErr))
@@ -125,13 +128,13 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 			}
 			result.Plans = append(result.Plans, plan)
 		}
-		if storedSource != nil && !options.DryRun {
+		if storedSource != nil {
 			if err := s.Repo.UpsertSource(ctx, *storedSource); err != nil {
 				return result, err
 			}
 		}
 	}
-	result.Publish, err = s.publish(ctx, options.SourceID, options.TargetID, options.SeriesID, options.DryRun, true, command+" publish", blockedSeries)
+	result.Publish, err = s.publish(ctx, scope, options.TargetID, false, command+" publish", blockedSeries, histories)
 	if err != nil {
 		return result, err
 	}
@@ -141,7 +144,7 @@ func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command s
 	return result, nil
 }
 
-func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (RebuildResult, error) {
+func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cfg *config.Config) (RebuildResult, error) {
 	result := RebuildResult{Scope: options, Publish: domain.PublishResult{DryRun: true}}
 	candidates, err := s.Repo.ListPublishCandidates(ctx, "")
 	if err != nil {
@@ -151,7 +154,7 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 	for _, candidate := range candidates {
 		seen[candidate.Release.ID] = true
 	}
-	for _, source := range selectSources(s.Config.Sources, options.SourceID) {
+	for _, source := range selectSources(cfg.Sources, options.SourceID) {
 		releases, err := s.Repo.ListReleases(ctx, source.ID)
 		if err != nil {
 			return result, err
@@ -179,20 +182,21 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 	historyErrors := map[string]error{}
 	for _, candidate := range candidates {
 		if _, ok := histories[candidate.Source.ID]; !ok {
-			histories[candidate.Source.ID], historyErrors[candidate.Source.ID] = s.authoringDecisions(ctx, candidate.Source.ID, nil)
+			histories[candidate.Source.ID], historyErrors[candidate.Source.ID] = s.authoringDecisions(ctx, cfg, candidate.Source.ID, nil)
 		}
 	}
+	rules := cfg.Compiled()
 	for i := range candidates {
 		candidate := &candidates[i]
-		if !s.sourceInScope(candidate.Source.ID, options.SourceID, true) {
+		if !s.sourceInScope(candidate.Source.ID, options.SourceID, true, cfg) {
 			continue
 		}
 		release := candidate.Release
 		normalized, loadErr := s.loadStoredNormalized(ctx, release)
 
-		decision := s.authoringDecision(candidate.Source.ID, normalized, histories[candidate.Source.ID])
+		decision := authoringDecisionFor(candidate.Source.ID, normalized, histories[candidate.Source.ID], cfg, rules)
 		if loadErr == nil {
-			decision.Publication, loadErr = s.publicationMetadata(candidate.Source.ID, normalized, decision)
+			decision.Publication, loadErr = publicationMetadataFor(cfg, candidate.Source.ID, normalized, decision)
 		}
 		if loadErr == nil {
 			loadErr = historyErrors[candidate.Source.ID]
@@ -220,20 +224,24 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 		if err != nil {
 			return result, err
 		}
-		name := artifact.PreviewFilename(track, release, normalized, decision)
+		description := artifact.Describe(track, release, normalized, decision)
+		name := artifact.PreviewFilenameFor(track, release, normalized, decision, description)
 		plan := domain.SyncItemPlan{SourceID: candidate.Source.ID, ProviderReleaseID: release.ProviderReleaseID, Title: release.Title, TrackKey: track.TrackKey, Filename: name, Action: "rebuild"}
-		if artifactMatches(candidate.Artifact, release, track, decision) {
+		if artifact.IsCurrent(candidate.Artifact, release, track, decision) {
 			plan.Action = "unchanged"
 		} else {
+			// The rebuild artifacts do not exist yet; the planned: id marks a
+			// to-be-built candidate so the planner treats it as pending
+			// delivery rather than an already-published artifact. A dedicated
+			// planned-release value carrying the decision would be cleaner and
+			// is tracked separately.
 			candidate.Artifact.ID = "planned:" + release.ID
 			candidate.Artifact.SHA256 = ""
 		}
 		candidate.Track = track
 		candidate.Assignment.ReleaseRole = decision.ReleaseRole
 		candidate.Artifact.Filename = name
-		if decision.OutputFormat == domain.OutputFormatEPUB {
-			candidate.Artifact.MIMEType = "application/epub+zip"
-		}
+		candidate.Artifact.MIMEType = description.MIMEType
 		result.Plans = append(result.Plans, plan)
 	}
 	materializable := candidates[:0]
@@ -244,30 +252,26 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 	}
 	candidates = materializable
 	var volumes []domain.VolumeEdition
-	result.Publish.Volumes, volumes, err = s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: options.SourceID, seriesFilter: options.SeriesID, rebuild: true, blockedSeries: blocked, candidates: candidates, existing: existing, inputs: inputs})
+	result.Publish.Volumes, volumes, err = s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: options.SourceID, seriesFilter: options.SeriesID, rebuild: true, blockedSeries: blocked, candidates: candidates, existing: existing, inputs: inputs, histories: histories, series: cfg.Series, config: cfg}, false)
 	if err != nil {
 		result.Blocked = append(result.Blocked, err.Error())
 	}
-	candidates, err = s.volumeCandidates(ctx, candidates, volumes)
+	targets := selectPublishers(cfg.Publishers, options.TargetID)
+	scope := deliveryScope{SourceID: options.SourceID, SeriesID: options.SeriesID, Rebuild: true}
+	selected, recordsByTarget, _, err := s.deliverySelection(ctx, cfg, scope, targets, candidates, blocked, volumes)
 	if err != nil {
 		return result, err
 	}
-	if err := resolveCollisionNames(candidates); err != nil {
-		return result, err
-	}
-	selected := make([]domain.PublishCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		if !s.sourceInScope(candidate.Source.ID, options.SourceID, true) || options.SeriesID != "" && candidate.Track.TrackKey != options.SeriesID || blocked[candidate.Track.TrackKey] {
-			continue
-		}
-		selected = append(selected, candidate)
-	}
-	targets := selectPublishers(s.Config.Publishers, options.TargetID)
-	if err := s.validateLegacyReplacements(ctx, targets, selected); err != nil {
+	if err := s.validateLegacyReplacements(ctx, targets, selected, recordsByTarget); err != nil {
 		return result, err
 	}
 	for _, target := range targets {
-		pending, err := s.pendingDelivery(ctx, target, options.SourceID, options.SeriesID, true)
+		pt, targetErr := publish.TargetFor(target)
+		if targetErr != nil {
+			result.Blocked = append(result.Blocked, targetErr.Error())
+			continue
+		}
+		pending, err := s.pendingDelivery(ctx, cfg, scope, target)
 		if err != nil {
 			result.Blocked = append(result.Blocked, err.Error())
 			continue
@@ -275,127 +279,24 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions) (R
 		if pending != nil {
 			result.Pending = append(result.Pending, *pending)
 		}
-		records, err := s.Repo.ListPublishRecords(ctx, "", target.ID)
-		if err != nil {
-			return result, err
+		plan, planErr := s.planDelivery(ctx, scope, pt, target, selected, librarySnapshot{Records: recordsByTarget[target.ID], Volumes: existing})
+		if planErr != nil {
+			result.Blocked = append(result.Blocked, planErr.Error())
+			continue
 		}
-		desired, covered := map[string]bool{}, map[string]bool{}
-		identity := func(ref, artifactID, filename string) string {
-			if normalizedPublisherKind(target.Kind) == "exec" {
-				return artifactID + "\x00" + filename
+		result.Publish.Items = append(result.Publish.Items, plan.Items...)
+		result.Blocked = append(result.Blocked, plan.Blocked...)
+		for _, item := range plan.Items {
+			if item.Action == "replace" || item.Action == "retire" {
+				result.Notices = append(result.Notices, "Replacing delivered books may reset saved reading positions; check a small reader sample before a larger migration.")
+				break
 			}
-			return ref
-		}
-		for _, candidate := range selected {
-			kind, ref, signature, err := publishTargetIdentity(target, candidate)
-			if err != nil {
-				return result, err
-			}
-			desired[identity(ref, candidate.Artifact.ID, candidate.Artifact.Filename)] = true
-			if candidate.Volume != nil {
-				for _, member := range candidate.Volume.Members {
-					covered[member.ReleaseID] = true
-				}
-			} else {
-				covered[candidate.Release.ID] = true
-			}
-			action := "add"
-			for _, record := range records {
-				if record.Record.Status != domain.PublishStatusPublished {
-					continue
-				}
-				if kind == "filesystem" && record.Record.TargetRef == ref || kind == "exec" && record.Record.Filename == candidate.Artifact.Filename {
-					action = "replace"
-				}
-				if candidate.Artifact.ID == record.Artifact.ID && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == publish.PublishHash(target.ID, candidate.Artifact.SHA256, signature) {
-					action = "unchanged"
-					if kind == "filesystem" {
-						hash, err := publish.FileHash(ref)
-						if err != nil || hash != candidate.Artifact.SHA256 {
-							action = "repair"
-						}
-					}
-					break
-				}
-			}
-			message := ""
-			if kind == "filesystem" {
-				if _, readErr := publish.CheckFilesystemDestination(ref, ownedHashesForPath(records, ref)); readErr != nil {
-					action = "blocked"
-					message = fmt.Sprintf("target %s: %v", target.ID, readErr)
-					result.Blocked = append(result.Blocked, message)
-				}
-			}
-			result.Publish.Items = append(result.Publish.Items, domain.PublishItemResult{ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: kind, TargetRef: ref, Action: action, Message: message})
-		}
-		for _, old := range records {
-			if old.Record.Status != domain.PublishStatusPublished || desired[identity(old.Record.TargetRef, old.Artifact.ID, old.Record.Filename)] {
-				continue
-			}
-			complete := covered[old.Release.ID]
-			for _, volume := range existing {
-				if volume.Artifact.ID == old.Artifact.ID {
-					complete = true
-					for _, member := range volume.Members {
-						if !covered[member.ReleaseID] {
-							complete = false
-						}
-					}
-				}
-			}
-			if complete {
-				item := domain.PublishItemResult{ArtifactID: old.Artifact.ID, TargetID: target.ID, TargetKind: old.Record.TargetKind, TargetRef: old.Record.TargetRef, Action: "retire"}
-				if old.Record.TargetKind == "filesystem" {
-					_, checkErr := publish.CheckFilesystemDestination(old.Record.TargetRef, retirementOwnedHashes(records, old))
-					if checkErr != nil {
-						item.Action = "blocked"
-						item.Message = fmt.Sprintf("target %s retirement ownership conflict: %s", target.ID, old.Record.TargetRef)
-						result.Blocked = append(result.Blocked, item.Message)
-					}
-				}
-				result.Publish.Items = append(result.Publish.Items, item)
-			}
-		}
-	}
-	for _, item := range result.Publish.Items {
-		if item.Action == "replace" || item.Action == "retire" {
-			result.Notices = append(result.Notices, "Replacing delivered books may reset saved reading positions; check a small reader sample before a larger migration.")
-			break
 		}
 	}
 	if len(result.Blocked) > 0 {
 		return result, fmt.Errorf("rebuild incomplete: %s", strings.Join(result.Blocked, "; "))
 	}
 	return result, nil
-}
-
-func artifactMatches(current domain.Artifact, release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
-	var meta struct {
-		OutputVersion int                       `json:"output_version"`
-		Track         domain.StoryTrack         `json:"track"`
-		Release       domain.Release            `json:"release"`
-		Decision      domain.TrackDecision      `json:"decision"`
-		Normalized    *domain.NormalizedRelease `json:"normalized"`
-	}
-	data, err := os.ReadFile(current.MetadataRef)
-	if err != nil || json.Unmarshal(data, &meta) != nil || meta.OutputVersion != 2 {
-		return false
-	}
-	if meta.Decision.SelectedContent == nil && meta.Normalized != nil {
-		selected := classify.SelectContent(*meta.Normalized, meta.Decision)
-		meta.Decision.SelectedContent = &selected
-	}
-	metadataMatches := publicationFingerprint(meta.Decision.Publication) == publicationFingerprint(decision.Publication)
-	meta.Decision.Publication, decision.Publication = nil, nil
-	return metadataMatches && meta.Release.ContentHash == release.ContentHash && meta.Track.TrackName == track.TrackName && meta.Track.CanonicalAuthor == track.CanonicalAuthor && reflect.DeepEqual(meta.Decision, decision)
-}
-
-func legacyArtifact(current domain.Artifact) bool {
-	var meta struct {
-		OutputVersion int `json:"output_version"`
-	}
-	data, err := os.ReadFile(current.MetadataRef)
-	return err != nil || json.Unmarshal(data, &meta) != nil || meta.OutputVersion < 2
 }
 
 func checkStoredAttachment(normalized domain.NormalizedRelease, decision domain.TrackDecision) error {

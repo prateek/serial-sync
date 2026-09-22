@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	toml "github.com/pelletier/go-toml/v2"
 	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
@@ -39,11 +38,6 @@ type SourceInspect struct {
 	StoredSource *domain.Source      `json:"stored_source,omitempty"`
 	Tracks       []domain.StoryTrack `json:"tracks"`
 	Releases     []domain.Release    `json:"releases"`
-}
-
-type TrackInspect struct {
-	Track    domain.StoryTrack `json:"track"`
-	Releases []domain.Release  `json:"releases"`
 }
 
 type AuthBootstrapItem struct {
@@ -79,22 +73,6 @@ type AuthImportResult struct {
 	Validated int              `json:"validated"`
 	Failed    int              `json:"failed"`
 	Items     []AuthImportItem `json:"items"`
-}
-
-type DiscoveryConfigSnippet struct {
-	Sources []config.SourceConfig `json:"sources" toml:"sources"`
-	Rules   []config.RuleConfig   `json:"rules" toml:"rules"`
-}
-
-type SourceDiscoverResult struct {
-	RunID         string                      `json:"run_id"`
-	Provider      string                      `json:"provider"`
-	AuthProfileID string                      `json:"auth_profile_id"`
-	AuthState     domain.AuthState            `json:"auth_state"`
-	Options       provider.DiscoverOptions    `json:"options"`
-	Suggestions   []provider.SourceSuggestion `json:"suggestions"`
-	Snippet       DiscoveryConfigSnippet      `json:"snippet"`
-	SnippetTOML   string                      `json:"snippet_toml"`
 }
 
 type RunEventFilter struct {
@@ -155,7 +133,7 @@ func New(cfg *config.Config, roots config.Roots, configPath string, repo store.R
 	}
 }
 
-func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, command string) (result domain.SyncResult, err error) {
+func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, command string, decisionsOut *map[string]map[string]classify.ExplainedDecision) (result domain.SyncResult, err error) {
 	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun, s.observeOptions())
 	if err != nil {
 		return domain.SyncResult{}, err
@@ -202,14 +180,28 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 				"source_id":        sourceCfg.ID,
 				"discovered_count": len(listResult.Documents),
 			})
-			observed = append(observed, observedBatch{Source: sourceCfg.ID, Documents: listResult.Documents, At: time.Now().UTC()})
-			history, historyErr := s.authoringDecisions(ctx, sourceCfg.ID, listResult.Documents)
-			if historyErr != nil {
-				return result, historyErr
+			observedAt := time.Now().UTC()
+			observed = append(observed, observedBatch{Source: sourceCfg.ID, Documents: listResult.Documents, At: observedAt})
+			batch := &observed[len(observed)-1]
+			decisions, decideErr := s.decideSource(ctx, sourceCfg.ID, listResult.Documents, observedAt, s.Config)
+			if decideErr != nil {
+				// The deferred candidate pass recomputes with a cancel-tolerant
+				// context so a canceled or otherwise interrupted sync still
+				// retains fetched evidence.
+				return result, decideErr
 			}
+			batch.Decisions = decisions
+			rules := s.Config.Compiled()
 			for _, doc := range listResult.Documents {
 				result.Discovered++
-				decision := s.authoringDecision(sourceCfg.ID, doc.Normalized, history)
+				if !dryRun && doc.Normalized.Enrichment != nil {
+					if err := s.saveEnrichment(ctx, sourceCfg.ID, doc.Normalized); err != nil {
+						// Enrichment persistence is advisory; the in-memory
+						// enrichment still feeds this run's decisions.
+						result.DiscoveryNotices = append(result.DiscoveryNotices, fmt.Sprintf("%s enrichment persistence failed: %v", sourceCfg.ID, err))
+					}
+				}
+				decision := authoringDecisionFor(sourceCfg.ID, doc.Normalized, decisions, s.Config, rules)
 				classificationMessage := "classified release"
 				if !decision.Matched {
 					classificationMessage = "release unmatched fallback"
@@ -273,6 +265,13 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 	summary := fmt.Sprintf("discovered=%d changed=%d unchanged=%d materialized=%d", result.Discovered, result.Changed, result.Unchanged, result.MaterializedArtifacts)
 	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
 		return result, finishErr
+	}
+	if decisionsOut != nil {
+		for _, batch := range observed {
+			if len(batch.Decisions) > 0 {
+				(*decisionsOut)[batch.Source] = batch.Decisions
+			}
+		}
 	}
 	return result, nil
 }
@@ -507,71 +506,15 @@ func (s *Service) ImportAuthSession(ctx context.Context, sourceFilter, authFilte
 	return result, nil
 }
 
-func (s *Service) DiscoverSources(ctx context.Context, authFilter string, options provider.DiscoverOptions, command string) (SourceDiscoverResult, error) {
-	scope := strings.TrimSpace(authFilter)
-	recorder, err := observe.Start(ctx, s.Repo, command, scope, false, s.observeOptions())
-	if err != nil {
-		return SourceDiscoverResult{}, err
-	}
-	ctx = withRecorderProgress(ctx, recorder)
-	result := SourceDiscoverResult{RunID: recorder.RunID(), Options: options}
-	defer func() {
-		if err != nil {
-			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
-		}
-	}()
-
-	auth, err := s.selectAuthProfile(authFilter)
-	if err != nil {
-		return result, err
-	}
-	client, ok := s.Providers.Get(auth.Provider)
-	if !ok {
-		err = fmt.Errorf("no provider registered for %q", auth.Provider)
-		return result, err
-	}
-	discovered, err := client.DiscoverSources(ctx, auth, s.Config.Sources, options)
-	result.Provider = discovered.Provider
-	result.AuthProfileID = auth.ID
-	result.AuthState = discovered.AuthState
-	result.Suggestions = discovered.Suggestions
-	_ = recorder.Event(ctx, "info", "discover", "auth state "+string(discovered.AuthState), "auth_profile", auth.ID)
-	if err != nil {
-		return result, err
-	}
-	snippet := DiscoveryConfigSnippet{}
-	for _, suggestion := range discovered.Suggestions {
-		if suggestion.AlreadyConfigured && !options.IncludeConfigured {
-			continue
-		}
-		snippet.Sources = append(snippet.Sources, suggestion.Source)
-		snippet.Rules = append(snippet.Rules, suggestion.SuggestedRules...)
-	}
-	result.Snippet = snippet
-	if len(snippet.Sources) > 0 || len(snippet.Rules) > 0 {
-		payload, marshalErr := toml.Marshal(snippet)
-		if marshalErr != nil {
-			return result, marshalErr
-		}
-		result.SnippetTOML = string(payload)
-	}
-	_ = recorder.Event(ctx, "info", "discover", fmt.Sprintf("suggested %d Patreon source(s)", len(discovered.Suggestions)), "auth_profile", auth.ID)
-	summary := fmt.Sprintf("suggested=%d new=%d", len(discovered.Suggestions), len(snippet.Sources))
-	if finishErr := recorder.Finish(ctx, domain.RunStatusSucceeded, summary); finishErr != nil {
-		return result, finishErr
-	}
-	return result, nil
-}
-
 func (s *Service) Publish(ctx context.Context, sourceFilter, targetFilter string, dryRun bool, command string) (domain.PublishResult, error) {
-	return s.publish(ctx, sourceFilter, targetFilter, "", dryRun, false, command, nil)
+	return s.publish(ctx, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter, dryRun, command, nil, nil)
 }
 
-func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, seriesFilter string, dryRun, rebuild bool, command string, blockedSeries map[string]bool) (result domain.PublishResult, err error) {
-	if err := s.validatePublishTargets(sourceFilter, targetFilter, seriesFilter, rebuild); err != nil {
+func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter string, dryRun bool, command string, blockedSeries map[string]bool, syncedHistories map[string]map[string]classify.ExplainedDecision) (result domain.PublishResult, err error) {
+	if err := s.validatePublishTargets(s.Config, scope, targetFilter); err != nil {
 		return domain.PublishResult{}, err
 	}
-	recorder, err := observe.Start(ctx, s.Repo, command, sourceFilter, dryRun, s.observeOptions())
+	recorder, err := observe.Start(ctx, s.Repo, command, scope.SourceID, dryRun, s.observeOptions())
 	if err != nil {
 		return domain.PublishResult{}, err
 	}
@@ -592,7 +535,7 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 			blockedSeries = map[string]bool{}
 		}
 		var volumeErr error
-		result.Volumes, volumeErr = s.prepareVolumes(ctx, sourceFilter, seriesFilter, rebuild, blockedSeries)
+		result.Volumes, volumeErr = s.prepareVolumes(ctx, scope.SourceID, scope.SeriesID, scope.Rebuild, blockedSeries, syncedHistories)
 		if volumeErr != nil {
 			result.Failed++
 			result.Items = append(result.Items, domain.PublishItemResult{Action: "failed", Message: volumeErr.Error()})
@@ -602,61 +545,86 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 	if err != nil {
 		return result, err
 	}
-	candidates, err = s.volumePublishCandidates(ctx, candidates)
+	selected, recordsByTarget, editions, err := s.deliverySelection(ctx, s.Config, scope, targets, candidates, blockedSeries, nil)
 	if err != nil {
 		return result, err
 	}
-	if err := resolveCollisionNames(candidates); err != nil {
+	if err := s.validateLegacyReplacements(ctx, targets, selected, recordsByTarget); err != nil {
 		return result, err
 	}
-	selected := make([]domain.PublishCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		if blockedSeries[candidate.Track.TrackKey] {
-			continue
-		}
-		if !s.sourceInScope(candidate.Source.ID, sourceFilter, rebuild) || seriesFilter != "" && candidate.Track.TrackKey != seriesFilter {
-			continue
-		}
-		selected = append(selected, candidate)
-	}
-	if err := s.validateLegacyReplacements(ctx, targets, selected); err != nil {
-		return result, err
-	}
-	if !rebuild {
-		if err := s.validateFrozenNames(ctx, targets, selected); err != nil {
+	if !scope.Rebuild {
+		if err := s.validateFrozenNames(ctx, targets, selected, recordsByTarget); err != nil {
 			return result, err
 		}
 	}
 	for _, target := range targets {
+		pt, targetErr := publish.TargetFor(target)
+		if targetErr != nil {
+			result.Failed++
+			result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "blocked", Message: targetErr.Error()})
+			continue
+		}
 		targetStartFailed := result.Failed
+		records := recordsByTarget[target.ID]
 		for attempt := 0; attempt < 2; attempt++ {
-			plan := deliveryPlan{Target: target, Candidates: selected}
-			if !dryRun {
-				var planErr error
-				plan, planErr = s.deliveryPlan(ctx, target, selected, sourceFilter, seriesFilter, rebuild)
-				if planErr != nil {
-					result.Failed++
-					result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "blocked", Message: planErr.Error()})
-					break
+			if attempt > 0 {
+				// Refresh the snapshot on retry: the first attempt's own writes
+				// (published and superseded records) must be visible so
+				// retirement is not re-planned against an already-retired
+				// record. The first attempt reuses the selection's snapshot.
+				if records, err = s.Repo.ListPublishRecords(ctx, "", target.ID); err != nil {
+					return result, err
+				}
+				if editions, err = s.Repo.ListVolumeEditions(ctx); err != nil {
+					return result, err
 				}
 			}
-			startItems, startFailed := len(result.Items), result.Failed
-			ordered, dependencies, orderErr := s.orderReplacements(ctx, target, plan.Candidates)
-			if orderErr != nil {
+			snapshot := librarySnapshot{Records: records, Volumes: editions}
+			var plan deliveryPlan
+			if dryRun {
+				plan, err = s.planDelivery(ctx, scope, pt, target, selected, snapshot)
+			} else {
+				plan, err = s.deliveryPlan(ctx, scope, pt, target, selected, snapshot)
+			}
+			if err != nil {
 				result.Failed++
-				result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "failed", Message: orderErr.Error()})
+				result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "blocked", Message: err.Error()})
 				break
+			}
+			startFailed := result.Failed
+			byID := map[string]domain.PublishCandidate{}
+			itemByID := map[string]domain.PublishItemResult{}
+			for _, candidate := range plan.Candidates {
+				byID[candidate.Artifact.ID] = candidate
+			}
+			for _, item := range plan.Items {
+				if item.Action != "retire" {
+					itemByID[item.ArtifactID] = item
+				}
+			}
+			// Plan-time blocks (destination and retirement ownership conflicts)
+			// gate the delivery on every attempt, including the fresh plan
+			// after a resumed one: each fails the run so the pending plan is
+			// retained for the fix-and-retry loop.
+			for _, item := range plan.Items {
+				if item.Action != "blocked" {
+					continue
+				}
+				result.Items = append(result.Items, item)
+				if !dryRun {
+					result.Failed++
+				}
 			}
 			delivered := map[string]bool{}
 			if !dryRun {
+				ordered := make([]domain.PublishCandidate, 0, len(plan.Ordered))
+				for _, id := range plan.Ordered {
+					ordered = append(ordered, byID[id])
+				}
 				event := publish.LifecycleEvent{Action: "prepare", RunID: recorder.RunID(), TargetID: target.ID, DeliveryID: plan.ID, Maintenance: plan.Maintenance, Candidates: ordered}
 				if plan.Maintenance && len(target.LifecycleCommand) > 0 {
-					records, err := s.Repo.ListPublishRecords(ctx, "", target.ID)
-					if err != nil {
-						return result, err
-					}
-					previous := make([]domain.PublishRecordBundle, 0, len(records))
-					for _, record := range records {
+					previous := make([]domain.PublishRecordBundle, 0, len(snapshot.Records))
+					for _, record := range snapshot.Records {
 						if record.Record.Status == domain.PublishStatusPublished {
 							previous = append(previous, record)
 						}
@@ -669,11 +637,14 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 					break
 				}
 			}
-			for _, candidate := range ordered {
+			for _, id := range plan.Ordered {
+				candidate := byID[id]
 				ready := true
-				for _, dependency := range dependencies[candidate.Artifact.ID] {
-					if !delivered[dependency] {
-						ready = false
+				if !dryRun {
+					for _, dependency := range plan.Dependencies[id] {
+						if !delivered[dependency] {
+							ready = false
+						}
 					}
 				}
 				if !ready {
@@ -681,25 +652,24 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 					result.Items = append(result.Items, domain.PublishItemResult{ArtifactID: candidate.Artifact.ID, TargetID: target.ID, Action: "blocked", Message: "waiting for other replacement files before overwriting the old volume"})
 					continue
 				}
-				targetKind, targetRef, publishHashInput, refErr := publishTargetIdentity(target, candidate)
-				if refErr != nil {
-					return result, refErr
+				if itemByID[id].Action == "blocked" {
+					// Already reported once for this plan; never delivered.
+					continue
 				}
-				publishHash := publish.PublishHash(target.ID, candidate.Artifact.SHA256, publishHashInput)
-				done, err := s.Repo.HasSuccessfulPublish(ctx, candidate.Artifact.ID, target.ID, publishHash)
+				targetKind := pt.Kind()
+				targetRef, err := pt.Ref(candidate)
 				if err != nil {
 					return result, err
 				}
-				if done {
-					if targetKind == "filesystem" {
-						actual, checkErr := publish.FileHash(targetRef)
-						if checkErr != nil {
-							return result, checkErr
-						}
-						done = actual == candidate.Artifact.SHA256
-					}
+				publishHashInput, err := pt.PublishHashInput(candidate)
+				if err != nil {
+					return result, err
 				}
-				if done {
+				publishHash := publish.PublishHash(target.ID, candidate.Artifact.SHA256, publishHashInput)
+				if itemByID[id].Action == "unchanged" {
+					// The plan already verified this destination against the
+					// candidate's published record; skip instead of re-deriving
+					// the same decision at execute time.
 					delivered[candidate.Artifact.ID] = true
 					result.Skipped++
 					result.Items = append(result.Items, domain.PublishItemResult{
@@ -733,7 +703,7 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 					_ = recorder.EventData(ctx, "info", "publish", "planned "+targetKind+" publish", "artifact", candidate.Artifact.ID, result.Items[len(result.Items)-1])
 					continue
 				}
-				record, pubErr := s.publishTarget(ctx, recorder.RunID(), plan, candidate)
+				record, pubErr := s.publishTarget(ctx, recorder.RunID(), pt, target, plan, candidate, snapshot.Records)
 				if pubErr != nil {
 					result.Failed++
 					result.Items = append(result.Items, domain.PublishItemResult{
@@ -744,7 +714,7 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 						Action:     "failed",
 						Message:    pubErr.Error(),
 					})
-					if targetKind != "filesystem" {
+					if !pt.Capabilities().PendingRecord {
 						_ = s.Repo.UpsertPublishRecord(ctx, domain.PublishRecord{
 							ID:          "pub_" + uuid.NewString(),
 							ArtifactID:  candidate.Artifact.ID,
@@ -779,7 +749,10 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 			if dryRun {
 				break
 			}
-			if cleanupErr := s.retirePreviousPaths(ctx, plan.Candidates, []config.PublisherConfig{target}, result.Items[startItems:], plan.EventScope); cleanupErr != nil {
+			if result.Failed > startFailed {
+				break
+			}
+			if cleanupErr := s.applyRetirements(ctx, pt, target, plan, snapshot); cleanupErr != nil {
 				result.Failed++
 				result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "failed", Message: cleanupErr.Error()})
 			}
@@ -794,7 +767,7 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 			}
 		}
 		if !dryRun {
-			if err := publish.RunLifecycle(ctx, target.LifecycleCommand, publish.LifecycleEvent{Action: "complete", RunID: recorder.RunID(), TargetID: target.ID, Maintenance: rebuild, Succeeded: result.Failed == targetStartFailed}); err != nil {
+			if err := publish.RunLifecycle(ctx, target.LifecycleCommand, publish.LifecycleEvent{Action: "complete", RunID: recorder.RunID(), TargetID: target.ID, Maintenance: scope.Rebuild, Succeeded: result.Failed == targetStartFailed}); err != nil {
 				result.Failed++
 				result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "notification_failed", Message: err.Error()})
 			}
@@ -818,6 +791,45 @@ func (s *Service) publish(ctx context.Context, sourceFilter, targetFilter, serie
 	return result, nil
 }
 
+// deliverySelection turns a target's chapter candidates into the selected
+// delivery set: volume candidates replace their members' chapters, collisions
+// resolve, the scope filter applies, and the library snapshot loads once.
+// Publish and the rebuild preview share this step.
+func (s *Service) deliverySelection(ctx context.Context, cfg *config.Config, scope deliveryScope, targets []config.PublisherConfig, chapters []domain.PublishCandidate, blockedSeries map[string]bool, existing []domain.VolumeEdition) (selected []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle, volumes []domain.VolumeEdition, err error) {
+	if existing == nil {
+		existing, err = s.Repo.ListVolumeEditions(ctx)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	candidates, err := s.volumeCandidates(ctx, chapters, existing)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := resolveCollisionNames(candidates); err != nil {
+		return nil, nil, nil, err
+	}
+	selected = make([]domain.PublishCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if blockedSeries[candidate.Track.TrackKey] {
+			continue
+		}
+		if !s.sourceInScope(candidate.Source.ID, scope.SourceID, scope.Rebuild, cfg) || scope.SeriesID != "" && candidate.Track.TrackKey != scope.SeriesID {
+			continue
+		}
+		selected = append(selected, candidate)
+	}
+	recordsByTarget = map[string][]domain.PublishRecordBundle{}
+	for _, target := range targets {
+		records, err := s.Repo.ListPublishRecords(ctx, "", target.ID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		recordsByTarget[target.ID] = records
+	}
+	return selected, recordsByTarget, existing, nil
+}
+
 func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, command string) (result RunOnceResult, err error) {
 	defer func() {
 		if err == nil {
@@ -831,15 +843,16 @@ func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, comma
 			}
 		}
 	}()
-	if err := s.validatePublishTargets(sourceFilter, targetFilter, "", false); err != nil {
+	if err := s.validatePublishTargets(s.Config, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter); err != nil {
 		return result, err
 	}
-	syncResult, err := s.Sync(ctx, sourceFilter, false, command+" sync")
+	var syncedHistories = map[string]map[string]classify.ExplainedDecision{}
+	syncResult, err := s.Sync(ctx, sourceFilter, false, command+" sync", &syncedHistories)
 	result.Sync = syncResult
 	if err != nil {
 		return result, err
 	}
-	publishResult, err := s.Publish(ctx, sourceFilter, targetFilter, false, command+" publish")
+	publishResult, err := s.publish(ctx, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter, false, command+" publish", nil, syncedHistories)
 	result.Publish = publishResult
 	if err != nil {
 		return result, err
@@ -847,35 +860,28 @@ func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, comma
 	return result, nil
 }
 
-func (s *Service) publishTarget(ctx context.Context, runID string, plan deliveryPlan, candidate domain.PublishCandidate) (domain.PublishRecord, error) {
-	target := plan.Target
-	switch normalizedPublisherKind(target.Kind) {
-	case "filesystem":
-		records, err := s.Repo.ListPublishRecords(ctx, "", target.ID)
-		if err != nil {
-			return domain.PublishRecord{}, err
-		}
-		path := filepath.Join(target.Path, candidate.Source.ID, candidate.Track.TrackKey, candidate.Artifact.Filename)
-		owned := ownedHashesForPath(records, path)
-		if _, err := publish.CheckFilesystemDestination(path, owned); err != nil {
-			return domain.PublishRecord{}, err
-		}
-		pending := domain.PublishRecord{ID: "pub_" + uuid.NewString(), ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: "filesystem", TargetRef: path, PublishHash: publish.PublishHash(target.ID, candidate.Artifact.SHA256, path), PublishedAt: time.Now().UTC(), Status: domain.PublishStatusPublishing}
-		if err := s.Repo.UpsertPublishRecord(ctx, pending); err != nil {
-			return domain.PublishRecord{}, err
-		}
-		return publish.PublishFilesystem(ctx, publish.FilesystemTarget{ID: target.ID, Path: target.Path, OwnedHashes: owned}, candidate)
-	case "exec":
-		return publish.PublishExec(ctx, publish.ExecTarget{
-			ProtocolVersion: target.ProtocolVersion,
-			ID:              target.ID,
-			Command:         target.Command,
-			RunID:           runID,
-			EventScope:      plan.EventScope,
-		}, candidate)
-	default:
-		return domain.PublishRecord{}, fmt.Errorf("unsupported publisher kind %q", target.Kind)
+func (s *Service) publishTarget(ctx context.Context, runID string, pt publish.Target, target config.PublisherConfig, plan deliveryPlan, candidate domain.PublishCandidate, records []domain.PublishRecordBundle) (domain.PublishRecord, error) {
+	ref, err := pt.Ref(candidate)
+	if err != nil {
+		return domain.PublishRecord{}, err
 	}
+	// The just-written publishing record (or a retry's) owns the same bytes
+	// this candidate will deliver, so count them as owned from the start.
+	owned := append(ownedHashesForPath(records, ref), candidate.Artifact.SHA256)
+	if _, err := pt.CheckDestination(ref, owned); err != nil {
+		return domain.PublishRecord{}, err
+	}
+	hashInput, err := pt.PublishHashInput(candidate)
+	if err != nil {
+		return domain.PublishRecord{}, err
+	}
+	pending := pt.PublishingRecord(target.ID, pt.Kind(), candidate, ref, publish.PublishHash(target.ID, candidate.Artifact.SHA256, hashInput))
+	if pending != nil {
+		if err := s.Repo.UpsertPublishRecord(ctx, *pending); err != nil {
+			return domain.PublishRecord{}, err
+		}
+	}
+	return pt.Publish(ctx, runID, plan.EventScope, candidate, owned)
 }
 
 func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder, sourceCfg config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision, dryRun, rebuild bool) (domain.SyncItemPlan, bool, bool, error) {
@@ -901,7 +907,7 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		}
 		if current != nil {
 			pinnedPublication = true
-			decision.Publication, err = artifactPublication(*current)
+			decision.Publication, err = artifact.StoredPublication(*current)
 			if err != nil {
 				return domain.SyncItemPlan{}, false, false, err
 			}
@@ -965,9 +971,9 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		if err != nil {
 			return domain.SyncItemPlan{}, false, false, err
 		}
-		if current != nil && artifactMatches(*current, release, track, decision) {
-			actual, err := publish.FileHash(current.StorageRef)
-			if err == nil && actual == current.SHA256 {
+		if current != nil && artifact.IsCurrent(*current, release, track, decision) {
+			intact, checkErr := artifact.IntactOnDisk(*current)
+			if checkErr == nil && intact {
 				item := domain.SyncItemPlan{SourceID: source.ID, ProviderReleaseID: release.ProviderReleaseID, Title: release.Title, TrackKey: track.TrackKey, ReleaseRole: decision.ReleaseRole, Strategy: decision.ContentStrategy, OutputFormat: decision.OutputFormat, ArtifactKind: current.ArtifactKind, Filename: current.Filename, Action: "noop"}
 				_ = recorder.EventData(ctx, "info", "sync", "release unchanged", "release", release.ID, item)
 				return item, false, false, nil
@@ -979,7 +985,7 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		if err != nil {
 			return domain.SyncItemPlan{}, false, false, err
 		}
-		if current != nil && legacyArtifact(*current) {
+		if current != nil && artifact.IsLegacy(*current) {
 			frozen = current
 			bundle, err := s.Repo.GetReleaseBundle(ctx, existingRelease.ID)
 			if err != nil {
@@ -992,7 +998,7 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		}
 	}
 	if frozen == nil && classify.CanMaterialize(doc.Normalized, decision) {
-		artifactPlan, artifactErr = s.Files.Plan(source, track, release, doc.Normalized, decision, doc.RawJSON)
+		artifactPlan, artifactErr = s.Files.Plan(ctx, source, track, release, doc.Normalized, decision, doc.RawJSON)
 		if artifactErr != nil {
 			return domain.SyncItemPlan{}, false, false, artifactErr
 		}
@@ -1008,8 +1014,8 @@ func (s *Service) handleRelease(ctx context.Context, recorder *observe.Recorder,
 		if existingRelease.ContentHash == contentHash {
 			existingBytesValid := false
 			if existingArtifact != nil {
-				actual, checkErr := publish.FileHash(existingArtifact.StorageRef)
-				existingBytesValid = checkErr == nil && actual == existingArtifact.SHA256
+				intact, checkErr := artifact.IntactOnDisk(*existingArtifact)
+				existingBytesValid = checkErr == nil && intact
 			}
 			switch {
 			case existingArtifact == nil && artifactPlan.SHA256 == "":
@@ -1155,63 +1161,6 @@ func (s *Service) InspectSource(ctx context.Context, id string) (*SourceInspect,
 		return nil, err
 	}
 	return &SourceInspect{ConfigSource: cfgSource, StoredSource: stored, Tracks: tracks, Releases: releases}, nil
-}
-
-func (s *Service) InspectTrack(ctx context.Context, ref string) (*TrackInspect, error) {
-	tracks, err := s.Repo.ListTracks(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	for _, track := range tracks {
-		if track.ID != ref && track.TrackKey != ref {
-			continue
-		}
-		releases, err := s.Repo.ListReleases(ctx, track.SourceID)
-		if err != nil {
-			return nil, err
-		}
-		var filtered []domain.Release
-		for _, release := range releases {
-			bundle, err := s.Repo.GetReleaseBundle(ctx, release.ID)
-			if err != nil {
-				return nil, err
-			}
-			if bundle != nil && bundle.Track.ID == track.ID {
-				filtered = append(filtered, release)
-			}
-		}
-		return &TrackInspect{Track: track, Releases: filtered}, nil
-	}
-	return nil, fmt.Errorf("unknown track %q", ref)
-}
-
-func (s *Service) InspectRelease(ctx context.Context, ref string) (*domain.ReleaseBundle, error) {
-	if bundle, err := s.Repo.GetReleaseBundle(ctx, ref); err != nil {
-		return nil, err
-	} else if bundle != nil {
-		return bundle, nil
-	}
-	for _, sourceCfg := range s.Config.Sources {
-		release, err := s.Repo.GetReleaseByProviderID(ctx, sourceCfg.ID, ref)
-		if err != nil {
-			return nil, err
-		}
-		if release != nil {
-			return s.Repo.GetReleaseBundle(ctx, release.ID)
-		}
-	}
-	return nil, fmt.Errorf("unknown release %q", ref)
-}
-
-func (s *Service) InspectArtifact(ctx context.Context, id string) (*domain.Artifact, error) {
-	artifact, err := s.Repo.GetArtifact(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if artifact == nil {
-		return nil, fmt.Errorf("unknown artifact %q", id)
-	}
-	return artifact, nil
 }
 
 func (s *Service) InspectRun(ctx context.Context, id string) (*domain.RunBundle, error) {
@@ -1519,14 +1468,14 @@ func (s *Service) observeOptions() observe.Options {
 	}
 }
 
-func (s *Service) sourceInScope(sourceID, sourceFilter string, rebuild bool) bool {
+func (s *Service) sourceInScope(sourceID, sourceFilter string, rebuild bool, cfg *config.Config) bool {
 	if sourceFilter != "" && sourceID != sourceFilter {
 		return false
 	}
 	if !rebuild {
 		return true
 	}
-	for _, source := range s.Config.Sources {
+	for _, source := range cfg.Sources {
 		if source.ID == sourceID {
 			return source.Enabled
 		}
@@ -1920,10 +1869,6 @@ func explainRunHighlights(bundle *domain.RunBundle, summary *RunForensics) []str
 	return highlights
 }
 
-func NotImplemented(feature string) error {
-	return errors.New(feature + " is not implemented in the current MVP")
-}
-
 func FormatSyncResult(result domain.SyncResult) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("run_id: %s", result.RunID))
@@ -1998,108 +1943,6 @@ func FormatRunOnceResult(result RunOnceResult) string {
 	}, "\n")
 }
 
-func FormatSourceDiscoverResult(result SourceDiscoverResult, showPosts bool) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf(
-		"run_id=%s provider=%s auth_profile=%s auth_state=%s suggestions=%d membership=%s scan=%s\n",
-		result.RunID,
-		result.Provider,
-		result.AuthProfileID,
-		result.AuthState,
-		len(result.Suggestions),
-		firstNonEmpty(result.Options.MembershipFilter, "all"),
-		discoveryScanLabel(result.Options),
-	))
-	for _, suggestion := range result.Suggestions {
-		status := "new"
-		if suggestion.AlreadyConfigured {
-			status = "configured as " + suggestion.ExistingSourceID
-		}
-		builder.WriteString(fmt.Sprintf(
-			"%s\t%s\t%s\t%s\n",
-			suggestion.Source.ID,
-			suggestion.CreatorName,
-			firstNonEmpty(suggestion.MembershipKind, "unknown"),
-			status,
-		))
-		if suggestion.SampledPosts > 0 {
-			builder.WriteString(fmt.Sprintf("  scanned posts: %d\n", suggestion.SampledPosts))
-		}
-		if len(suggestion.SampleTitles) > 0 {
-			builder.WriteString("  titles: " + strings.Join(suggestion.SampleTitles, " | ") + "\n")
-		}
-		if len(suggestion.SampleTags) > 0 {
-			builder.WriteString("  tags: " + strings.Join(suggestion.SampleTags, ", ") + "\n")
-		}
-		if len(suggestion.SampleCollections) > 0 {
-			builder.WriteString("  collections: " + strings.Join(suggestion.SampleCollections, ", ") + "\n")
-		}
-		if len(suggestion.SuggestedRules) > 0 {
-			ruleLabels := make([]string, 0, len(suggestion.SuggestedRules))
-			for _, rule := range suggestion.SuggestedRules {
-				ruleLabels = append(ruleLabels, rule.MatchType+":"+rule.TrackKey)
-			}
-			builder.WriteString("  rules: " + strings.Join(ruleLabels, ", ") + "\n")
-		}
-		if len(suggestion.Preview.Groups) > 0 {
-			builder.WriteString(fmt.Sprintf(
-				"  preview: groups=%d materializable=%d fallback=%d\n",
-				len(suggestion.Preview.Groups),
-				suggestion.Preview.Materializable,
-				suggestion.Preview.FallbackPosts,
-			))
-			for _, group := range suggestion.Preview.Groups {
-				label := group.MatchType
-				if strings.TrimSpace(group.MatchValue) != "" {
-					label += ":" + group.MatchValue
-				}
-				builder.WriteString(fmt.Sprintf(
-					"    - %s [%s] posts=%d materializable=%d\n",
-					group.TrackKey,
-					label+" "+string(group.ContentStrategy),
-					group.Total,
-					group.Materializable,
-				))
-				if len(group.SampleTitles) > 0 {
-					builder.WriteString("      titles: " + strings.Join(group.SampleTitles, " | ") + "\n")
-				}
-			}
-		}
-		if showPosts && len(suggestion.Preview.Posts) > 0 {
-			builder.WriteString("  posts:\n")
-			for _, post := range suggestion.Preview.Posts {
-				label := post.MatchType
-				if strings.TrimSpace(post.MatchValue) != "" {
-					label += ":" + post.MatchValue
-				}
-				builder.WriteString(fmt.Sprintf(
-					"    - %s [%s %s materializable=%t] %s\n",
-					post.TrackKey,
-					label,
-					post.ContentStrategy,
-					post.Materializable,
-					post.Title,
-				))
-			}
-		}
-	}
-	if strings.TrimSpace(result.SnippetTOML) != "" {
-		builder.WriteString("\nSuggested TOML snippet:\n")
-		builder.WriteString(result.SnippetTOML)
-	}
-	return strings.TrimSpace(builder.String())
-}
-
-func discoveryScanLabel(options provider.DiscoverOptions) string {
-	if options.FullHistory {
-		return "full"
-	}
-	if options.SampleLimit <= 0 {
-		return "default"
-	}
-	return fmt.Sprintf("recent-%d", options.SampleLimit)
-}
-
 func FormatRunForensics(result RunForensics) string {
 	lines := []string{
 		fmt.Sprintf("run_id: %s", result.Run.ID),
@@ -2132,27 +1975,6 @@ func FormatRunForensics(result RunForensics) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func publishTargetIdentity(target config.PublisherConfig, candidate domain.PublishCandidate) (targetKind, targetRef, publishHashInput string, err error) {
-	switch normalizedPublisherKind(target.Kind) {
-	case "filesystem":
-		targetPath := filepath.Join(target.Path, candidate.Source.ID, candidate.Track.TrackKey, candidate.Artifact.Filename)
-		return "filesystem", targetPath, targetPath, nil
-	case "exec":
-		return "exec", publish.ExecTargetRef(target.Command), publish.ExecPublishSignature(publish.ExecTarget{Command: target.Command, ProtocolVersion: target.ProtocolVersion}, candidate), nil
-	default:
-		return "", "", "", fmt.Errorf("unsupported publisher kind %q", target.Kind)
-	}
-}
-
-func normalizedPublisherKind(kind string) string {
-	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "command", "exec":
-		return "exec"
-	default:
-		return strings.ToLower(strings.TrimSpace(kind))
-	}
 }
 
 func indentBlock(value, prefix string) string {

@@ -183,8 +183,11 @@ participating in volume replacement require protocol version 2 as documented in
 - For an existing library, use `setup preview --stored --compare <baseline-config>`
   under the candidate `--config`. Read the classification and output-policy parts,
   including disabled/removed sources. Its applied-library section uses the rebuild
-  planner for both configs against the same catalog. Inspect actual actions and
-  blockers; workspace-only replay has no applied state. Disabled sources and
+  planner for both configs against the same catalog, each against its own
+  sources and publishers. Inspect actual actions and blockers; workspace-only
+  replay has no applied state. A cyclic or non-covering replacement set, an
+  edited delivered file or a foreign file at a destination blocks the plan with
+  the same message a real rebuild would fail with. Disabled sources and
   destinations retain delivered files.
 - Catalog replay is offline and read-only. It reads only current catalog payload
   references and never initializes a schema or records a run. It requires a

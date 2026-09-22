@@ -57,9 +57,7 @@ func (s *Service) appliedLibraryPlan(ctx context.Context, cfg *config.Config, sc
 		result.Notices = []string{"No enabled sources or destinations in this scope; existing delivered files are retained."}
 		return result
 	}
-	planner := *s
-	planner.Config = &scoped
-	plan, err := planner.Rebuild(ctx, RebuildOptions{DryRun: true}, "setup preview compare")
+	plan, err := s.rebuildWith(ctx, RebuildOptions{DryRun: true}, "setup preview compare", &scoped)
 	result.Blocked, result.Notices, result.Pending = plan.Blocked, plan.Notices, plan.Pending
 	if err != nil && len(result.Blocked) == 0 {
 		result.Blocked = []string{err.Error()}

@@ -128,7 +128,7 @@ func decoratePublication(files map[string][]byte, pkg *opfPackage, packagePath s
 	}
 	aboutPath := path.Join(directory, "about.xhtml")
 	viewport := fixedLayoutViewport(packageIsPrePaginated(*pkg), *pkg, files, base)
-	document, err := buildXHTMLDocumentForEPUBVersionWithViewport("About", body, pkg.Version, viewport)
+	document, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName("About", body, pkg.Version, viewport, "")
 	if err != nil {
 		return err
 	}

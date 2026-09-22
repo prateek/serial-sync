@@ -158,7 +158,6 @@ func (s *Service) previewCorpus(ctx context.Context, options RulesPreviewOptions
 		copy.Rules = nil
 		copy.Review = nil
 		copy.Overrides = nil
-		copy.Rules = copy.CompileRules()
 		cfg = &copy
 	}
 	var corpus []replaySource
@@ -191,15 +190,6 @@ func (s *Service) previewCorpus(ctx context.Context, options RulesPreviewOptions
 		corpus = append(corpus, replaySource{Creator: creator, Releases: releases})
 	}
 	return corpus, cfg, root, nil
-}
-
-func (s *Service) replayDecision(source string, release domain.NormalizedRelease) classify.ExplainedDecision {
-	explained := classify.Explain(source, release, s.Config.RulesForSource(source))
-	explained.Decision = s.numberedDecision(source, release, explained.Decision)
-	if explained.Decision.CanonicalAuthor == "" {
-		explained.Decision.CanonicalAuthor = release.CreatorName
-	}
-	return explained
 }
 
 func replayStates(cfg *config.Config, source string, release domain.NormalizedRelease, explained classify.ExplainedDecision) (ClassificationState, OutputPolicyState) {
@@ -262,8 +252,6 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 	if len(corpus) == 0 {
 		return result, fmt.Errorf("no captured sources match the provided filters")
 	}
-	planner := *s
-	planner.Config = cfg
 	if options.SeriesFile != "" {
 		seriesPath := options.SeriesFile
 		if !filepath.IsAbs(seriesPath) {
@@ -304,8 +292,10 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 	}
 	var candidates []domain.PublishCandidate
 	inputs := map[string]domain.NormalizedRelease{}
+	histories := map[string]map[string]classify.ExplainedDecision{}
 	for _, item := range corpus {
 		source := item.Creator.SourceID
+		histories[source] = map[string]classify.ExplainedDecision{}
 		sort.SliceStable(item.Releases, func(i, j int) bool {
 			a, b := item.Releases[i], item.Releases[j]
 			if a.PublishedAt.Equal(b.PublishedAt) {
@@ -320,20 +310,24 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 				return result, err
 			}
 		}
-		analysis := discovery.Analyze(source, item.Releases, nil, cfg, previous, time.Now().UTC())
-		result.Candidates = append(result.Candidates, analysis.Candidates...)
-		result.Labels = append(result.Labels, discovery.Labels(source, item.Releases, cfg.RulesForSource(source), analysis.Decisions, labelHistory))
+		// Replay drives the same decider the sync uses; its corpus is dump
+		// files rather than the store, so the releases and previous candidates
+		// come from the dump workspace and the configured repositories.
+		decided, decidedCandidates := decideReleases(source, item.Releases, nil, cfg, previous, time.Now().UTC())
+		histories[source] = decided
+		result.Candidates = append(result.Candidates, decidedCandidates...)
+		result.Labels = append(result.Labels, discovery.Labels(source, item.Releases, cfg.Compiled().ForSource(source), decided, labelHistory))
 		var baselineDecisions map[string]classify.ExplainedDecision
 		if other != nil {
-			baselineDecisions = discovery.Analyze(source, item.Releases, nil, other, nil, time.Time{}).Decisions
+			baselineDecisions, _ = decideReleases(source, item.Releases, nil, other, nil, time.Time{})
 		}
 		decisions := make([]classify.ExplainedDecision, len(item.Releases))
 		for i, release := range item.Releases {
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
-			decisions[i] = analysis.Decisions[release.ProviderReleaseID]
-			decisions[i].Decision.Publication, err = planner.publicationMetadata(source, release, decisions[i].Decision)
+			decisions[i] = decided[release.ProviderReleaseID]
+			decisions[i].Decision.Publication, err = publicationMetadataFor(cfg, source, release, decisions[i].Decision)
 			if err != nil {
 				return result, err
 			}
@@ -360,7 +354,8 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 			decision := decisions[i].Decision
 			track := domain.StoryTrack{ID: source + "/" + decision.TrackKey, TrackKey: decision.TrackKey, TrackName: decision.TrackName, CanonicalAuthor: decision.CanonicalAuthor}
 			stored := domain.Release{ID: source + "/" + release.ProviderReleaseID, ProviderReleaseID: release.ProviderReleaseID, PublishedAt: release.PublishedAt, Title: release.Title}
-			filename := artifact.PreviewFilename(track, stored, release, decision)
+			description := artifact.Describe(track, stored, release, decision)
+			filename := artifact.PreviewFilenameFor(track, stored, release, decision, description)
 			classification, _ := replayStates(cfg, source, release, decisions[i])
 			if options.ShowPosts {
 				preview.Posts[i].Sequence = decision.Sequence
@@ -368,11 +363,7 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 				preview.Posts[i].Eligibility = classification.Eligibility
 			}
 			if classify.CanMaterialize(release, decision) {
-				mime := "text/html"
-				if decision.OutputFormat == domain.OutputFormatEPUB {
-					mime = "application/epub+zip"
-				}
-				candidates = append(candidates, domain.PublishCandidate{Source: domain.Source{ID: source}, Track: track, Release: stored, Assignment: domain.ReleaseAssignment{ReleaseRole: decision.ReleaseRole}, Artifact: domain.Artifact{Filename: filename, MIMEType: mime}})
+				candidates = append(candidates, domain.PublishCandidate{Source: domain.Source{ID: source}, Track: track, Release: stored, Assignment: domain.ReleaseAssignment{ReleaseRole: decision.ReleaseRole}, Artifact: domain.Artifact{Filename: filename, MIMEType: description.MIMEType}})
 				inputs[stored.ID] = release
 			}
 		}
@@ -391,12 +382,12 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 	inventory, _ := json.Marshal(result.Binding.Inventory)
 	result.Binding.CaptureHash = hashBytes(inventory)
 	if result.Comparison != nil {
-		result.Comparison.AppliedLibrary = planner.compareAppliedLibrary(ctx, other, cfg, corpus)
+		result.Comparison.AppliedLibrary = s.compareAppliedLibrary(ctx, other, cfg, corpus)
 		if plan := result.Comparison.AppliedLibrary.Candidate; plan != nil && len(plan.Actions) > 0 {
 			result.Comparison.RequiresRebuild = true
 		}
 	}
-	result.Volumes, _, err = planner.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs})
+	result.Volumes, _, err = s.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs, histories: histories, series: cfg.Series, config: cfg}, false)
 	return result, err
 }
 

@@ -10,8 +10,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/prateek/serial-sync/internal/artifact"
+	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/sequence"
 	"github.com/prateek/serial-sync/internal/textcontent"
 )
 
@@ -41,7 +42,7 @@ type Features struct {
 }
 
 func Extract(release domain.NormalizedRelease) Features {
-	features := Features{SequenceOrigin: "title", PublishedAt: release.PublishedAt, ReleaseID: release.ProviderReleaseID, Sequence: artifact.DetectSequence(release.Title), BodyChars: textcontent.Count(release), Collections: release.Collections, Tags: release.Tags}
+	features := Features{SequenceOrigin: "title", PublishedAt: release.PublishedAt, ReleaseID: release.ProviderReleaseID, Sequence: sequence.Detect(release.Title), BodyChars: textcontent.Count(release), Collections: release.Collections, Tags: release.Tags}
 	if release.Enrichment != nil {
 		features.CollectionReferences = release.Enrichment.Collections
 	}
@@ -51,9 +52,9 @@ func Extract(release domain.NormalizedRelease) Features {
 		ext := strings.ToLower(filepath.Ext(attachment.FileName))
 		features.BookFile = features.BookFile || ext == ".epub" || ext == ".pdf"
 		if !features.Sequence.HasChapter() && features.Sequence.Part == "" {
-			sequence := artifact.DetectSequence(attachment.FileName)
-			if sequence.HasChapter() || sequence.Part != "" {
-				features.Sequence = sequence
+			seq := sequence.Detect(attachment.FileName)
+			if seq.HasChapter() || seq.Part != "" {
+				features.Sequence = seq
 				features.SequenceOrigin = "attachment"
 				title = strings.TrimSuffix(attachment.FileName, filepath.Ext(attachment.FileName))
 			}
@@ -64,7 +65,7 @@ func Extract(release domain.NormalizedRelease) Features {
 	if features.Sequence.HasChapter() || features.Sequence.Part != "" || prologuePattern.MatchString(title) {
 		features.Family = titleFamily(title, features.Sequence)
 	}
-	features.External = features.BodyChars < 1500 && len(release.Attachments) == 0 && (strings.Contains(release.TextHTML, "href=") || strings.Contains(release.TextPlain, "https://"))
+	features.External = features.BodyChars < config.MinBodyCharsDefault && len(release.Attachments) == 0 && (strings.Contains(release.TextHTML, "href=") || strings.Contains(release.TextPlain, "https://"))
 	copy := release
 	copy.Enrichment = nil
 	copy.Tags = nil

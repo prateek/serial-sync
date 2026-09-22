@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -24,11 +25,293 @@ import (
 	"github.com/prateek/serial-sync/internal/provider"
 )
 
+func TestRebuildDryRunReportsCyclicGrouping(t *testing.T) {
+	s, upstream := newReaderService(t)
+	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
+	upstream.docs["alpha"][0].Normalized.Title = "Alpha Saga Book 1 Chapter 1"
+	upstream.docs["alpha"][1].Normalized.Title = "Alpha Saga Book 2 Chapter 1"
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50}
+	s.Config.Series[0].Books = []config.BookConfig{{ID: "one", Number: 1, LastChapter: 1}, {ID: "two", Number: 2, LastChapter: 1}}
+
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	s.Config.Series[0].SequenceOverrides = []config.SequenceOverride{{Source: "alpha", ReleaseID: "a1", BookID: "two"}, {Source: "alpha", ReleaseID: "a2", BookID: "one"}}
+
+	before := map[string][]byte{}
+	for _, path := range findFiles(t, s.Config.Publishers[0].Path, ".epub") {
+		before[path] = mustReadFile(t, path)
+	}
+	plan, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "parity")
+	if err == nil || !strings.Contains(err.Error(), "cyclic") {
+		t.Fatalf("dry run did not report the cyclic replacement: %+v %v", plan.Publish, err)
+	}
+	for path, content := range before {
+		if !bytes.Equal(content, mustReadFile(t, path)) {
+			t.Fatalf("dry run changed %s", path)
+		}
+	}
+}
+
+func TestRebuildSurfacesOwnershipBlocksInDryRunAndRun(t *testing.T) {
+	s, _ := newReaderService(t)
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50}
+
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	ch01 := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-ch0001.epub")
+	ch02 := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-ch0002.epub")
+	ch02Bytes := mustReadFile(t, ch02)
+	// The user edited the first single and placed foreign content at the
+	// volume's destination, so the regroup must report both ownership
+	// conflicts and deliver nothing anywhere else.
+	data := mustReadFile(t, ch01)
+	data = append(data, []byte("user-edit")...)
+	if err := os.WriteFile(ch01, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vol01 := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
+	if err := os.WriteFile(vol01, []byte("foreign edition"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+
+	dry, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
+	if err == nil || len(dry.Blocked) != 2 {
+		t.Fatalf("dry run must report both ownership conflicts: %+v %v", dry, err)
+	}
+	var dryBlocked []string
+	for _, item := range dry.Publish.Items {
+		if item.Action == "blocked" {
+			dryBlocked = append(dryBlocked, item.TargetRef+"\x00"+item.Message)
+		}
+	}
+	if len(dryBlocked) != 2 {
+		t.Fatalf("dry run planned blocks: %+v", dry.Publish.Items)
+	}
+	result, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "rebuild")
+	if err == nil {
+		t.Fatalf("real rebuild must fail like the dry run: %+v", result)
+	}
+	var realBlocked []string
+	for _, item := range result.Publish.Items {
+		if item.Action == "failed" || item.Action == "blocked" {
+			realBlocked = append(realBlocked, item.TargetRef+"\x00"+item.Message)
+		}
+	}
+	sort.Strings(dryBlocked)
+	sort.Strings(realBlocked)
+	if !reflect.DeepEqual(dryBlocked, realBlocked) {
+		t.Fatalf("real run reported different blocks than the dry run:\ndry:  %+v\nreal: %+v", dryBlocked, realBlocked)
+	}
+	// Nothing else was retired or delivered: the unmodified single stays and
+	// the foreign destination survives untouched.
+	if !bytes.Equal(ch02Bytes, mustReadFile(t, ch02)) {
+		t.Fatalf("blocked regroup changed the second single: %s", ch02)
+	}
+	if !bytes.Equal([]byte("foreign edition"), mustReadFile(t, vol01)) {
+		t.Fatal("blocked regroup overwrote the foreign destination")
+	}
+}
+
+func TestRebuildDryRunPlansExactlyWhatARunExecutes(t *testing.T) {
+	s, _ := newReaderService(t)
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("expected initial volume: %v", err)
+	}
+	s.Config.Series[0].Title = "Alpha Recovery"
+
+	plan, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plannedReplacements []string
+	plannedRetired := map[string]string{}
+	for _, item := range plan.Publish.Items {
+		switch item.Action {
+		case "add", "replace", "repair":
+			plannedReplacements = append(plannedReplacements, item.TargetRef)
+		case "retire":
+			plannedRetired[item.TargetRef] = item.ArtifactID
+		}
+	}
+	if len(plannedReplacements) != 1 || len(plannedRetired) != 1 {
+		t.Fatalf("rename should plan one replacement and one retirement: %+v", plan.Publish.Items)
+	}
+	for _, item := range plan.Publish.Items {
+		if strings.Contains(item.TargetRef, "alpha-recovery-vol01.epub") {
+			if item.Action != "add" && item.Action != "replace" {
+				t.Fatalf("volume at the renamed path not planned for delivery: %+v", item)
+			}
+		}
+	}
+	result, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executed := map[string]bool{}
+	for _, item := range result.Publish.Items {
+		if item.Action == "published" || item.Action == "skipped" {
+			executed[item.TargetRef] = true
+		}
+	}
+	for _, ref := range plannedReplacements {
+		if !executed[ref] {
+			t.Fatalf("planned replacement at %s was not executed: %+v", ref, result.Publish.Items)
+		}
+	}
+	records, err := s.Repo.ListPublishRecords(context.Background(), "", "library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	superseded := map[string]bool{}
+	for _, record := range records {
+		if record.Record.Status == domain.PublishStatusSuperseded {
+			superseded[record.Record.TargetRef] = true
+		}
+	}
+	for path := range plannedRetired {
+		if !superseded[path] {
+			t.Fatalf("planned retirement of %s did not supersede its record", path)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("planned retirement left %s on disk", path)
+		}
+	}
+	// The executed state is a plan fixed point: a fresh dry run plans nothing.
+	again, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range again.Publish.Items {
+		if item.Action != "unchanged" && item.Action != "retire" {
+			t.Fatalf("second dry run still plans work: %+v", again.Publish.Items)
+		}
+	}
+}
+
+func TestInPlaceVolumeCorrectionReplacesAndSupersedesOldEdition(t *testing.T) {
+	s, upstream := newReaderService(t)
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
+	before := mustReadFile(t, path)
+	upstream.docs["alpha"][0].Normalized.TextHTML = "<p>Corrected text and author note.</p>"
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasReplace, hasRetire bool
+	for _, item := range plan.Publish.Items {
+		if item.Action == "replace" && item.TargetRef == path {
+			hasReplace = true
+		}
+		if item.Action == "retire" && item.TargetRef == path {
+			hasRetire = true
+		}
+	}
+	if !hasReplace || !hasRetire {
+		t.Fatalf("correction should replace in place and supersede the old edition: %+v", plan.Publish.Items)
+	}
+	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "parity"); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(before, mustReadFile(t, path)) {
+		t.Fatal("rebuild omitted correction")
+	}
+	records, err := s.Repo.ListPublishRecords(context.Background(), "", "library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	supersededAtPath := 0
+	currentAtPath := 0
+	for _, record := range records {
+		if record.Record.TargetRef != path {
+			continue
+		}
+		switch record.Record.Status {
+		case domain.PublishStatusSuperseded:
+			supersededAtPath++
+		case domain.PublishStatusPublished:
+			currentAtPath++
+		}
+	}
+	if supersededAtPath != 1 || currentAtPath != 1 {
+		t.Fatalf("correction should leave one current and one superseded record at %s: %+v", path, records)
+	}
+}
+
+func TestProbeHeldReleaseCannotCompleteVolume(t *testing.T) {
+	s, upstream := newReaderService(t)
+	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
+	// The first chapter marker triggers the hold on the broad backstop.
+	s.Config.Series[0].Inputs[0].MatchType = "fallback"
+	s.Config.Series[0].Inputs[0].HoldCandidates = true
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50, FinalChapter: 1}
+
+	result, err := s.RunOnce(context.Background(), "", "", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A held release's decision is review, so it must fill no chapter slot and
+	// the range must stay open; the volume path reads the same decision.
+	if len(result.Publish.Volumes) != 0 {
+		t.Fatalf("held first chapter completed a volume: %+v", result.Publish.Volumes)
+	}
+	if len(findFiles(t, s.Config.Publishers[0].Path, ".epub")) != 0 {
+		t.Fatalf("held release was published: %+v", result.Publish.Items)
+	}
+}
+
+func TestHeldChapterFillsNoVolumeSlotAfterHavingBeenAssigned(t *testing.T) {
+	s, upstream := newReaderService(t)
+	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
+	s.Config.Series[0].Inputs[0].MatchType = "fallback"
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	if files := findFiles(t, s.Config.Publishers[0].Path, ".epub"); len(files) != 1 {
+		t.Fatalf("first run should publish the assigned chapter as a single: %v", files)
+	}
+	// Hold the input after the chapter was already synced and assigned, and
+	// keep the release out of the next fetch so its stored assignment to the
+	// series survives. The next plain run must not panic on the held decision,
+	// and the held chapter must fill no volume slot: the range stays open and
+	// the delivered single survives.
+	s.Config.Series[0].Inputs[0].HoldCandidates = true
+
+	upstream.docs["alpha"] = []provider.ReleaseDocument{}
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	if volumes, err := s.Repo.ListVolumeEditions(context.Background()); err != nil || len(volumes) != 0 {
+		t.Fatalf("held chapter must not fabricate a volume: %+v %v", volumes, err)
+	}
+	if files := findFiles(t, s.Config.Publishers[0].Path, ".epub"); len(files) != 1 {
+		t.Fatalf("held chapter must not republish or remove the delivered single: %v", files)
+	}
+}
+
 func TestCollisionCannotRenameDeliveredFrozenVolumeWithoutRebuild(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Inputs[0].MatchValue = ".*"
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
@@ -60,7 +343,7 @@ func TestSourceFilteredPreviewAllowsIndependentVolumesInOneSeries(t *testing.T) 
 	input.Source = "beta"
 	s.Config.Series[0].Inputs = append(s.Config.Series[0].Inputs, input)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 1}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
 	upstream.docs["beta"][0].Normalized.Title = "Alpha Saga Chapter 2"
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
@@ -101,7 +384,7 @@ func TestOfflinePreviewRejectsInvalidBookMappings(t *testing.T) {
 func TestCompletedVolumeCorrectionsNeedRebuildAndRetainPriorEdition(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +461,7 @@ func TestMissingIntermediateBookDoesNotInventSeriesPositions(t *testing.T) {
 	s.Config.Series[0].Books = []config.BookConfig{{ID: "one", Number: 1, LastChapter: 1}, {ID: "three", Number: 3, LastChapter: 1}}
 	upstream.docs["alpha"][0].Normalized.Title = "Alpha Saga Book 1 Chapter 1"
 	upstream.docs["alpha"][1].Normalized.Title = "Alpha Saga Book 3 Chapter 1"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +487,7 @@ func TestSourceFilteredPreviewIgnoresIndependentSeries(t *testing.T) {
 	beta.Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume"}
 	beta.Inputs = []config.SeriesInputConfig{{Source: "beta", MatchType: "title_regex", MatchValue: "^Beta", ReleaseRole: "chapter", ContentStrategy: "text_post"}}
 	s.Config.Series = append(s.Config.Series, beta)
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +510,7 @@ func TestBookChapterOutsideDeclaredRangeRemainsSingle(t *testing.T) {
 	for i := range upstream.docs["alpha"] {
 		upstream.docs["alpha"][i].Normalized.Title = fmt.Sprintf("Alpha Saga Book 1 Chapter %d", i+1)
 	}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +546,7 @@ func TestRebuildPreviewReportsUserModifiedDestination(t *testing.T) {
 		}
 	}
 	s.Config.Series[0].Title = "Renamed Saga"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview rename"); err == nil || !strings.Contains(err.Error(), "retirement ownership conflict") {
 		t.Fatalf("preview promised to retire user-modified old path: %v", err)
 	}
@@ -292,7 +575,7 @@ func TestPublishedNamesPreserveBookWordsDatesAndAttachmentSequenceFallback(t *te
 				doc.Normalized.Attachments = []domain.Attachment{{FileName: tc.attachment, MIMEType: tc.mime, LocalPath: path}}
 				s.Config.Series[0].Inputs[0].ContentStrategy = "attachment_only"
 			}
-			s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 			upstream.docs["alpha"] = []provider.ReleaseDocument{doc}
 			if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 				t.Fatal(err)
@@ -315,7 +598,7 @@ func TestSourceFilteredRebuildCannotDismantleAMixedSourceVolume(t *testing.T) {
 	input.Source = "beta"
 	s.Config.Series[0].Inputs = append(s.Config.Series[0].Inputs, input)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	second := upstream.docs["alpha"][1]
 	second.Normalized.ProviderReleaseID = "b2"
 	upstream.docs["beta"] = []provider.ReleaseDocument{second}
@@ -326,7 +609,7 @@ func TestSourceFilteredRebuildCannotDismantleAMixedSourceVolume(t *testing.T) {
 	path := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
 	before := mustReadFile(t, path)
 	s.Config.Series[0].Output.Bundling = "none"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	s.Providers = provider.NewRegistry()
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{SourceID: "beta"}, "partial rebuild"); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("expected blocked mixed-source transition: %v", err)
@@ -339,7 +622,7 @@ func TestSourceFilteredRebuildCannotDismantleAMixedSourceVolume(t *testing.T) {
 func TestFailedRegroupDoesNotActivateOnlyPartOfTheNewVolumes(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 4}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	for _, n := range []string{"3", "4"} {
 		extra := docs[0]
@@ -427,13 +710,13 @@ func TestRebuildPreviewIncludesStoredReleasesThatPreviouslyProducedNoFiles(t *te
 				s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
 			}
 			s.Config.Series[0].Inputs[0].ContentStrategy = "manual"
-			s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 			if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 				t.Fatal(err)
 			}
 			s.Config.Series[0].Inputs[0].ContentStrategy = "text_post"
 			s.Config.Series[0].ID = "new-saga"
-			s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 			s.Providers = provider.NewRegistry()
 			preview, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true, SeriesID: "new-saga"}, "preview")
 			if err != nil {
@@ -478,7 +761,7 @@ else:
 		t.Fatal(err)
 	}
 	upstream.docs["alpha"] = docs
-	if _, err := s.Sync(context.Background(), "", false, "sync"); err != nil {
+	if _, err := s.Sync(context.Background(), "", false, "sync", nil); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
@@ -589,7 +872,7 @@ func TestPendingDeliveryRetainsItsArtifactAcrossNewUpstreamCorrections(t *testin
 func TestRetirementRetryKeepsEventIdentityWhenUnrelatedChaptersArrive(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	root := t.TempDir()
 	log := filepath.Join(root, "events.jsonl")
 	fail := filepath.Join(root, "fail")
@@ -655,7 +938,7 @@ func TestLegacyHookRejectsRenameBeforeAnyTargetDelivery(t *testing.T) {
 	}
 	before := mustReadFile(t, log)
 	s.Config.Series[0].Title = "Renamed Saga"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview"); err == nil || !strings.Contains(err.Error(), "protocol_version") {
 		t.Fatalf("preview must reject the incompatible hook before promising a replacement: %v", err)
 	}
@@ -688,7 +971,7 @@ func TestVersionedHookRetainsOldArtifactIdentityWhenOnlyTheNameChanges(t *testin
 		t.Fatal(err)
 	}
 	s.Config.Series[0].Title = "Renamed Saga"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "rebuild"); err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +1001,7 @@ func TestPDFVolumeRebuildUsesCapturedAttachmentAfterProviderCacheIsGone(t *testi
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", PrefaceMode: "prepend_post", Bundling: "volume", ChaptersPerVolume: 1}
 	s.Config.Series[0].Inputs[0].ContentStrategy = "attachment_only"
 	s.Config.Series[0].Inputs[0].AttachmentGlob = []string{"*.pdf"}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	doc := upstream.docs["alpha"][0]
 	doc.Normalized.Attachments = []domain.Attachment{{FileName: "chapter.pdf", MIMEType: "application/pdf", LocalPath: cache}}
 	doc.Normalized.TextHTML = "<p>An author note worth retaining.</p>"
@@ -731,7 +1014,7 @@ func TestPDFVolumeRebuildUsesCapturedAttachmentAfterProviderCacheIsGone(t *testi
 	}
 	s.Providers = provider.NewRegistry()
 	s.Config.Series[0].Title = "Revised Saga"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "rebuild"); err != nil {
 		t.Fatal(err)
 	}
@@ -781,14 +1064,14 @@ func TestPDFVolumeRebuildUsesCapturedAttachmentAfterProviderCacheIsGone(t *testi
 func TestRebuildDryRunNamesVolumeAndExactRetirementWithoutWriting(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	upstream.docs["alpha"] = docs[:1]
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
 	upstream.docs["alpha"] = docs
-	if _, err := s.Sync(context.Background(), "", false, "sync"); err != nil {
+	if _, err := s.Sync(context.Background(), "", false, "sync", nil); err != nil {
 		t.Fatal(err)
 	}
 	s.Providers = provider.NewRegistry()
@@ -870,7 +1153,7 @@ func TestSequenceOverridesResolveDuplicateAndShortFinalRange(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50, FinalChapter: 3}
 	s.Config.Series[0].SequenceOverrides = []config.SequenceOverride{{Source: "alpha", ReleaseID: "duplicate", KeepSingle: true}, {Source: "alpha", ReleaseID: "interlude", Chapter: 3}}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	duplicate := docs[1]
 	duplicate.Normalized.ProviderReleaseID = "duplicate"
@@ -895,7 +1178,7 @@ func TestSequenceOverridesResolveDuplicateAndShortFinalRange(t *testing.T) {
 func TestMissingRebuildInputBlocksTheRelatedReplacement(t *testing.T) {
 	s, _ := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +1196,7 @@ func TestMissingRebuildInputBlocksTheRelatedReplacement(t *testing.T) {
 		}
 	}
 	s.Config.Series[0].Output.Bundling = "none"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	s.Providers = provider.NewRegistry()
 	result, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "rebuild")
 	if err == nil || len(result.Blocked) == 0 {
@@ -930,7 +1213,7 @@ func TestMissingRebuildInputBlocksTheRelatedReplacement(t *testing.T) {
 func TestVolumeSplitFailureRetainsOldVolumeOnThatTarget(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 4}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	for _, n := range []string{"3", "4"} {
 		extra := docs[0]
@@ -977,7 +1260,7 @@ func TestVolumeSplitFailureRetainsOldVolumeOnThatTarget(t *testing.T) {
 func TestChangingVolumeSizeWaitsForRebuildAndRetainsAllChapters(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	third := docs[0]
 	third.Normalized.Title = "Alpha Saga Chapter 3"
@@ -1020,7 +1303,7 @@ func TestLegacyHookRejectsVolumeBeforeAnyTargetDelivery(t *testing.T) {
 	before := mustReadFile(t, log)
 	files := findFiles(t, s.Config.Publishers[0].Path, ".html")
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err == nil || !strings.Contains(err.Error(), "protocol_version") {
 		t.Fatalf("expected hook upgrade error: %v", err)
 	}
@@ -1038,7 +1321,7 @@ func TestLegacyHookRejectsVolumeBeforeAnyTargetDelivery(t *testing.T) {
 func TestVersionedHookRetriesVolumeBeforeRetiringSingle(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	root := t.TempDir()
 	script := filepath.Join(root, "hook.py")
 	log := filepath.Join(root, "events.jsonl")
@@ -1103,14 +1386,14 @@ if event["action"]=="publish" and event.get("volume") and pathlib.Path(sys.argv[
 func TestDisablingBundlingKeepsCompletedVolumeUntilExplicitRebuild(t *testing.T) {
 	s, _ := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
 	volume := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-vol01.epub")
 	before := mustReadFile(t, volume)
 	s.Config.Series[0].Output.Bundling = "none"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -1133,7 +1416,7 @@ func TestDisablingBundlingKeepsCompletedVolumeUntilExplicitRebuild(t *testing.T)
 func TestIntentionalGapAndLateChapterRequireExplicitVolumeRebuild(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 3, IntentionalGaps: []config.ChapterGap{{Chapter: 2, Reason: "author skipped this number"}}}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	docs[1].Normalized.Title = "Alpha Saga Chapter 3"
 	upstream.docs["alpha"] = docs
@@ -1178,7 +1461,7 @@ func TestAuthorBooksOverrideFixedSizeAndOrderRestartedChapters(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50}
 	s.Config.Series[0].Books = []config.BookConfig{{ID: "one", Number: 1, FirstChapter: 1, LastChapter: 2}, {ID: "two", Number: 2, FirstChapter: 1, LastChapter: 1}}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	docs[0].Normalized.Title = "Alpha Saga Book 1 Chapter 1"
 	docs[1].Normalized.Title = "Alpha Saga Book 1 Chapter 2"
@@ -1206,7 +1489,7 @@ func TestAuthorBooksOverrideFixedSizeAndOrderRestartedChapters(t *testing.T) {
 func TestLaterChapterDoesNotCloseAVolumeWithAMissingChapter(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 3}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	docs[1].Normalized.Title = "Alpha Saga Chapter 3"
 	later := docs[1]
@@ -1231,7 +1514,7 @@ func TestLaterChapterDoesNotCloseAVolumeWithAMissingChapter(t *testing.T) {
 func TestCompleteVolumeReplacesItsPreviouslyPublishedChapters(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	upstream.docs["alpha"] = docs[:1]
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
@@ -1295,7 +1578,7 @@ func TestOfflineRebuildRenamesChaptersAndRetiresOldPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Config.Series[0].Title = "Renamed Saga"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	s.Providers = provider.NewRegistry()
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "run --rebuild"); err != nil {
 		t.Fatal(err)
@@ -1332,7 +1615,7 @@ func TestRebuildRetiresLegacyRecordsForMultipleEditionsAtOnePath(t *testing.T) {
 		}
 	}
 	s.Config.Series[0].Title = "Renamed Saga"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	s.Providers = provider.NewRegistry()
 	if _, err := s.Rebuild(ctx, app.RebuildOptions{DryRun: true}, "preview legacy rename"); err != nil {
 		t.Fatal(err)
@@ -1413,7 +1696,7 @@ func TestChapterNamesUseBoundedMarkersAndNoRoutineIdentitySuffix(t *testing.T) {
 func TestPublishedChaptersHaveDistinctTitlesAndSeriesPositions(t *testing.T) {
 	s, _ := newReaderService(t)
 	s.Config.Series[0].Output.Format = "epub"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
@@ -1584,7 +1867,7 @@ func newReaderService(t *testing.T) (*app.Service, *stubRuleAuthoringProvider) {
 			ReleaseRole: "chapter", ContentStrategy: "text_post",
 		}},
 	}}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	return s, upstream
 }
 
@@ -1597,7 +1880,7 @@ func TestBookLabelNeedsAnExplicitEndpointBeforeVolumePublication(t *testing.T) {
 	s.Config.Series[0].Books = []config.BookConfig{{ID: "arrival", Number: 1, Collection: &config.CollectionSelector{Name: "Arrival"}}}
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50}
 	s.Config.Rules = nil
-	s.Config.Rules = s.Config.CompileRules()
+
 	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
 	for i := range upstream.docs["alpha"] {
 		upstream.docs["alpha"][i].Normalized.Collections = []string{"Arrival"}
@@ -1614,7 +1897,7 @@ func TestBookLabelNeedsAnExplicitEndpointBeforeVolumePublication(t *testing.T) {
 	}
 	s.Config.Series[0].Books[0].LastChapter = 2
 	s.Config.Rules = nil
-	s.Config.Rules = s.Config.CompileRules()
+
 	s.Providers = provider.NewRegistry()
 	preview, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
 	if err != nil || len(preview.Publish.Volumes) != 1 || preview.Publish.Volumes[0].Status != "complete" {
@@ -1631,7 +1914,7 @@ func TestBookLabelNeedsAnExplicitEndpointBeforeVolumePublication(t *testing.T) {
 func TestCapturedAttachmentIdentityIsStableInTheRebuildPlan(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Inputs[0].ContentStrategy = "attachment_only"
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
 	path := filepath.Join(t.TempDir(), "Alpha Chapter 1.pdf")
 	if err := os.WriteFile(path, []byte("%PDF-1.4\nFictional captured attachment\n%%EOF"), 0600); err != nil {

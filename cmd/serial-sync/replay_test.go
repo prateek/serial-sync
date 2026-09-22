@@ -592,3 +592,37 @@ func TestComparisonUsesTheRebuildPlannerAndReportsActualLibraryChanges(t *testin
 		t.Fatalf("comparison differs from rebuild dry run: %+v versus %+v", plan.Publish.Items, comparison.Candidate.Actions)
 	}
 }
+
+func TestComparisonPlansEachConfigAgainstItsOwnSources(t *testing.T) {
+	root, _, _, base := setupReplayFixture(t)
+	// The live (candidate) config disables the delivered source while the
+	// compared config keeps it enabled and renames the series. The compared
+	// plan must be built against its own sources: a rename plans additions
+	// and retirements, which vanish if the live config's disabled source
+	// filters the compared candidates.
+	candidate := filepath.Join(root, "candidate.toml")
+	writeReplayFile(t, candidate, strings.Replace(base, "enabled=true\n[[sources]]", "enabled=false\n[[sources]]", 1))
+	renamed := filepath.Join(root, "renamed.toml")
+	writeReplayFile(t, renamed, strings.Replace(base, `title="The Glass Harbor"`, `title="Harbor Renamed"`, 1))
+	output, err := captureRun(t, "--config", candidate, "setup", "preview", "--stored", "--compare", renamed, "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preview app.RulesPreviewResult
+	if err := json.Unmarshal([]byte(output), &preview); err != nil {
+		t.Fatal(err)
+	}
+	comparison := preview.Comparison.AppliedLibrary
+	actions := map[string]int{}
+	if comparison.Baseline != nil {
+		for _, item := range comparison.Baseline.Actions {
+			actions[item.Action]++
+		}
+	}
+	if actions["add"] != 2 || actions["retire"] != 2 {
+		t.Fatalf("compared config was not planned against its own sources: %+v", comparison.Baseline)
+	}
+	if comparison.Candidate == nil || len(comparison.Candidate.Actions) != 0 || len(comparison.Candidate.Notices) == 0 {
+		t.Fatalf("disabled candidate source should retain files with a notice: %+v", comparison.Candidate)
+	}
+}

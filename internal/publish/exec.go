@@ -20,8 +20,6 @@ type ExecTarget struct {
 	ProtocolVersion int
 	ID              string
 	Command         []string
-	RunID           string
-	EventScope      string
 }
 
 type execPayload struct {
@@ -36,68 +34,6 @@ type execPayload struct {
 	Artifact   domain.Artifact          `json:"artifact"`
 }
 
-func PublishExec(ctx context.Context, target ExecTarget, candidate domain.PublishCandidate) (domain.PublishRecord, error) {
-	if len(target.Command) == 0 {
-		return domain.PublishRecord{}, fmt.Errorf("exec publisher %q requires a command", target.ID)
-	}
-	payload, err := json.MarshalIndent(execPayload{
-		RunID:      target.RunID,
-		TargetID:   target.ID,
-		TargetKind: "exec",
-		Command:    append([]string(nil), target.Command...),
-		Source:     candidate.Source,
-		Track:      candidate.Track,
-		Release:    candidate.Release,
-		Assignment: candidate.Assignment,
-		Artifact:   candidate.Artifact,
-	}, "", "  ")
-	if err != nil {
-		return domain.PublishRecord{}, err
-	}
-	if target.ProtocolVersion == 2 {
-		event := hookEvent{Version: 2, Action: "publish", TargetID: target.ID, PublishCandidate: &candidate}
-		event.EventID = hookEventID(target, "publish", candidate.Artifact.ID, candidate.Artifact.SHA256, candidate.Artifact.Filename)
-		payload, err = json.Marshal(event)
-		if err != nil {
-			return domain.PublishRecord{}, err
-		}
-	}
-
-	cmd := exec.CommandContext(ctx, target.Command[0], target.Command[1:]...)
-	cmd.Env = append(os.Environ(), execEnv(target, candidate)...)
-	cmd.Stdin = bytes.NewReader(payload)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return domain.PublishRecord{}, fmt.Errorf("exec publisher %q failed: %w%s", target.ID, err, formatExecOutput(&stdout, &stderr))
-	}
-
-	return domain.PublishRecord{
-		Filename:    candidate.Artifact.Filename,
-		ID:          "pub_" + uuid.NewString(),
-		ArtifactID:  candidate.Artifact.ID,
-		TargetID:    target.ID,
-		TargetKind:  "exec",
-		TargetRef:   ExecTargetRef(target.Command),
-		PublishHash: PublishHash(target.ID, candidate.Artifact.SHA256, ExecPublishSignature(target, candidate)),
-		PublishedAt: time.Now().UTC(),
-		Status:      domain.PublishStatusPublished,
-		Message:     combinedExecOutput(&stdout, &stderr),
-	}, nil
-}
-
-func ExecPublishSignature(target ExecTarget, candidate domain.PublishCandidate) string {
-	signature := ExecTargetSignature(target.Command)
-	if target.ProtocolVersion == 2 {
-		signature += "\x00v2\x00" + candidate.Artifact.Filename
-	}
-	return signature
-}
-
 type hookEvent struct {
 	Version  int    `json:"version"`
 	EventID  string `json:"event_id"`
@@ -108,35 +44,153 @@ type hookEvent struct {
 	Replacements []domain.PublishCandidate   `json:"replacements,omitempty"`
 }
 
-func hookEventID(target ExecTarget, parts ...string) string {
-	if target.EventScope != "" {
-		parts = append([]string{target.EventScope}, parts...)
-	}
-	parts = append([]string{target.ID, ExecTargetSignature(target.Command)}, parts...)
-	return fmt.Sprintf("evt_%x", sha256.Sum256([]byte(strings.Join(parts, "\x00"))))
+func (t *ExecTarget) TargetID() string {
+	return t.ID
 }
 
-func SupersedeExec(ctx context.Context, target ExecTarget, previous domain.PublishRecordBundle, replacements []domain.PublishCandidate) error {
-	if target.ProtocolVersion != 2 {
-		return fmt.Errorf("exec publisher %q requires protocol_version = 2 for retirement", target.ID)
+func (t *ExecTarget) Kind() string {
+	return "exec"
+}
+
+func (t *ExecTarget) Ref(candidate domain.PublishCandidate) (string, error) {
+	return ExecTargetRef(t.Command), nil
+}
+
+func (t *ExecTarget) PublishHashInput(candidate domain.PublishCandidate) (string, error) {
+	return t.execPublishSignature(candidate), nil
+}
+
+func (t *ExecTarget) execPublishSignature(candidate domain.PublishCandidate) string {
+	signature := ExecTargetSignature(t.Command)
+	if t.ProtocolVersion == 2 {
+		signature += "\x00v2\x00" + candidate.Artifact.Filename
 	}
-	parts := []string{"supersede", previous.Record.PublishHash, previous.Artifact.ID}
-	for _, replacement := range replacements {
+	return signature
+}
+
+func (t *ExecTarget) DesiredKey(candidate domain.PublishCandidate) string {
+	return candidate.Artifact.ID + "\x00" + candidate.Artifact.Filename
+}
+
+func (t *ExecTarget) DesiredKeyForRecord(record domain.PublishRecordBundle) string {
+	return record.Artifact.ID + "\x00" + record.Record.Filename
+}
+
+func (t *ExecTarget) MatchesDestination(record domain.PublishRecordBundle, candidate domain.PublishCandidate) bool {
+	return record.Record.Filename == candidate.Artifact.Filename
+}
+
+func (t *ExecTarget) Reorder(candidates []domain.PublishCandidate, _ []domain.PublishRecordBundle, _ []domain.VolumeEdition) ([]domain.PublishCandidate, map[string][]string, error) {
+	// The hook owns its destination layout; deliveries never contend on a
+	// path here, so the input order stands with no dependencies.
+	return candidates, map[string][]string{}, nil
+}
+
+func (t *ExecTarget) PublishingRecord(_, _ string, _ domain.PublishCandidate, _, _ string) *domain.PublishRecord {
+	// The hook protocol acknowledges deliveries by event id; a failure needs
+	// its own failed-status record rather than a provisional ledger entry.
+	return nil
+}
+
+func (t *ExecTarget) CheckDestination(ref string, ownedHashes []string) (string, error) {
+	return "", nil
+}
+
+func (t *ExecTarget) AlreadyDelivered(ref string, artifactSHA string) (bool, error) {
+	return true, nil
+}
+
+func (t *ExecTarget) Publish(ctx context.Context, runID, eventScope string, candidate domain.PublishCandidate, ownedHashes []string) (domain.PublishRecord, error) {
+	if len(t.Command) == 0 {
+		return domain.PublishRecord{}, fmt.Errorf("exec publisher %q requires a command", t.ID)
+	}
+	payload, err := json.MarshalIndent(execPayload{
+		RunID:      runID,
+		TargetID:   t.ID,
+		TargetKind: "exec",
+		Command:    append([]string(nil), t.Command...),
+		Source:     candidate.Source,
+		Track:      candidate.Track,
+		Release:    candidate.Release,
+		Assignment: candidate.Assignment,
+		Artifact:   candidate.Artifact,
+	}, "", "  ")
+	if err != nil {
+		return domain.PublishRecord{}, err
+	}
+	if t.ProtocolVersion == 2 {
+		event := hookEvent{Version: 2, Action: "publish", TargetID: t.ID, PublishCandidate: &candidate}
+		event.EventID = hookEventID(*t, eventScope, "publish", candidate.Artifact.ID, candidate.Artifact.SHA256, candidate.Artifact.Filename)
+		payload, err = json.Marshal(event)
+		if err != nil {
+			return domain.PublishRecord{}, err
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, t.Command[0], t.Command[1:]...)
+	cmd.Env = append(os.Environ(), execEnv(*t, runID, candidate)...)
+	cmd.Stdin = bytes.NewReader(payload)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return domain.PublishRecord{}, fmt.Errorf("exec publisher %q failed: %w%s", t.ID, err, formatExecOutput(&stdout, &stderr))
+	}
+
+	return domain.PublishRecord{
+		Filename:    candidate.Artifact.Filename,
+		ID:          "pub_" + uuid.NewString(),
+		ArtifactID:  candidate.Artifact.ID,
+		TargetID:    t.ID,
+		TargetKind:  "exec",
+		TargetRef:   ExecTargetRef(t.Command),
+		PublishHash: PublishHash(t.ID, candidate.Artifact.SHA256, t.execPublishSignature(candidate)),
+		PublishedAt: time.Now().UTC(),
+		Status:      domain.PublishStatusPublished,
+		Message:     combinedExecOutput(&stdout, &stderr),
+	}, nil
+}
+
+// Capabilities: a versioned hook acknowledges deliveries by event id and
+// receives supersede events; a legacy single-file hook has no retirement
+// event, so its prior records stay published.
+func (t *ExecTarget) Capabilities() Capabilities {
+	return Capabilities{PendingRecord: false, Retires: t.ProtocolVersion == 2}
+}
+
+func (t *ExecTarget) Retire(ctx context.Context, old domain.PublishRecordBundle, planned, related []domain.PublishCandidate, ownedHashes []string, eventScope string) error {
+	if t.ProtocolVersion != 2 {
+		return ErrRetirementUnsupported
+	}
+	old.Artifact.Filename = old.Record.Filename
+	parts := []string{"supersede", old.Record.PublishHash, old.Artifact.ID}
+	for _, replacement := range related {
 		parts = append(parts, replacement.Artifact.ID, replacement.Artifact.SHA256, replacement.Artifact.Filename)
 	}
-	event := hookEvent{Version: 2, EventID: hookEventID(target, parts...), Action: "supersede", TargetID: target.ID, Previous: &previous, Replacements: replacements}
+	event := hookEvent{Version: 2, EventID: hookEventID(*t, eventScope, parts...), Action: "supersede", TargetID: t.ID, Previous: &old, Replacements: related}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, target.Command[0], target.Command[1:]...)
+	cmd := exec.CommandContext(ctx, t.Command[0], t.Command[1:]...)
 	cmd.Stdin = bytes.NewReader(payload)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("exec publisher %q supersede failed: %w%s", target.ID, err, formatExecOutput(&stdout, &stderr))
+		return fmt.Errorf("exec publisher %q supersede failed: %w%s", t.ID, err, formatExecOutput(&stdout, &stderr))
 	}
 	return nil
+}
+
+func hookEventID(target ExecTarget, eventScope string, parts ...string) string {
+	if eventScope != "" {
+		parts = append([]string{eventScope}, parts...)
+	}
+	parts = append([]string{target.ID, ExecTargetSignature(target.Command)}, parts...)
+	return fmt.Sprintf("evt_%x", sha256.Sum256([]byte(strings.Join(parts, "\x00"))))
 }
 
 func ExecTargetRef(command []string) string {
@@ -154,9 +208,9 @@ func ExecTargetSignature(command []string) string {
 	return strings.Join(command, "\x00")
 }
 
-func execEnv(target ExecTarget, candidate domain.PublishCandidate) []string {
+func execEnv(target ExecTarget, runID string, candidate domain.PublishCandidate) []string {
 	return []string{
-		"SERIAL_SYNC_RUN_ID=" + target.RunID,
+		"SERIAL_SYNC_RUN_ID=" + runID,
 		"SERIAL_SYNC_TARGET_ID=" + target.ID,
 		"SERIAL_SYNC_TARGET_KIND=exec",
 		"SERIAL_SYNC_SOURCE_ID=" + candidate.Source.ID,

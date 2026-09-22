@@ -12,36 +12,204 @@ import (
 	"github.com/google/uuid"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/publish"
 )
 
+type deliveryScope struct {
+	SourceID string
+	SeriesID string
+	Rebuild  bool
+}
+
+type librarySnapshot struct {
+	Records []domain.PublishRecordBundle
+	Volumes []domain.VolumeEdition
+}
+
+type planRetirement struct {
+	RecordID    string
+	ReleaseID   string
+	ArtifactID  string
+	Filename    string
+	SHA256      string
+	TargetRef   string
+	PublishHash string
+	Related     []string
+}
+
 type deliveryPlan struct {
+	// Maintenance marks a rebuild-scoped delivery so lifecycle hooks can
+	// distinguish it from steady-state publication.
 	Maintenance bool                      `json:"maintenance,omitempty"`
 	ID          string                    `json:"id"`
 	EventScope  string                    `json:"event_scope,omitempty"`
 	Target      config.PublisherConfig    `json:"target"`
 	Candidates  []domain.PublishCandidate `json:"candidates"`
+	// The saved plan carries only what resumption reads; a resumed plan is
+	// re-planned from its candidates against the current snapshot.
+	Items        []domain.PublishItemResult `json:"-"`
+	Ordered      []string                   `json:"-"`
+	Dependencies map[string][]string        `json:"-"`
+	Retirements  []planRetirement           `json:"-"`
+	Blocked      []string                   `json:"-"`
 }
 
-func (s *Service) deliveryPlan(ctx context.Context, target config.PublisherConfig, candidates []domain.PublishCandidate, sourceFilter, seriesFilter string, rebuild bool) (deliveryPlan, error) {
-	pending, err := s.pendingDelivery(ctx, target, sourceFilter, seriesFilter, rebuild)
+// planDelivery is the one delivery planner: it turns a target's library
+// snapshot and the desired candidates into the full per-target action list,
+// ordering and retirement set. The rebuild preview prints plan.Items and the
+// publish executor applies them, so dry runs and real runs share one
+// implementation of the add, replace, repair, unchanged and retire decisions.
+func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
+	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates, Maintenance: scope.Rebuild}
+	plan.EventScope = plan.ID
+	ordered, dependencies, orderErr := pt.Reorder(candidates, snapshot.Records, snapshot.Volumes)
+	if orderErr != nil {
+		return plan, orderErr
+	}
+	plan.Ordered = make([]string, 0, len(ordered))
+	for _, candidate := range ordered {
+		plan.Ordered = append(plan.Ordered, candidate.Artifact.ID)
+	}
+	plan.Dependencies = dependencies
+	desired, covered := map[string]bool{}, map[string]bool{}
+	for _, candidate := range candidates {
+		ref, err := pt.Ref(candidate)
+		if err != nil {
+			return plan, err
+		}
+		hashInput, err := pt.PublishHashInput(candidate)
+		if err != nil {
+			return plan, err
+		}
+		desired[pt.DesiredKey(candidate)] = true
+		if candidate.Volume != nil {
+			for _, member := range candidate.Volume.Members {
+				covered[member.ReleaseID] = true
+			}
+		} else {
+			covered[candidate.Release.ID] = true
+		}
+		action := "add"
+		for _, record := range snapshot.Records {
+			if record.Record.Status != domain.PublishStatusPublished {
+				continue
+			}
+			if pt.MatchesDestination(record, candidate) {
+				action = "replace"
+			}
+			if candidate.Artifact.ID == record.Artifact.ID && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == publish.PublishHash(target.ID, candidate.Artifact.SHA256, hashInput) {
+				action = "unchanged"
+				if already, checkErr := pt.AlreadyDelivered(ref, candidate.Artifact.SHA256); checkErr != nil || !already {
+					action = "repair"
+				}
+				break
+			}
+		}
+		message := ""
+		if _, readErr := pt.CheckDestination(ref, ownedHashesForPath(snapshot.Records, ref)); readErr != nil {
+			action = "blocked"
+			message = fmt.Sprintf("target %s: %v", target.ID, readErr)
+			plan.Blocked = append(plan.Blocked, message)
+		}
+		plan.Items = append(plan.Items, domain.PublishItemResult{ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: pt.Kind(), TargetRef: ref, Action: action, Message: message})
+	}
+	if !pt.Capabilities().Retires {
+		return plan, nil
+	}
+	for _, old := range snapshot.Records {
+		if old.Record.Status != domain.PublishStatusPublished || desired[pt.DesiredKeyForRecord(old)] {
+			continue
+		}
+		complete := covered[old.Release.ID]
+		for _, volume := range snapshot.Volumes {
+			if volume.Artifact.ID == old.Artifact.ID {
+				complete = true
+				for _, member := range volume.Members {
+					if !covered[member.ReleaseID] {
+						complete = false
+					}
+				}
+			}
+		}
+		if !complete {
+			continue
+		}
+		required := map[string]bool{old.Release.ID: true}
+		for _, volume := range snapshot.Volumes {
+			if volume.Artifact.ID != old.Artifact.ID {
+				continue
+			}
+			for _, member := range volume.Members {
+				required[member.ReleaseID] = true
+			}
+		}
+		var related []string
+		for _, replacement := range candidates {
+			covers := required[replacement.Release.ID] && replacement.Release.ID != ""
+			if replacement.Volume != nil {
+				for _, member := range replacement.Volume.Members {
+					if required[member.ReleaseID] {
+						covers = true
+					}
+				}
+			}
+			if covers {
+				related = append(related, replacement.Artifact.ID)
+			}
+		}
+		sort.Strings(related)
+		if _, checkErr := pt.CheckDestination(old.Record.TargetRef, retirementOwnedHashes(snapshot.Records, old)); checkErr != nil {
+			item := domain.PublishItemResult{ArtifactID: old.Artifact.ID, TargetID: target.ID, TargetKind: old.Record.TargetKind, TargetRef: old.Record.TargetRef, Action: "blocked", Message: fmt.Sprintf("target %s retirement ownership conflict: %s", target.ID, old.Record.TargetRef)}
+			plan.Items = append(plan.Items, item)
+			plan.Blocked = append(plan.Blocked, item.Message)
+			continue
+		}
+		plan.Items = append(plan.Items, domain.PublishItemResult{ArtifactID: old.Artifact.ID, TargetID: target.ID, TargetKind: old.Record.TargetKind, TargetRef: old.Record.TargetRef, Action: "retire"})
+		plan.Retirements = append(plan.Retirements, planRetirement{
+			RecordID:    old.Record.ID,
+			ReleaseID:   old.Release.ID,
+			ArtifactID:  old.Artifact.ID,
+			Filename:    old.Record.Filename,
+			SHA256:      old.Artifact.SHA256,
+			TargetRef:   old.Record.TargetRef,
+			PublishHash: old.Record.PublishHash,
+			Related:     related,
+		})
+	}
+	return plan, nil
+}
+
+func (s *Service) deliveryPlan(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
+	pending, err := s.pendingDelivery(ctx, s.Config, scope, target)
 	if err != nil {
 		return deliveryPlan{}, err
 	}
 	if pending != nil {
-		_, _, err := s.orderReplacements(ctx, target, pending.Candidates)
-		if !errors.Is(err, errCyclicReplacement) {
-			return *pending, err
-		}
-		// Older versions saved cyclic plans before rejecting them without delivery.
-		if err := s.Repo.CompletePendingPublish(ctx, pending.ID); err != nil {
-			return deliveryPlan{}, err
+		// A resumed plan keeps its saved ID and event scope but is re-planned
+		// from its saved candidates against the current snapshot, exactly as a
+		// fresh plan would. The persisted JSON omits the dependency map (and
+		// plans saved before ordering existed carry no delivery order at all),
+		// so resuming the deserialized plan straight would deliver without the
+		// replacement gate.
+		rebuilt, err := s.planDelivery(ctx, scope, pt, target, pending.Candidates, snapshot)
+		if publish.IsCyclicReplacement(err) {
+			// Older versions saved cyclic plans before rejecting them without delivery.
+			if err := s.Repo.CompletePendingPublish(ctx, pending.ID); err != nil {
+				return deliveryPlan{}, err
+			}
+		} else if err != nil {
+			return rebuilt, err
+		} else {
+			rebuilt.ID = pending.ID
+			rebuilt.EventScope = pending.EventScope
+			rebuilt.Maintenance = pending.Maintenance
+			return rebuilt, nil
 		}
 	}
-	if _, _, err := s.orderReplacements(ctx, target, candidates); err != nil {
-		return deliveryPlan{}, err
+	plan, err := s.planDelivery(ctx, scope, pt, target, candidates, snapshot)
+	if err != nil {
+		return plan, err
 	}
-	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates, Maintenance: rebuild}
-	plan.EventScope = plan.ID
 	data, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
 		return plan, err
@@ -69,7 +237,46 @@ func (s *Service) deliveryPlan(ctx context.Context, target config.PublisherConfi
 	return plan, s.Repo.SavePendingPublish(ctx, domain.PendingPublish{ID: plan.ID, TargetID: target.ID, PayloadRef: path})
 }
 
-func (s *Service) pendingDelivery(ctx context.Context, target config.PublisherConfig, sourceFilter, seriesFilter string, rebuild bool) (*deliveryPlan, error) {
+// applyRetirements executes the plan's retirement instructions once its
+// replacement deliveries all succeeded. Retirement is idempotent: a crash
+// mid-cleanup leaves the pending plan, and the retry re-applies the same
+// instructions against the same records.
+func (s *Service) applyRetirements(ctx context.Context, pt publish.Target, target config.PublisherConfig, plan deliveryPlan, snapshot librarySnapshot) error {
+	var failures []error
+	for _, retirement := range plan.Retirements {
+		var old *domain.PublishRecordBundle
+		for _, record := range snapshot.Records {
+			if record.Record.ID == retirement.RecordID {
+				old = &record
+				break
+			}
+		}
+		if old == nil {
+			continue
+		}
+		var related []domain.PublishCandidate
+		for _, candidate := range plan.Candidates {
+			for _, id := range retirement.Related {
+				if candidate.Artifact.ID == id {
+					related = append(related, candidate)
+					break
+				}
+			}
+		}
+		owned := retirementOwnedHashes(snapshot.Records, *old)
+		if err := pt.Retire(ctx, *old, plan.Candidates, related, owned, plan.EventScope); err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		old.Record.Status = domain.PublishStatusSuperseded
+		if err := s.Repo.UpsertPublishRecord(ctx, old.Record); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (s *Service) pendingDelivery(ctx context.Context, cfg *config.Config, scope deliveryScope, target config.PublisherConfig) (*deliveryPlan, error) {
 	pending, err := s.Repo.GetPendingPublish(ctx, target.ID)
 	if err != nil {
 		return nil, err
@@ -87,7 +294,7 @@ func (s *Service) pendingDelivery(ctx context.Context, target config.PublisherCo
 			return nil, fmt.Errorf("target %s has a pending delivery with different settings; restore its settings and retry first", target.ID)
 		}
 		for _, candidate := range plan.Candidates {
-			if !s.sourceInScope(candidate.Source.ID, sourceFilter, rebuild) || seriesFilter != "" && candidate.Track.TrackKey != seriesFilter {
+			if !s.sourceInScope(candidate.Source.ID, scope.SourceID, scope.Rebuild, cfg) || scope.SeriesID != "" && candidate.Track.TrackKey != scope.SeriesID {
 				return nil, fmt.Errorf("target %s pending delivery requires excluded sources or series; retry its original scope first", target.ID)
 			}
 		}

@@ -199,7 +199,10 @@ func validateRuleFields(rule RuleConfig) error {
 
 func (c *Config) Warnings() []string {
 	var warnings []string
-	rules := append([]RuleConfig(nil), c.Rules...)
+	rules := c.Compiled().Rules()
+	if len(rules) == 0 {
+		rules = append([]RuleConfig(nil), c.Rules...)
+	}
 	sort.SliceStable(rules, func(i, j int) bool { return rules[i].Priority < rules[j].Priority })
 	fallbacks := map[string]bool{}
 	selectors := map[string]string{}

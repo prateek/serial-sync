@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -575,7 +576,7 @@ func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
 			AuthProfile: "patreon-default",
 			Enabled:     true,
 		},
-	}, provider.DiscoverOptions{SampleLimit: 2, MembershipFilter: "all"})
+	}, provider.DiscoverOptions{MembershipFilter: "all"})
 	if err != nil {
 		t.Fatalf("DiscoverSources() error = %v", err)
 	}
@@ -603,15 +604,6 @@ func TestDiscoverSourcesSuggestsSourcesFromActiveMemberships(t *testing.T) {
 	}
 	if got, want := configured.MembershipKind, "paid"; got != want {
 		t.Fatalf("configured.MembershipKind = %q, want %q", got, want)
-	}
-	if len(configured.SampleTitles) == 0 || len(configured.SuggestedRules) == 0 {
-		t.Fatalf("configured suggestion missing samples or rules: %#v", configured)
-	}
-	if configured.SampledPosts != 2 {
-		t.Fatalf("configured.SampledPosts = %d, want 2", configured.SampledPosts)
-	}
-	if len(configured.Preview.Groups) == 0 || len(configured.Preview.Posts) != 2 {
-		t.Fatalf("configured preview missing groups or posts: %#v", configured.Preview)
 	}
 	if unconfigured == nil {
 		t.Fatalf("expected unconfigured suggestion for sidequest, got %#v", result.Suggestions)
@@ -648,7 +640,6 @@ func TestDiscoverSourcesFiltersPaidCreators(t *testing.T) {
 		Mode:        "username_password",
 		SessionPath: sessionPath,
 	}, nil, provider.DiscoverOptions{
-		SampleLimit:      2,
 		MembershipFilter: "paid",
 		CreatorFilters:   []string{"plum"},
 	})
@@ -660,27 +651,6 @@ func TestDiscoverSourcesFiltersPaidCreators(t *testing.T) {
 	}
 	if got, want := result.Suggestions[0].Source.ID, "plumparrot"; got != want {
 		t.Fatalf("result.Suggestions[0].Source.ID = %q, want %q", got, want)
-	}
-}
-
-func TestSuggestRulesForSourcePrefersTitleSeriesOverGenericTags(t *testing.T) {
-	t.Parallel()
-
-	docs := []provider.ReleaseDocument{
-		discoveryDoc("1", "The Sixth School. Book Two. Chapter 058.", []string{"Fantasy", "Mage", "Magic"}, nil),
-		discoveryDoc("2", "The Sixth School. Book Two. Chapter 057.", []string{"Fantasy", "Mage", "Magic"}, nil),
-		discoveryDoc("3", "The Sixth School. Book Two, Chapter 056.", []string{"Fantasy", "Mage", "Magic"}, nil),
-	}
-
-	rules := suggestRulesForSource("blaqquill", docs)
-	if len(rules) < 2 {
-		t.Fatalf("len(rules) = %d, want at least 2", len(rules))
-	}
-	if got, want := rules[0].MatchType, "title_regex"; got != want {
-		t.Fatalf("rules[0].MatchType = %q, want %q", got, want)
-	}
-	if strings.Contains(strings.ToLower(rules[0].MatchValue), "fantasy") {
-		t.Fatalf("unexpected generic tag rule in primary match: %#v", rules[0])
 	}
 }
 
@@ -1228,18 +1198,6 @@ func discoveryPostJSON(id, title, campaignID, creatorID string, tags, collection
 }`, id, title, id, id, campaignID, creatorID, strings.Join(collectionRefs, ","), strings.Join(tagRefs, ","), strings.Join(included, ","))
 }
 
-func discoveryDoc(id, title string, tags, collections []string) provider.ReleaseDocument {
-	return provider.ReleaseDocument{
-		Normalized: domain.NormalizedRelease{
-			ProviderReleaseID: id,
-			Title:             title,
-			Tags:              append([]string(nil), tags...),
-			Collections:       append([]string(nil), collections...),
-			TextHTML:          "<p>Example</p>",
-		},
-	}
-}
-
 func collectionPostJSON(id string) string {
 	return fmt.Sprintf(`{
   "data": {
@@ -1281,6 +1239,10 @@ func collectionPostJSON(id string) string {
 }
 
 func writeTestSessionBundle(t *testing.T, path string, baseURL string) {
+	writeTestSessionBundleWithCookie(t, path, baseURL, "patreon-test-session")
+}
+
+func writeTestSessionBundleWithCookie(t *testing.T, path, baseURL, cookieValue string) {
 	t.Helper()
 
 	parsed, err := url.Parse(baseURL)
@@ -1293,7 +1255,7 @@ func writeTestSessionBundle(t *testing.T, path string, baseURL string) {
 		Cookies: []sessionCookie{
 			{
 				Name:     "session_id",
-				Value:    "patreon-test-session",
+				Value:    cookieValue,
 				Domain:   parsed.Hostname(),
 				Path:     "/",
 				HTTPOnly: true,
@@ -1302,6 +1264,88 @@ func writeTestSessionBundle(t *testing.T, path string, baseURL string) {
 	}
 	if err := saveSessionBundle(path, bundle); err != nil {
 		t.Fatalf("saveSessionBundle() error = %v", err)
+	}
+}
+
+func TestProfileSessionsRefreshWhenTheSessionFileChanges(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/current_user", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"id":"user-1"}}`)
+	})
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := New()
+	client.apiBaseURL = server.URL
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundleWithCookie(t, sessionPath, server.URL, "old-session")
+	auth := config.AuthProfile{ID: "patreon-default", Provider: "patreon", Mode: "username_password", SessionPath: sessionPath}
+	first, err := client.profileSessions(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A session refreshed by another process (setup auth, session import) must
+	// be picked up on the next call without rebuilding the profile's HTTP
+	// client or request budget.
+	writeTestSessionBundleWithCookie(t, sessionPath, server.URL, "new-session")
+	second, err := client.profileSessions(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.budget != first.budget {
+		t.Fatalf("session refresh changed the profile's request budget")
+	}
+	if second.client != first.client {
+		t.Fatalf("session refresh built a new HTTP client")
+	}
+	for _, cookie := range second.bundle.Cookies {
+		if cookie.Name == "session_id" && cookie.Value != "new-session" {
+			t.Fatalf("session refresh kept the stale cookie: %+v", second.bundle)
+		}
+	}
+}
+
+func TestBootstrapAuthBootstrapsOncePerProfileAcrossSources(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/current_user", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Cookie"), "session_id=new-session") {
+			http.Error(w, "old session rejected", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"id":"user-1"},"included":[{"id":"campaign-1","type":"campaign","attributes":{"name":"Alpha Author","url":"https://www.patreon.com/c/alpha","vanity":"alpha"}},{"id":"campaign-2","type":"campaign","attributes":{"name":"Beta Author","url":"https://www.patreon.com/c/beta","vanity":"beta"}}]}`)
+	})
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := New()
+	client.apiBaseURL = server.URL
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundleWithCookie(t, sessionPath, server.URL, "old-session")
+	auth := config.AuthProfile{ID: "patreon-default", Provider: "patreon", Mode: "username_password", SessionPath: sessionPath}
+	source := config.SourceConfig{ID: "alpha", Provider: "patreon", URL: "https://www.patreon.com/c/alpha/posts", Enabled: true}
+	other := config.SourceConfig{ID: "beta", Provider: "patreon", URL: "https://www.patreon.com/c/beta/posts", Enabled: true}
+	source.URL = server.URL + "/c/alpha/posts"
+	other.URL = server.URL + "/c/beta/posts"
+	state := &struct{ calls int }{}
+	client.bootstrap = func(_ context.Context, _ config.AuthProfile, _ config.SourceConfig, _ string) (domain.AuthState, error) {
+		state.calls++
+		writeTestSessionBundleWithCookie(t, sessionPath, server.URL, "new-session")
+		return domain.AuthStateAuthenticated, nil
+	}
+	if res, err := client.BootstrapAuth(context.Background(), auth, source, false); err != nil || res.Action != "bootstrapped" {
+		t.Fatalf("first bootstrap failed: %+v %v", res, err)
+	}
+	if res, err := client.BootstrapAuth(context.Background(), auth, other, false); err != nil || res.Action != "reused" {
+		t.Fatalf("second source of the profile should reuse the bootstrapped session: %+v %v", res, err)
+	}
+	if state.calls != 1 {
+		t.Fatalf("expected one bootstrap per auth profile, saw %d", state.calls)
 	}
 }
 
@@ -1345,4 +1389,83 @@ func TestGenerateTOTPCodeAcceptsSecretOrOTPAuthURI(t *testing.T) {
 	checkErr("otpauth://hotp/Patreon?secret="+sha1Secret+"&counter=0", "totp")
 	checkErr("otpauth://totp/Patreon?issuer=Patreon", "secret")
 	checkErr("otpauth://totp/%zz?secret=LEAKCANARY", "otpauth")
+}
+
+type concurrencyTracker struct {
+	mu      sync.Mutex
+	current int
+	max     int
+}
+
+func TestSharedProfileBudgetCapsConcurrentRequests(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	mux := http.NewServeMux()
+	tracker := &concurrencyTracker{mu: sync.Mutex{}}
+	mux.HandleFunc("/rate", func(w http.ResponseWriter, r *http.Request) {
+		tracker.mu.Lock()
+		tracker.current++
+		if tracker.current > tracker.max {
+			tracker.max = tracker.current
+		}
+		tracker.mu.Unlock()
+		sleepWithContext(context.Background(), 60*time.Millisecond)
+		tracker.mu.Lock()
+		tracker.current--
+		tracker.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"id":"user-1"},"included":[]}`)
+	})
+	server = httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	client := New()
+	client.apiBaseURL = server.URL
+	client.bootstrap = func(context.Context, config.AuthProfile, config.SourceConfig, string) (domain.AuthState, error) {
+		t.Fatalf("bootstrap should not run")
+		return domain.AuthStateReauthRequired, nil
+	}
+	tmp := t.TempDir()
+	sessionPath := filepath.Join(tmp, "patreon.json")
+	writeTestSessionBundle(t, sessionPath, server.URL)
+	auth := config.AuthProfile{ID: "patreon-default", Provider: "patreon", Mode: "username_password", SessionPath: sessionPath}
+
+	profile, err := client.profileSessions(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := client.profileSessions(auth)
+	if err != nil || again.budget != profile.budget {
+		t.Fatalf("profile sessions not cached per auth profile: %+v", err)
+	}
+	sessionA := &liveSession{sourceID: "alpha", bundle: profile.bundle, client: profile.client, budget: profile.budget}
+	sessionB := &liveSession{sourceID: "beta", bundle: profile.bundle, client: profile.client, budget: profile.budget}
+	if sessionA.budget != sessionB.budget {
+		t.Fatalf("sessions of one profile must share one request budget")
+	}
+	var failures []error
+	var wg sync.WaitGroup
+	for _, session := range []*liveSession{sessionA, sessionB, sessionA} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				_, _, _, err := client.getOnce(context.Background(), session, server.URL+"/rate", "", "text/plain", 1)
+				if err != nil {
+					failures = append(failures, err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if len(failures) > 0 {
+		t.Fatalf("live requests failed: %v", failures[0])
+	}
+	if tracker.max > patreonRequestLimitInitial {
+		t.Fatalf("three workers stacked budgets: %d concurrent requests, want <= %d", tracker.max, patreonRequestLimitInitial)
+	}
+	if tracker.max < 2 {
+		t.Fatalf("expected the shared budget to admit concurrent requests up to its limit: %d", tracker.max)
+	}
 }

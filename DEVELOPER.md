@@ -8,7 +8,10 @@ This repo is a standalone Go sync utility with a generic core and a Patreon-firs
 - `internal/provider` defines provider seams.
 - `internal/store` defines repository seams.
 - `internal/store/sqlite` is the current persistence backend.
-- `internal/artifact` and `internal/publish` handle artifact materialization and replayable publishing.
+- `internal/config` compiles the authored rules, inputs, review rules and overrides into one read-only rule set behind `Config.Compiled`.
+- `internal/classify`, `internal/discovery` and `internal/sequence` decide and detect sequence numbers; `internal/app/decisions.go` is the one release decider.
+- `internal/artifact` handles canonical artifact materialization.
+- `internal/publish` hosts the filesystem and exec target adapters behind one `Target` seam; `internal/app/transitions.go` plans each target's delivery once.
 
 ## Working Locally
 

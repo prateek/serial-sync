@@ -14,7 +14,7 @@ import (
 func TestFinalVolumeLeavesLaterChaptersAsSingles(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50, FinalChapter: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	third := docs[0]
 	third.Normalized.ProviderReleaseID, third.Normalized.Title = "a3", "Alpha Saga Chapter 3"
@@ -45,7 +45,7 @@ func TestAmbiguousBookChapterStillBlocksMixedFallbackVolume(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
 	s.Config.Series[0].Books = []config.BookConfig{{ID: "one", Number: 1}, {ID: "two", Number: 2, LastChapter: 1, SeriesPositionStart: 2}}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	docs := append([]provider.ReleaseDocument(nil), upstream.docs["alpha"][:2]...)
 	docs[0].Normalized.Title = "Alpha Saga Book 1 Chapter 2"
 	first := docs[1]
@@ -68,7 +68,7 @@ func TestOpenBookCannotReuseALaterBooksPosition(t *testing.T) {
 	s, upstream := newReaderService(t)
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 50}
 	s.Config.Series[0].Books = []config.BookConfig{{ID: "one", Number: 1}, {ID: "two", Number: 2, LastChapter: 1, SeriesPositionStart: 2}}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
 	upstream.docs["alpha"][0].Normalized.Title = "Alpha Saga Book 1 Chapter 2"
 	upstream.docs["alpha"][1].Normalized.Title = "Alpha Saga Book 2 Chapter 1"
@@ -93,7 +93,7 @@ func TestInheritedSourceStillRejectsLegacyVolumePublisherBeforeWork(t *testing.T
 		s.Config.Series[0].Inputs[i].Source = ""
 	}
 	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
-	s.Config.Rules = config.CompileSeriesRules(s.Config.Series)
+
 	s.Config.Publishers = []config.PublisherConfig{{ID: "legacy", Kind: "exec", Command: []string{"false"}, Enabled: true}}
 	if _, err := s.RunOnce(context.Background(), "alpha", "", "run"); err == nil || !strings.Contains(err.Error(), "protocol_version = 2") {
 		t.Fatalf("preflight: %v", err)

@@ -4,27 +4,26 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
 func Apply(cfg *config.Config, sourceID string, release domain.NormalizedRelease, decision domain.TrackDecision) domain.TrackDecision {
-	sequence := artifact.DetectSequence(release.Title)
-	sequence.Origin = "title"
+	seq := Detect(release.Title)
+	seq.Origin = "title"
 	if decision.ContentStrategy == domain.ContentStrategyAttachmentOnly || decision.ContentStrategy == domain.ContentStrategyAttachmentPreferred {
 		if attachment, ok := classify.SelectAttachment(release, decision); ok {
-			combined := artifact.DetectSequence(release.Title, attachment.FileName)
-			if !sequence.HasChapter() && sequence.Part == "" && (combined.HasChapter() || combined.Part != "") {
+			combined := Detect(release.Title, attachment.FileName)
+			if !seq.HasChapter() && seq.Part == "" && (combined.HasChapter() || combined.Part != "") {
 				combined.Origin = "attachment"
 			} else {
 				combined.Origin = "title"
 			}
-			sequence = combined
+			seq = combined
 		}
 	}
-	return ApplyDetected(cfg, sourceID, release.ProviderReleaseID, decision, sequence)
+	return ApplyDetected(cfg, sourceID, release.ProviderReleaseID, decision, seq)
 }
 
 func ApplyDetected(cfg *config.Config, sourceID, releaseID string, decision domain.TrackDecision, sequence domain.Sequence) domain.TrackDecision {

@@ -29,6 +29,7 @@ func TestApplyOutputProfileWrapsEPUBWithPreface(t *testing.T) {
 	}
 
 	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+		context.Background(),
 		domain.StoryTrack{TrackName: "The Sixth School", CanonicalAuthor: "BlaQQuill"},
 		domain.Release{Title: "Book Two Chapter 058"},
 		domain.NormalizedRelease{
@@ -76,6 +77,7 @@ func TestApplyOutputProfileWrapsEPUB2PrefacePassesEPUBCheck(t *testing.T) {
 
 	original := buildEPUB2Fixture(t)
 	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+		context.Background(),
 		domain.StoryTrack{TrackName: "Wrapped Book", CanonicalAuthor: "Author Name"},
 		domain.Release{
 			SourceID:          "source",
@@ -119,6 +121,7 @@ func TestApplyOutputProfileBuildsEPUBFromHTML(t *testing.T) {
 	t.Parallel()
 
 	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+		context.Background(),
 		domain.StoryTrack{TrackName: "Main Series", CanonicalAuthor: "Author Name"},
 		domain.Release{Title: "Chapter 1"},
 		domain.NormalizedRelease{
@@ -160,6 +163,7 @@ func TestApplyOutputProfileAcceptsMultiIdentifierEPUBWithoutPreface(t *testing.T
 
 	original := buildMultiIdentifierEPUB3Fixture(t)
 	content, fileName, mimeType, validateEPUBCheck, err := applyOutputProfile(
+		context.Background(),
 		domain.StoryTrack{TrackName: "Main Series", CanonicalAuthor: "Author Name"},
 		domain.Release{
 			SourceID:          "source",

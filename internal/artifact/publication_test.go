@@ -183,7 +183,7 @@ func TestAttachmentPublicationTitles(t *testing.T) {
 			normalized := domain.NormalizedRelease{ProviderReleaseID: "53", Title: release.Title, Attachments: []domain.Attachment{{FileName: input.name, LocalPath: file, MIMEType: input.mime}}}
 			decision := domain.TrackDecision{ContentStrategy: domain.ContentStrategyAttachmentOnly, OutputFormat: domain.OutputFormatEPUB, Publication: &domain.PublicationMetadata{}}
 			m := New(filepath.Join(root, "artifacts"))
-			plan, err := m.Plan(source, track, release, normalized, decision, nil)
+			plan, err := m.Plan(context.Background(), source, track, release, normalized, decision, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -28,16 +28,17 @@ func (s *Service) Memberships(ctx context.Context, profile string) ([]Membership
 	if !ok {
 		return nil, fmt.Errorf("no provider registered for %q", auth.Provider)
 	}
-	result, err := client.DiscoverSources(ctx, auth, s.Config.Sources, provider.DiscoverOptions{MetadataOnly: true, IncludeConfigured: true, MembershipFilter: "all"})
+	result, err := client.DiscoverSources(ctx, auth, s.Config.Sources, provider.DiscoverOptions{MembershipFilter: "all"})
 	if err != nil {
 		return nil, err
 	}
 	memberships := make([]Membership, 0, len(result.Suggestions))
+	rules := s.Config.Compiled()
 	for _, item := range result.Suggestions {
 		row := Membership{Creator: item.CreatorName, URL: item.Source.URL, Kind: item.MembershipKind, Configured: item.AlreadyConfigured, Source: item.ExistingSourceID}
 		if source, ok := s.Config.SourceByID(row.Source); ok {
 			row.Enabled = source.Enabled
-			row.Referenced = len(s.Config.RulesForSource(source.ID)) > 0
+			row.Referenced = len(rules.ForSource(source.ID)) > 0
 		}
 		memberships = append(memberships, row)
 	}

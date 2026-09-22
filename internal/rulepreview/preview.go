@@ -5,18 +5,9 @@ import (
 	"strings"
 
 	"github.com/prateek/serial-sync/internal/classify"
-	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/provider"
 )
-
-func Build(sourceID string, releases []domain.NormalizedRelease, rules []config.RuleConfig, includePosts bool) provider.DiscoveryPreview {
-	decisions := make([]classify.ExplainedDecision, len(releases))
-	for i, release := range releases {
-		decisions[i] = classify.Explain(sourceID, release, rules)
-	}
-	return BuildDecisions(releases, decisions, includePosts)
-}
 
 func BuildDecisions(releases []domain.NormalizedRelease, decisions []classify.ExplainedDecision, includePosts bool) provider.DiscoveryPreview {
 	preview := provider.DiscoveryPreview{

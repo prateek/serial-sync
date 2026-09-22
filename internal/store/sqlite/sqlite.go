@@ -127,18 +127,6 @@ func (s *Store) UpsertSource(ctx context.Context, source domain.Source) error {
 	})
 }
 
-func (s *Store) ListSources(ctx context.Context) ([]domain.Source, error) {
-	rows, err := s.queries.ListSources(ctx)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]domain.Source, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, sourceFromRow(row))
-	}
-	return items, nil
-}
-
 func (s *Store) GetSource(ctx context.Context, id string) (*domain.Source, error) {
 	row, err := s.queries.GetSource(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -148,38 +136,6 @@ func (s *Store) GetSource(ctx context.Context, id string) (*domain.Source, error
 		return nil, err
 	}
 	item := sourceFromRow(row)
-	return &item, nil
-}
-
-func (s *Store) UpsertTrack(ctx context.Context, track domain.StoryTrack) (*domain.StoryTrack, error) {
-	now := time.Now().UTC()
-	if track.CreatedAt.IsZero() {
-		track.CreatedAt = now
-	}
-	if track.UpdatedAt.IsZero() {
-		track.UpdatedAt = now
-	}
-	if err := s.queries.UpsertTrack(ctx, sqldb.UpsertTrackParams{
-		ID:              track.ID,
-		SourceID:        track.SourceID,
-		TrackKey:        track.TrackKey,
-		TrackName:       track.TrackName,
-		CanonicalAuthor: track.CanonicalAuthor,
-		SeriesMeta:      track.SeriesMeta,
-		OutputPolicy:    track.OutputPolicy,
-		CreatedAt:       formatTime(track.CreatedAt),
-		UpdatedAt:       formatTime(track.UpdatedAt),
-	}); err != nil {
-		return nil, err
-	}
-	row, err := s.queries.GetTrackBySourceAndKey(ctx, sqldb.GetTrackBySourceAndKeyParams{
-		SourceID: track.SourceID,
-		TrackKey: track.TrackKey,
-	})
-	if err != nil {
-		return nil, err
-	}
-	item := trackFromRow(row)
 	return &item, nil
 }
 
@@ -272,7 +228,7 @@ func (s *Store) GetReleaseBundle(ctx context.Context, id string) (*domain.Releas
 			track = *trackPtr
 		}
 	}
-	artifacts, err := s.ListArtifactsByReleaseID(ctx, release.ID)
+	artifacts, err := s.listArtifactsByReleaseID(ctx, release.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +282,7 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*domain.Artifact, e
 	return &item, nil
 }
 
-func (s *Store) ListArtifactsByReleaseID(ctx context.Context, releaseID string) ([]domain.Artifact, error) {
+func (s *Store) listArtifactsByReleaseID(ctx context.Context, releaseID string) ([]domain.Artifact, error) {
 	rows, err := s.queries.ListArtifactsByReleaseID(ctx, releaseID)
 	if err != nil {
 		return nil, err
@@ -505,24 +461,13 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, er
 }
 
 func (s *Store) ListPublishCandidates(ctx context.Context, sourceID string) ([]domain.PublishCandidate, error) {
-	if sourceID == "" {
-		rows, err := s.queries.ListPublishCandidates(ctx)
-		if err != nil {
-			return nil, err
-		}
-		items := make([]domain.PublishCandidate, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, publishCandidateFromRow(row))
-		}
-		return items, nil
-	}
-	rows, err := s.queries.ListPublishCandidatesBySource(ctx, sourceID)
+	rows, err := s.queries.ListPublishCandidates(ctx, sourceID)
 	if err != nil {
 		return nil, err
 	}
 	items := make([]domain.PublishCandidate, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, publishCandidateFromRowBySource(row))
+		items = append(items, publishCandidateFromRow(row))
 	}
 	return items, nil
 }
@@ -569,51 +514,18 @@ func (s *Store) UpsertPublishRecord(ctx context.Context, record domain.PublishRe
 }
 
 func (s *Store) listReleasePublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error) {
-	switch {
-	case sourceID == "" && targetID == "":
-		rows, err := s.queries.ListPublishRecords(ctx)
-		if err != nil {
-			return nil, err
-		}
-		items := make([]domain.PublishRecordBundle, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, publishRecordBundleFromListRow(row))
-		}
-		return items, nil
-	case sourceID != "" && targetID == "":
-		rows, err := s.queries.ListPublishRecordsBySource(ctx, sourceID)
-		if err != nil {
-			return nil, err
-		}
-		items := make([]domain.PublishRecordBundle, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, publishRecordBundleFromListBySourceRow(row))
-		}
-		return items, nil
-	case sourceID == "" && targetID != "":
-		rows, err := s.queries.ListPublishRecordsByTarget(ctx, targetID)
-		if err != nil {
-			return nil, err
-		}
-		items := make([]domain.PublishRecordBundle, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, publishRecordBundleFromListByTargetRow(row))
-		}
-		return items, nil
-	default:
-		rows, err := s.queries.ListPublishRecordsBySourceAndTarget(ctx, sqldb.ListPublishRecordsBySourceAndTargetParams{
-			SourceID: sourceID,
-			TargetID: targetID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		items := make([]domain.PublishRecordBundle, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, publishRecordBundleFromListBySourceAndTargetRow(row))
-		}
-		return items, nil
+	rows, err := s.queries.ListPublishRecords(ctx, sqldb.ListPublishRecordsParams{
+		SourceID: sourceID,
+		TargetID: targetID,
+	})
+	if err != nil {
+		return nil, err
 	}
+	items := make([]domain.PublishRecordBundle, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, publishRecordBundleFromListRow(row))
+	}
+	return items, nil
 }
 
 func (s *Store) GetPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error) {
@@ -814,241 +726,7 @@ func publishCandidateFromRow(row sqldb.ListPublishCandidatesRow) domain.PublishC
 	}
 }
 
-func publishCandidateFromRowBySource(row sqldb.ListPublishCandidatesBySourceRow) domain.PublishCandidate {
-	return domain.PublishCandidate{
-		Source: sourceFromRow(sqldb.Source{
-			ID:            row.ID,
-			Provider:      row.Provider,
-			SourceUrl:     row.SourceUrl,
-			SourceType:    row.SourceType,
-			CreatorID:     row.CreatorID,
-			CreatorName:   row.CreatorName,
-			AuthProfileID: row.AuthProfileID,
-			Enabled:       row.Enabled,
-			SyncCursor:    row.SyncCursor,
-			LastSyncedAt:  row.LastSyncedAt,
-		}),
-		Track: trackFromNullableRow(row.ID_2, row.SourceID, row.TrackKey, row.TrackName, row.CanonicalAuthor, row.SeriesMeta, row.OutputPolicy, row.CreatedAt, row.UpdatedAt),
-		Release: releaseFromRow(sqldb.Release{
-			ID:                   row.ID_3,
-			SourceID:             row.SourceID_2,
-			ProviderReleaseID:    row.ProviderReleaseID,
-			Url:                  row.Url,
-			Title:                row.Title,
-			PublishedAt:          row.PublishedAt,
-			EditedAt:             row.EditedAt,
-			PostType:             row.PostType,
-			VisibilityState:      row.VisibilityState,
-			NormalizedPayloadRef: row.NormalizedPayloadRef,
-			RawPayloadRef:        row.RawPayloadRef,
-			ContentHash:          row.ContentHash,
-			DiscoveredAt:         row.DiscoveredAt,
-			Status:               row.Status,
-		}),
-		Assignment: assignmentFromNullableRow(row.ReleaseID, row.TrackID, row.RuleID, row.ReleaseRole, row.Confidence),
-		Artifact: artifactFromRow(sqldb.Artifact{
-			ID:            row.ID_4,
-			ReleaseID:     row.ReleaseID_2,
-			TrackID:       row.TrackID_2,
-			ArtifactKind:  row.ArtifactKind,
-			IsCanonical:   row.IsCanonical,
-			Filename:      row.Filename,
-			MimeType:      row.MimeType,
-			Sha256:        row.Sha256,
-			StorageRef:    row.StorageRef,
-			BuiltAt:       row.BuiltAt,
-			State:         row.State,
-			MetadataRef:   row.MetadataRef,
-			NormalizedRef: row.NormalizedRef,
-			RawRef:        row.RawRef,
-		}),
-	}
-}
-
 func publishRecordBundleFromListRow(row sqldb.ListPublishRecordsRow) domain.PublishRecordBundle {
-	return buildPublishRecordBundle(publishRecordBundleFields{
-		recordID:             row.ID,
-		artifactID:           row.ArtifactID,
-		targetID:             row.TargetID,
-		targetKind:           row.TargetKind,
-		targetRef:            row.TargetRef,
-		publishHash:          row.PublishHash,
-		publishedAt:          row.PublishedAt,
-		publishStatus:        row.Status,
-		publishMessage:       row.Message,
-		artID:                row.ID_2,
-		artReleaseID:         row.ReleaseID,
-		artTrackID:           row.TrackID,
-		artKind:              row.ArtifactKind,
-		artCanonical:         row.IsCanonical,
-		artFilename:          row.Filename,
-		artMIME:              row.MimeType,
-		artSHA:               row.Sha256,
-		artStorage:           row.StorageRef,
-		artBuiltAt:           row.BuiltAt,
-		artState:             row.State,
-		artMetadataRef:       row.MetadataRef,
-		artNormalizedRef:     row.NormalizedRef,
-		artRawRef:            row.RawRef,
-		releaseID:            row.ID_3,
-		releaseSourceID:      row.SourceID,
-		providerReleaseID:    row.ProviderReleaseID,
-		releaseURL:           row.Url,
-		releaseTitle:         row.Title,
-		releasePublishedAt:   row.PublishedAt_2,
-		releaseEditedAt:      row.EditedAt,
-		releasePostType:      row.PostType,
-		releaseVisibility:    row.VisibilityState,
-		releaseNormalizedRef: row.NormalizedPayloadRef,
-		releaseRawRef:        row.RawPayloadRef,
-		releaseHash:          row.ContentHash,
-		releaseDiscoveredAt:  row.DiscoveredAt,
-		releaseStatus:        row.Status_2,
-		sourceID:             row.ID_4,
-		sourceProvider:       row.Provider,
-		sourceURL:            row.SourceUrl,
-		sourceType:           row.SourceType,
-		creatorID:            row.CreatorID,
-		creatorName:          row.CreatorName,
-		authProfileID:        row.AuthProfileID,
-		sourceEnabled:        row.Enabled,
-		sourceSyncCursor:     row.SyncCursor,
-		sourceLastSyncedAt:   row.LastSyncedAt,
-		trackID:              row.ID_5,
-		trackSourceID:        row.SourceID_2,
-		trackKey:             row.TrackKey,
-		trackName:            row.TrackName,
-		canonicalAuthor:      row.CanonicalAuthor,
-		seriesMeta:           row.SeriesMeta,
-		outputPolicy:         row.OutputPolicy,
-		createdAt:            row.CreatedAt,
-		updatedAt:            row.UpdatedAt,
-	})
-}
-
-func publishRecordBundleFromListBySourceRow(row sqldb.ListPublishRecordsBySourceRow) domain.PublishRecordBundle {
-	return buildPublishRecordBundle(publishRecordBundleFields{
-		recordID:             row.ID,
-		artifactID:           row.ArtifactID,
-		targetID:             row.TargetID,
-		targetKind:           row.TargetKind,
-		targetRef:            row.TargetRef,
-		publishHash:          row.PublishHash,
-		publishedAt:          row.PublishedAt,
-		publishStatus:        row.Status,
-		publishMessage:       row.Message,
-		artID:                row.ID_2,
-		artReleaseID:         row.ReleaseID,
-		artTrackID:           row.TrackID,
-		artKind:              row.ArtifactKind,
-		artCanonical:         row.IsCanonical,
-		artFilename:          row.Filename,
-		artMIME:              row.MimeType,
-		artSHA:               row.Sha256,
-		artStorage:           row.StorageRef,
-		artBuiltAt:           row.BuiltAt,
-		artState:             row.State,
-		artMetadataRef:       row.MetadataRef,
-		artNormalizedRef:     row.NormalizedRef,
-		artRawRef:            row.RawRef,
-		releaseID:            row.ID_3,
-		releaseSourceID:      row.SourceID,
-		providerReleaseID:    row.ProviderReleaseID,
-		releaseURL:           row.Url,
-		releaseTitle:         row.Title,
-		releasePublishedAt:   row.PublishedAt_2,
-		releaseEditedAt:      row.EditedAt,
-		releasePostType:      row.PostType,
-		releaseVisibility:    row.VisibilityState,
-		releaseNormalizedRef: row.NormalizedPayloadRef,
-		releaseRawRef:        row.RawPayloadRef,
-		releaseHash:          row.ContentHash,
-		releaseDiscoveredAt:  row.DiscoveredAt,
-		releaseStatus:        row.Status_2,
-		sourceID:             row.ID_4,
-		sourceProvider:       row.Provider,
-		sourceURL:            row.SourceUrl,
-		sourceType:           row.SourceType,
-		creatorID:            row.CreatorID,
-		creatorName:          row.CreatorName,
-		authProfileID:        row.AuthProfileID,
-		sourceEnabled:        row.Enabled,
-		sourceSyncCursor:     row.SyncCursor,
-		sourceLastSyncedAt:   row.LastSyncedAt,
-		trackID:              row.ID_5,
-		trackSourceID:        row.SourceID_2,
-		trackKey:             row.TrackKey,
-		trackName:            row.TrackName,
-		canonicalAuthor:      row.CanonicalAuthor,
-		seriesMeta:           row.SeriesMeta,
-		outputPolicy:         row.OutputPolicy,
-		createdAt:            row.CreatedAt,
-		updatedAt:            row.UpdatedAt,
-	})
-}
-
-func publishRecordBundleFromListBySourceAndTargetRow(row sqldb.ListPublishRecordsBySourceAndTargetRow) domain.PublishRecordBundle {
-	return buildPublishRecordBundle(publishRecordBundleFields{
-		recordID:             row.ID,
-		artifactID:           row.ArtifactID,
-		targetID:             row.TargetID,
-		targetKind:           row.TargetKind,
-		targetRef:            row.TargetRef,
-		publishHash:          row.PublishHash,
-		publishedAt:          row.PublishedAt,
-		publishStatus:        row.Status,
-		publishMessage:       row.Message,
-		artID:                row.ID_2,
-		artReleaseID:         row.ReleaseID,
-		artTrackID:           row.TrackID,
-		artKind:              row.ArtifactKind,
-		artCanonical:         row.IsCanonical,
-		artFilename:          row.Filename,
-		artMIME:              row.MimeType,
-		artSHA:               row.Sha256,
-		artStorage:           row.StorageRef,
-		artBuiltAt:           row.BuiltAt,
-		artState:             row.State,
-		artMetadataRef:       row.MetadataRef,
-		artNormalizedRef:     row.NormalizedRef,
-		artRawRef:            row.RawRef,
-		releaseID:            row.ID_3,
-		releaseSourceID:      row.SourceID,
-		providerReleaseID:    row.ProviderReleaseID,
-		releaseURL:           row.Url,
-		releaseTitle:         row.Title,
-		releasePublishedAt:   row.PublishedAt_2,
-		releaseEditedAt:      row.EditedAt,
-		releasePostType:      row.PostType,
-		releaseVisibility:    row.VisibilityState,
-		releaseNormalizedRef: row.NormalizedPayloadRef,
-		releaseRawRef:        row.RawPayloadRef,
-		releaseHash:          row.ContentHash,
-		releaseDiscoveredAt:  row.DiscoveredAt,
-		releaseStatus:        row.Status_2,
-		sourceID:             row.ID_4,
-		sourceProvider:       row.Provider,
-		sourceURL:            row.SourceUrl,
-		sourceType:           row.SourceType,
-		creatorID:            row.CreatorID,
-		creatorName:          row.CreatorName,
-		authProfileID:        row.AuthProfileID,
-		sourceEnabled:        row.Enabled,
-		sourceSyncCursor:     row.SyncCursor,
-		sourceLastSyncedAt:   row.LastSyncedAt,
-		trackID:              row.ID_5,
-		trackSourceID:        row.SourceID_2,
-		trackKey:             row.TrackKey,
-		trackName:            row.TrackName,
-		canonicalAuthor:      row.CanonicalAuthor,
-		seriesMeta:           row.SeriesMeta,
-		outputPolicy:         row.OutputPolicy,
-		createdAt:            row.CreatedAt,
-		updatedAt:            row.UpdatedAt,
-	})
-}
-
-func publishRecordBundleFromListByTargetRow(row sqldb.ListPublishRecordsByTargetRow) domain.PublishRecordBundle {
 	return buildPublishRecordBundle(publishRecordBundleFields{
 		recordID:             row.ID,
 		artifactID:           row.ArtifactID,

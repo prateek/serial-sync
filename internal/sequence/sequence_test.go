@@ -3,14 +3,13 @@ package sequence
 import (
 	"testing"
 
-	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
 func TestExplicitSequenceOverrideCanResolveExtendedChapter(t *testing.T) {
 	cfg := &config.Config{Series: []config.SeriesConfig{{ID: "harbor", SequenceOverrides: []config.SequenceOverride{{Source: "fictional", ReleaseID: "1", Chapter: 62}}}}}
-	got := ApplyDetected(cfg, "fictional", "1", domain.TrackDecision{SeriesID: "harbor"}, artifact.DetectSequence("Chapter 61.5"))
+	got := ApplyDetected(cfg, "fictional", "1", domain.TrackDecision{SeriesID: "harbor"}, Detect("Chapter 61.5"))
 	if got.Sequence.Chapter != 62 || got.Sequence.ChapterLabel != "" || got.Sequence.KeepSingle {
 		t.Fatalf("explicit override kept ambiguous sequence: %+v", got.Sequence)
 	}
@@ -30,7 +29,7 @@ func TestBookLabelsDoNotInventCoverageOrResolveUnknownBooks(t *testing.T) {
 
 func TestPartHasNoScalarPositionEvenInsideADeclaredBook(t *testing.T) {
 	series := config.SeriesConfig{Books: []config.BookConfig{{ID: "arrival", Number: 1, FirstChapter: 1, LastChapter: 10}}}
-	got := Resolve(series, artifact.DetectSequence("Chapter 4 [Part 1]"), "arrival")
+	got := Resolve(series, Detect("Chapter 4 [Part 1]"), "arrival")
 	if got.Position != 0 || !got.KeepSingle || got.Part != "1" {
 		t.Fatalf("part flattened to scalar position: %+v", got)
 	}

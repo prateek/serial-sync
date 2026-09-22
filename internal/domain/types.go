@@ -87,22 +87,6 @@ type Source struct {
 	LastSyncedAt  time.Time `json:"last_synced_at"`
 }
 
-type TrackRule struct {
-	ID                 string          `json:"id"`
-	SourceID           string          `json:"source_id"`
-	Priority           int             `json:"priority"`
-	MatchType          string          `json:"match_type"`
-	MatchValue         string          `json:"match_value"`
-	TrackKey           string          `json:"track_key"`
-	TrackName          string          `json:"track_name"`
-	ReleaseRole        ReleaseRole     `json:"release_role"`
-	ContentStrategy    ContentStrategy `json:"content_strategy"`
-	AttachmentGlob     []string        `json:"attachment_glob"`
-	AttachmentPriority []string        `json:"attachment_priority"`
-	AnthologyMode      bool            `json:"anthology_mode"`
-	Enabled            bool            `json:"enabled"`
-}
-
 type StoryTrack struct {
 	ID              string    `json:"id"`
 	SourceID        string    `json:"source_id"`
@@ -369,13 +353,6 @@ type PendingPublish struct {
 	ID         string
 	TargetID   string
 	PayloadRef string
-}
-
-type Lease struct {
-	Key       string    `json:"key"`
-	Holder    string    `json:"holder"`
-	ExpiresAt time.Time `json:"expires_at"`
-	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ReleaseBundle struct {

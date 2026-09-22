@@ -122,7 +122,7 @@ func TestMetadataMembershipsUseOneRequestAndNeverBootstrap(t *testing.T) {
 			}
 			path := filepath.Join(t.TempDir(), "session.json")
 			writeTestSessionBundle(t, path, server.URL)
-			_, err := client.DiscoverSources(context.Background(), config.AuthProfile{ID: "fixture", Provider: "patreon", Mode: "username_password", SessionPath: path}, nil, provider.DiscoverOptions{MetadataOnly: true, MembershipFilter: "all"})
+			_, err := client.DiscoverSources(context.Background(), config.AuthProfile{ID: "fixture", Provider: "patreon", Mode: "username_password", SessionPath: path}, nil, provider.DiscoverOptions{MembershipFilter: "all"})
 			if expired {
 				if err == nil || !strings.Contains(err.Error(), "setup auth") {
 					t.Fatalf("expired session error: %v", err)

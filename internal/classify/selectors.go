@@ -2,7 +2,6 @@ package classify
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/prateek/serial-sync/internal/config"
@@ -10,20 +9,25 @@ import (
 	"github.com/prateek/serial-sync/internal/textcontent"
 )
 
-func selectMatches(rule config.RuleConfig, release domain.NormalizedRelease) []domain.SelectorMatch {
+func selectMatches(compiled config.CompiledRule, release domain.NormalizedRelease) []domain.SelectorMatch {
+	rule := compiled.Rule
 	if rule.Override {
 		if rule.ReleaseID == release.ProviderReleaseID {
 			return []domain.SelectorMatch{{Kind: "release_id", Value: rule.ReleaseID}}
 		}
 		return nil
 	}
-	if rule.MatchType == "attachment_filename_regex" {
-		pattern := rule.MatchValue
-		rule.MatchType = ""
-		rule.AttachmentPatterns = []string{pattern}
+	if rule.MatchType == "attachment_filename_regex" && compiled.Selectors.LegacyAttachment != nil {
+		var matches []domain.SelectorMatch
+		for _, file := range release.Attachments {
+			if compiled.Selectors.LegacyAttachment.MatchString(file.FileName) {
+				matches = append(matches, domain.SelectorMatch{Kind: "attachment_filename_regex", Value: rule.MatchValue, Attachment: file.FileName})
+			}
+		}
+		return matches
 	}
 	if rule.MatchType != "" {
-		if matches(rule, release) {
+		if matches(compiled, release) {
 			return []domain.SelectorMatch{{Kind: rule.MatchType, Value: rule.MatchValue}}
 		}
 		return nil
@@ -53,22 +57,25 @@ func selectMatches(rule config.RuleConfig, release domain.NormalizedRelease) []d
 			matches = append(matches, domain.SelectorMatch{Kind: "tag", Value: name})
 		}
 	}
-	for _, pattern := range rule.TitlePatterns {
-		if matchesPattern(pattern, release.Title) {
-			matches = append(matches, domain.SelectorMatch{Kind: "title_regex", Value: pattern})
+	for i := range compiled.Selectors.Title {
+		if compiled.Selectors.Title[i] != nil && compiled.Selectors.Title[i].MatchString(release.Title) {
+			matches = append(matches, domain.SelectorMatch{Kind: "title_regex", Value: rule.TitlePatterns[i]})
 		}
 	}
-	for _, pattern := range rule.AttachmentPatterns {
+	for i := range compiled.Selectors.Attachments {
+		if compiled.Selectors.Attachments[i] == nil {
+			continue
+		}
 		for _, file := range release.Attachments {
-			if matchesPattern(pattern, file.FileName) {
-				matches = append(matches, domain.SelectorMatch{Kind: "attachment_filename_regex", Value: pattern, Attachment: file.FileName})
+			if compiled.Selectors.Attachments[i].MatchString(file.FileName) {
+				matches = append(matches, domain.SelectorMatch{Kind: "attachment_filename_regex", Value: rule.AttachmentPatterns[i], Attachment: file.FileName})
 			}
 		}
 	}
 	return matches
 }
 
-func evaluateGuards(guards config.Guards, release domain.NormalizedRelease) []domain.GuardResult {
+func evaluateGuards(guards config.Guards, selectors config.CompiledSelectors, release domain.NormalizedRelease) []domain.GuardResult {
 	var result []domain.GuardResult
 	if guards.MinBodyChars != nil {
 		actual := textcontent.Count(release)
@@ -76,21 +83,21 @@ func evaluateGuards(guards config.Guards, release domain.NormalizedRelease) []do
 	}
 	if len(guards.UnlessTags) > 0 {
 		var found []string
-		for _, tag := range guards.UnlessTags {
-			if containsFold(release.Tags, tag) {
+		for _, tag := range release.Tags {
+			if containsFold(guards.UnlessTags, tag) {
 				found = append(found, tag)
 			}
 		}
 		result = append(result, domain.GuardResult{Field: "unless_tags", Passed: len(found) == 0, Detail: strings.Join(found, ", ")})
 	}
-	if len(guards.UnlessTitlePatterns) > 0 {
-		var found []string
-		for _, pattern := range guards.UnlessTitlePatterns {
-			if matchesPattern(pattern, release.Title) {
-				found = append(found, pattern)
+	if len(selectors.UnlessTitle) > 0 {
+		var matched []string
+		for i := range selectors.UnlessTitle {
+			if selectors.UnlessTitle[i] != nil && selectors.UnlessTitle[i].MatchString(release.Title) {
+				matched = append(matched, guards.UnlessTitlePatterns[i])
 			}
 		}
-		result = append(result, domain.GuardResult{Field: "unless_title_patterns", Passed: len(found) == 0, Detail: strings.Join(found, ", ")})
+		result = append(result, domain.GuardResult{Field: "unless_title_patterns", Passed: len(matched) == 0, Detail: strings.Join(matched, ", ")})
 	}
 	return result
 }
@@ -101,8 +108,4 @@ func containsFold(values []string, wanted string) bool {
 		}
 	}
 	return false
-}
-func matchesPattern(pattern, value string) bool {
-	re, err := regexp.Compile(pattern)
-	return err == nil && re.MatchString(value)
 }

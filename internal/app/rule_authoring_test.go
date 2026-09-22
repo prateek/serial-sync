@@ -36,14 +36,6 @@ func TestDumpSourcesWritesWorkspace(t *testing.T) {
 	if got, want := result.TotalPosts, 3; got != want {
 		t.Fatalf("result.TotalPosts = %d, want %d", got, want)
 	}
-	client, ok := service.Providers.Get("patreon")
-	if !ok {
-		t.Fatal("expected patreon provider to be registered")
-	}
-	stub := client.(*stubRuleAuthoringProvider)
-	if !stub.lastDiscoverOptions.MetadataOnly {
-		t.Fatal("expected dump discovery to use metadata-only mode")
-	}
 	for _, path := range []string{
 		result.ManifestFile,
 		result.SourcesFile,
@@ -255,6 +247,8 @@ func newStubRuleAuthoringProvider() *stubRuleAuthoringProvider {
 
 func (s *stubRuleAuthoringProvider) Name() string { return "patreon" }
 
+func (s *stubRuleAuthoringProvider) DumpWorkerLimit() int { return 1 }
+
 func (s *stubRuleAuthoringProvider) ValidateSource(config.SourceConfig) error { return nil }
 
 func (s *stubRuleAuthoringProvider) ValidateSession(context.Context, config.AuthProfile, config.SourceConfig) (domain.AuthState, error) {
@@ -344,6 +338,11 @@ func mustReadFile(t *testing.T, path string) []byte {
 }
 
 func newRuleAuthoringService(t *testing.T, stub *stubRuleAuthoringProvider) *app.Service {
+	service, _ := newRuleAuthoringServiceWithRepo(t, stub)
+	return service
+}
+
+func newRuleAuthoringServiceWithRepo(t *testing.T, stub *stubRuleAuthoringProvider) (*app.Service, *sqlite.Store) {
 	t.Helper()
 
 	tmp := t.TempDir()
@@ -378,7 +377,7 @@ func newRuleAuthoringService(t *testing.T, stub *stubRuleAuthoringProvider) *app
 	if err := repo.EnsureSchema(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return app.New(cfg, roots, filepath.Join(tmp, "config.toml"), repo, provider.NewRegistry(stub))
+	return app.New(cfg, roots, filepath.Join(tmp, "config.toml"), repo, provider.NewRegistry(stub)), repo
 }
 
 func TestDumpRefreshPreservesAuthoringAndPreviousCapture(t *testing.T) {
@@ -568,7 +567,7 @@ func TestCanceledSyncRetainsFetchedDiscoveryEvidence(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stub.afterList = cancel
-	result, err := service.Sync(ctx, "alpha", false, "run")
+	result, err := service.Sync(ctx, "alpha", false, "run", nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled run, got %v", err)
 	}
