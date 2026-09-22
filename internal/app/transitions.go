@@ -50,8 +50,12 @@ type deliveryPlan struct {
 	Items        []domain.PublishItemResult `json:"-"`
 	Ordered      []string                   `json:"-"`
 	Dependencies map[string][]string        `json:"-"`
-	Retirements  []planRetirement           `json:"-"`
-	Blocked      []string                   `json:"-"`
+	// Identities carries each candidate's computed destination identity from
+	// the plan to the executor, so the publish hash formula runs once per
+	// candidate. Blocked candidates are absent from it.
+	Identities  map[string]publish.DeliveryIdentity `json:"-"`
+	Retirements []planRetirement                    `json:"-"`
+	Blocked     []string                            `json:"-"`
 }
 
 // planDelivery is the one delivery planner: it turns a target's library
@@ -62,6 +66,7 @@ type deliveryPlan struct {
 func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
 	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates, Maintenance: scope.Rebuild}
 	plan.EventScope = plan.ID
+	plan.Identities = map[string]publish.DeliveryIdentity{}
 	ordered, dependencies, orderErr := pt.Reorder(candidates, snapshot.Records, snapshot.Volumes)
 	if orderErr != nil {
 		return plan, orderErr
@@ -73,15 +78,8 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 	plan.Dependencies = dependencies
 	desired, covered := map[string]bool{}, map[string]bool{}
 	for _, candidate := range candidates {
-		ref, err := pt.Ref(candidate)
-		if err != nil {
-			return plan, err
-		}
-		hashInput, err := pt.PublishHashInput(candidate)
-		if err != nil {
-			return plan, err
-		}
-		desired[pt.DesiredKey(candidate)] = true
+		identity, identityErr := pt.Identity(candidate, snapshot.Records)
+		desired[identity.DesiredKey] = true
 		if candidate.Volume != nil {
 			for _, member := range candidate.Volume.Members {
 				covered[member.ReleaseID] = true
@@ -89,32 +87,33 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 		} else {
 			covered[candidate.Release.ID] = true
 		}
+		if identityErr == nil {
+			plan.Identities[candidate.Artifact.ID] = identity
+		}
 		action := "add"
+		message := ""
+		if identityErr != nil {
+			action = "blocked"
+			message = fmt.Sprintf("target %s: %v", target.ID, identityErr)
+			plan.Blocked = append(plan.Blocked, message)
+		}
 		for _, record := range snapshot.Records {
-			if record.Record.Status != domain.PublishStatusPublished {
+			if identityErr != nil || record.Record.Status != domain.PublishStatusPublished {
 				continue
 			}
 			if pt.MatchesDestination(record, candidate) {
 				action = "replace"
 			}
-			if candidate.Planned {
-				continue
-			}
-			if candidate.Artifact.ID == record.Artifact.ID && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == publish.PublishHash(target.ID, candidate.Artifact.SHA256, hashInput) {
-				action = "unchanged"
-				if already, checkErr := pt.AlreadyDelivered(ref, candidate.Artifact.SHA256); checkErr != nil || !already {
+			if !candidate.Planned && candidate.Artifact.ID == record.Artifact.ID && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == identity.PublishHash {
+				if identity.Intact {
+					action = "unchanged"
+				} else {
 					action = "repair"
 				}
 				break
 			}
 		}
-		message := ""
-		if _, readErr := pt.CheckDestination(ref, ownedHashesForPath(snapshot.Records, ref)); readErr != nil {
-			action = "blocked"
-			message = fmt.Sprintf("target %s: %v", target.ID, readErr)
-			plan.Blocked = append(plan.Blocked, message)
-		}
-		plan.Items = append(plan.Items, domain.PublishItemResult{ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: pt.Kind(), TargetRef: ref, Action: action, Message: message})
+		plan.Items = append(plan.Items, domain.PublishItemResult{ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: pt.Kind(), TargetRef: identity.Ref, Action: action, Message: message})
 	}
 	if !pt.Capabilities().Retires {
 		return plan, nil

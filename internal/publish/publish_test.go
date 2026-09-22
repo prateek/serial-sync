@@ -33,17 +33,18 @@ func TestFilesystemTargetPublishesVerifiesAndRetires(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate, content := writeTestCandidate(t, storageDir, "Tide Chapter 1")
-	ref, err := target.Ref(candidate)
+	identity, err := target.Identity(candidate, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ref := identity.Ref
 	if got, want := ref, filepath.Join(root, "pub", "fictional", "tide", "tide-ch0001.epub"); got != want {
-		t.Fatalf("Ref() = %q, want %q", got, want)
+		t.Fatalf("Identity().Ref = %q, want %q", got, want)
 	}
 	if got, want := target.Kind(), "filesystem"; got != want {
 		t.Fatalf("Kind() = %q, want %q", got, want)
 	}
-	if pending := target.PublishingRecord("library", "filesystem", candidate, ref, "hash"); pending == nil || pending.Status != domain.PublishStatusPublishing {
+	if pending := target.PublishingRecord(candidate, identity); pending == nil || pending.Status != domain.PublishStatusPublishing || pending.PublishHash != identity.PublishHash || pending.TargetRef != ref {
 		t.Fatalf("filesystem target must declare the pending ledger record: %+v", pending)
 	}
 	ordered, dependencies, err := target.Reorder([]domain.PublishCandidate{candidate}, nil, nil)
@@ -51,38 +52,42 @@ func TestFilesystemTargetPublishesVerifiesAndRetires(t *testing.T) {
 		t.Fatalf("single candidate must order as itself: %+v %+v %v", ordered, dependencies, err)
 	}
 
-	record, err := target.Publish(context.Background(), "run_1", "", candidate, nil)
+	record, err := target.Deliver(context.Background(), "run_1", "", candidate, identity, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Status != domain.PublishStatusPublished || record.TargetRef != ref || record.TargetID != "lib" {
+	if record.Status != domain.PublishStatusPublished || record.TargetRef != ref || record.TargetID != "lib" || record.PublishHash != identity.PublishHash {
 		t.Fatalf("publish record = %+v", record)
 	}
 	if got := string(mustReadTestFile(t, ref)); got != content {
 		t.Fatalf("published bytes = %q, want %q", got, content)
 	}
-	if already, err := target.AlreadyDelivered(ref, candidate.Artifact.SHA256); err != nil || !already {
-		t.Fatalf("AlreadyDelivered() = %t %v, want true", already, err)
+	// A destination holding the artifact's bytes reports intact; an absent
+	// one does not, and neither is an error.
+	owned := []domain.PublishRecordBundle{{Record: domain.PublishRecord{TargetRef: ref, Status: domain.PublishStatusPublished, ArtifactID: candidate.Artifact.ID}, Artifact: candidate.Artifact, Release: candidate.Release}}
+	if again, err := target.Identity(candidate, owned); err != nil || !again.Intact {
+		t.Fatalf("Identity().Intact = %t %v, want true", again.Intact, err)
 	}
-	if already, _ := target.AlreadyDelivered(filepath.Join(root, "missing.epub"), candidate.Artifact.SHA256); already {
-		t.Fatalf("absent destination reported delivered")
+	if current, err := target.CheckDestination(filepath.Join(root, "missing.epub"), nil); err != nil || current != "" {
+		t.Fatalf("absent destination check = %q %v, want \"\" nil", current, err)
 	}
 
-	// Re-publishing the same bytes over an owned destination is idempotent.
-	if _, err := target.Publish(context.Background(), "run_2", "", candidate, []string{candidate.Artifact.SHA256}); err != nil {
+	// Re-delivering the same bytes over an owned destination is idempotent.
+	if _, err := target.Deliver(context.Background(), "run_2", "", candidate, identity, []string{candidate.Artifact.SHA256}); err != nil {
 		t.Fatal(err)
 	}
 	if got := string(mustReadTestFile(t, ref)); got != content {
 		t.Fatalf("re-publish changed bytes: %q", got)
 	}
 
-	// Unrelated bytes at the destination are an ownership conflict.
+	// Unrelated bytes at the destination are an ownership conflict, at plan
+	// time (Identity) and again at delivery time.
 	os.WriteFile(ref, []byte("someone else's bytes"), 0o644)
-	if _, err := target.Publish(context.Background(), "run_3", "", candidate, []string{candidate.Artifact.SHA256}); err == nil || !strings.Contains(err.Error(), "ownership conflict") {
-		t.Fatalf("expected ownership conflict, got %v", err)
+	if _, err := target.Identity(candidate, owned); err == nil || !strings.Contains(err.Error(), "ownership conflict") {
+		t.Fatalf("expected planning ownership conflict, got %v", err)
 	}
-	if already, _ := target.AlreadyDelivered(ref, candidate.Artifact.SHA256); already {
-		t.Fatalf("tampered destination reported delivered")
+	if _, err := target.Deliver(context.Background(), "run_3", "", candidate, identity, []string{candidate.Artifact.SHA256}); err == nil || !strings.Contains(err.Error(), "ownership conflict") {
+		t.Fatalf("expected delivery ownership conflict, got %v", err)
 	}
 
 	// Retirement removes only bytes owned by the old delivery.
@@ -116,7 +121,8 @@ func TestFilesystemTargetLeavesInPlaceReplacementUntouched(t *testing.T) {
 	replacement.Artifact.ID = "art_2"
 	sum := sha256.Sum256([]byte(replacementContent))
 	replacement.Artifact.SHA256 = hex.EncodeToString(sum[:])
-	ref, _ := target.Ref(candidate)
+	identity, _ := target.Identity(candidate, nil)
+	ref := identity.Ref
 	if err := os.MkdirAll(filepath.Dir(ref), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +162,11 @@ else:
 		t.Fatal(err)
 	}
 	candidate, _ := writeTestCandidate(t, filepath.Join(root, "storage"), "Tide Chapter 1")
-	if pending := target.PublishingRecord("hook", "exec", candidate, "cmd", "hash"); pending != nil {
+	execIdentity, err := target.Identity(candidate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending := target.PublishingRecord(candidate, execIdentity); pending != nil {
 		t.Fatalf("exec target must not declare a pending ledger record: %+v", pending)
 	}
 	ordered, dependencies, err := target.Reorder([]domain.PublishCandidate{candidate, candidate}, nil, nil)
@@ -164,11 +174,11 @@ else:
 		t.Fatalf("exec target must keep the input order with no dependencies: %+v %+v %v", ordered, dependencies, err)
 	}
 
-	record, err := target.Publish(context.Background(), "run_1", "scope_1", candidate, nil)
+	record, err := target.Deliver(context.Background(), "run_1", "scope_1", candidate, execIdentity, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Status != domain.PublishStatusPublished || record.TargetKind != "exec" || record.ArtifactID != candidate.Artifact.ID {
+	if record.Status != domain.PublishStatusPublished || record.TargetKind != "exec" || record.ArtifactID != candidate.Artifact.ID || record.PublishHash != execIdentity.PublishHash || record.TargetRef != execIdentity.Ref {
 		t.Fatalf("publish record = %+v", record)
 	}
 	eventData := string(mustReadTestFile(t, filepath.Join(root, "event-publish.json")))
@@ -208,19 +218,18 @@ func TestPublishHashBindsTargetArtifactAndDestination(t *testing.T) {
 	root := t.TempDir()
 	target, _ := publish.TargetFor(config.PublisherConfig{ID: "lib", Kind: "filesystem", Enabled: true, Path: filepath.Join(root, "pub")})
 	candidate, _ := writeTestCandidate(t, filepath.Join(root, "storage"), "Tide Chapter 1")
-	ref, _ := target.Ref(candidate)
-	hashInput, err := target.PublishHashInput(candidate)
+	identity, err := target.Identity(candidate, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hashInput != ref {
-		t.Fatalf("PublishHashInput() = %q, want %q", hashInput, ref)
+	if identity.PublishHash != publish.PublishHash("lib", candidate.Artifact.SHA256, identity.Ref) {
+		t.Fatalf("Identity().PublishHash does not match the destination formula")
 	}
-	hash := publish.PublishHash("lib", candidate.Artifact.SHA256, hashInput)
-	if hash == publish.PublishHash("other", candidate.Artifact.SHA256, hashInput) {
+	hash := identity.PublishHash
+	if hash == publish.PublishHash("other", candidate.Artifact.SHA256, identity.Ref) {
 		t.Fatalf("publish hash ignores the target id")
 	}
-	if hash == publish.PublishHash("lib", "different-sha", hashInput) {
+	if hash == publish.PublishHash("lib", "different-sha", identity.Ref) {
 		t.Fatalf("publish hash ignores the artifact bytes")
 	}
 }

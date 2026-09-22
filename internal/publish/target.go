@@ -10,24 +10,38 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
+// DeliveryIdentity is one candidate's destination as computed by the adapter
+// that owns the destination rules: the reference, the durable publish hash,
+// the desired-set key, and whether the destination already holds these
+// bytes. The planner computes it once per candidate against the snapshot and
+// the executor reuses it, so the ref/hash/key formula lives in exactly one
+// place per adapter instead of being recomputed at three call sites.
+type DeliveryIdentity struct {
+	Ref         string
+	PublishHash string
+	DesiredKey  string
+	Intact      bool
+}
+
 // Target is the seam behind a downstream publisher destination. Two adapters
 // exist, filesystem and exec, so the seam is real: the app executor asks a
-// Target for identity, delivery checks, publishing and retirement instead of
-// branching on the configured kind. The destination path formula, the
-// ownership rules and the exec supersede hook live here beside their adapters.
+// Target for identity, delivery and retirement instead of branching on the
+// configured kind. The destination path formula, the ownership rules and the
+// exec hook protocol live here beside their adapters.
 type Target interface {
 	TargetID() string
 	Kind() string
 	// Capabilities states what the adapter can do at delivery time so the
-	// planner and executor never infer it from the kind or probe a method.
+	// planner and executor never infer it from the kind or a protocol version.
 	Capabilities() Capabilities
-	Ref(candidate domain.PublishCandidate) (string, error)
-	PublishHashInput(candidate domain.PublishCandidate) (string, error)
-	// DesiredKey identifies a new delivery in the planned set; the executor
-	// skips retirement of a record whose DesiredKeyForRecord is still desired.
-	// Both combine path and artifact identity so that a correction at the same
-	// destination is never mistaken for a still-current delivery.
-	DesiredKey(candidate domain.PublishCandidate) string
+	// Identity computes the candidate's destination reference, publish hash
+	// and desired-set key against the delivered snapshot, and reports whether
+	// the destination already holds the artifact's bytes. Bytes at the
+	// reference owned by no record in the snapshot are an error, so the
+	// planner marks the candidate blocked instead of delivering over them.
+	Identity(candidate domain.PublishCandidate, records []domain.PublishRecordBundle) (DeliveryIdentity, error)
+	// DesiredKeyForRecord is a delivered record's side of the desired-set
+	// key: a record whose key is not in the plan's desired set is retired.
 	DesiredKeyForRecord(record domain.PublishRecordBundle) string
 	// MatchesDestination reports whether a record's prior delivery occupied
 	// the same destination as the candidate (replace instead of add).
@@ -39,20 +53,18 @@ type Target interface {
 	Reorder(candidates []domain.PublishCandidate, records []domain.PublishRecordBundle, volumes []domain.VolumeEdition) ([]domain.PublishCandidate, map[string][]string, error)
 	// PublishingRecord returns the crash-recoverable "publishing" record the
 	// executor must persist before the delivery, or nil when the target's own
-	// protocol already tolerates failures. The value also decides whether a
-	// failed delivery needs a separate failed-status record: filesystem
-	// delivery re-reads the publishing record on retry, while the exec hook
-	// records its failure explicitly.
-	PublishingRecord(targetID, targetKind string, candidate domain.PublishCandidate, ref, publishHash string) *domain.PublishRecord
-	// CheckDestination verifies that a destination is absent or owned,
-	// returning the current content hash ("" when absent).
+	// protocol already tolerates failures.
+	PublishingRecord(candidate domain.PublishCandidate, identity DeliveryIdentity) *domain.PublishRecord
+	// CheckDestination verifies that a reference is absent or owned by one of
+	// ownedHashes, returning the current content hash ("" when absent). The
+	// retirement path asks it about a delivered record's reference, which is
+	// not a candidate and so cannot go through Identity.
 	CheckDestination(ref string, ownedHashes []string) (string, error)
-	// AlreadyDelivered verifies that a delivered artifact still matches on disk.
-	AlreadyDelivered(ref string, artifactSHA string) (bool, error)
-	// Publish delivers the candidate and returns the final published record.
-	// In filesystem delivery, ownedHashes guards the destination against
-	// overwriting unowned bytes; the exec adapter ignores them.
-	Publish(ctx context.Context, runID string, eventScope string, candidate domain.PublishCandidate, ownedHashes []string) (domain.PublishRecord, error)
+	// Deliver publishes the candidate at its identity and returns the final
+	// published record. In filesystem delivery, ownedHashes guard the
+	// destination against overwriting unowned bytes; the exec adapter ignores
+	// them.
+	Deliver(ctx context.Context, runID string, eventScope string, candidate domain.PublishCandidate, identity DeliveryIdentity, ownedHashes []string) (domain.PublishRecord, error)
 	// Retire removes or supersedes a previous delivery once its replacement is
 	// confirmed. related lists the delivered replacements that cover it and
 	// planned all candidates of the current plan; a filesystem adapter uses
@@ -70,7 +82,7 @@ type Capabilities struct {
 	PendingRecord bool
 	// Retires: the target can retire or supersede a previous delivery. A
 	// target without it keeps prior records published; the planner emits no
-	// retirements for it.
+	// retirements for it, and volume or rename output needs it.
 	Retires bool
 }
 
@@ -96,4 +108,16 @@ func NormalizedPublisherKind(kind string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(kind))
 	}
+}
+
+// ownedHashesAt collects the artifact hashes the snapshot entitles to occupy
+// ref: published or publishing records delivered to exactly that reference.
+func ownedHashesAt(records []domain.PublishRecordBundle, ref string) []string {
+	var hashes []string
+	for _, record := range records {
+		if record.Record.TargetRef == ref && (record.Record.Status == domain.PublishStatusPublished || record.Record.Status == domain.PublishStatusPublishing) {
+			hashes = append(hashes, record.Artifact.SHA256)
+		}
+	}
+	return hashes
 }

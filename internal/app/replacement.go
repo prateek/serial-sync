@@ -48,7 +48,11 @@ func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope
 		return fmt.Errorf("no enabled publishers match %q", targetFilter)
 	}
 	for _, target := range targets {
-		if publish.NormalizedPublisherKind(target.Kind) != "exec" || target.ProtocolVersion == 2 {
+		pt, targetErr := publish.TargetFor(target)
+		if targetErr != nil || pt.Capabilities().Retires {
+			// Only a target that cannot retire prior deliveries needs the
+			// volume-output guard; it lives here as a capability, not a
+			// kind or protocol-version check.
 			continue
 		}
 		for _, series := range cfg.Series {
@@ -67,7 +71,8 @@ func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope
 
 func (s *Service) validateLegacyReplacements(ctx context.Context, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
 	for _, target := range targets {
-		if publish.NormalizedPublisherKind(target.Kind) != "exec" || target.ProtocolVersion == 2 {
+		pt, targetErr := publish.TargetFor(target)
+		if targetErr != nil || pt.Capabilities().Retires {
 			continue
 		}
 		for _, candidate := range candidates {

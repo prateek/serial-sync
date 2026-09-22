@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/domain"
-	"github.com/prateek/serial-sync/internal/publish"
+	"github.com/prateek/serial-sync/internal/filehash"
 )
 
 type canonicalSidecar struct {
@@ -152,7 +152,7 @@ func ArchivedSequence(artifact domain.Artifact) *domain.Sequence {
 // IntactOnDisk answers whether the artifact's stored bytes still match its
 // recorded content hash.
 func IntactOnDisk(artifact domain.Artifact) (bool, error) {
-	actual, err := publish.FileHash(artifact.StorageRef)
+	actual, err := filehash.Hash(artifact.StorageRef)
 	if err != nil {
 		return false, err
 	}

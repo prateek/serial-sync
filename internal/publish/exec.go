@@ -52,12 +52,23 @@ func (t *ExecTarget) Kind() string {
 	return "exec"
 }
 
-func (t *ExecTarget) Ref(candidate domain.PublishCandidate) (string, error) {
-	return ExecTargetRef(t.Command), nil
+func (t *ExecTarget) Identity(candidate domain.PublishCandidate, _ []domain.PublishRecordBundle) (DeliveryIdentity, error) {
+	ref, err := t.ref(candidate)
+	if err != nil {
+		return DeliveryIdentity{}, err
+	}
+	return DeliveryIdentity{
+		Ref:         ref,
+		PublishHash: PublishHash(t.ID, candidate.Artifact.SHA256, t.execPublishSignature(candidate)),
+		DesiredKey:  candidate.Artifact.ID + "\x00" + candidate.Artifact.Filename,
+		// The hook owns its destination; whether it holds these bytes is the
+		// hook's acknowledgement, not something the filesystem can check.
+		Intact: true,
+	}, nil
 }
 
-func (t *ExecTarget) PublishHashInput(candidate domain.PublishCandidate) (string, error) {
-	return t.execPublishSignature(candidate), nil
+func (t *ExecTarget) ref(domain.PublishCandidate) (string, error) {
+	return ExecTargetRef(t.Command), nil
 }
 
 func (t *ExecTarget) execPublishSignature(candidate domain.PublishCandidate) string {
@@ -86,7 +97,7 @@ func (t *ExecTarget) Reorder(candidates []domain.PublishCandidate, _ []domain.Pu
 	return candidates, map[string][]string{}, nil
 }
 
-func (t *ExecTarget) PublishingRecord(_, _ string, _ domain.PublishCandidate, _, _ string) *domain.PublishRecord {
+func (t *ExecTarget) PublishingRecord(_ domain.PublishCandidate, _ DeliveryIdentity) *domain.PublishRecord {
 	// The hook protocol acknowledges deliveries by event id; a failure needs
 	// its own failed-status record rather than a provisional ledger entry.
 	return nil
@@ -100,7 +111,7 @@ func (t *ExecTarget) AlreadyDelivered(ref string, artifactSHA string) (bool, err
 	return true, nil
 }
 
-func (t *ExecTarget) Publish(ctx context.Context, runID, eventScope string, candidate domain.PublishCandidate, ownedHashes []string) (domain.PublishRecord, error) {
+func (t *ExecTarget) Deliver(ctx context.Context, runID, eventScope string, candidate domain.PublishCandidate, identity DeliveryIdentity, _ []string) (domain.PublishRecord, error) {
 	if len(t.Command) == 0 {
 		return domain.PublishRecord{}, fmt.Errorf("exec publisher %q requires a command", t.ID)
 	}
@@ -146,8 +157,8 @@ func (t *ExecTarget) Publish(ctx context.Context, runID, eventScope string, cand
 		ArtifactID:  candidate.Artifact.ID,
 		TargetID:    t.ID,
 		TargetKind:  "exec",
-		TargetRef:   ExecTargetRef(t.Command),
-		PublishHash: PublishHash(t.ID, candidate.Artifact.SHA256, t.execPublishSignature(candidate)),
+		TargetRef:   identity.Ref,
+		PublishHash: identity.PublishHash,
 		PublishedAt: time.Now().UTC(),
 		Status:      domain.PublishStatusPublished,
 		Message:     combinedExecOutput(&stdout, &stderr),
