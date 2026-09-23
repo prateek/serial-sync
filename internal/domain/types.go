@@ -235,6 +235,7 @@ type Sequence struct {
 	BookID       string `json:"book_id,omitempty"`
 	Chapter      int    `json:"chapter,omitempty"`
 	Position     int    `json:"position,omitempty"`
+	SeriesIndex  string `json:"series_index,omitempty"`
 	Origin       string `json:"origin,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 }

@@ -70,12 +70,12 @@ func pinStages() []pinStage {
 		}},
 		{"publication", func(_ *testing.T, content []byte) ([]byte, error) {
 			return withPublicationMetadata(content, publicationMetadata{
-				Title: "Tide — Chapter 1", Author: "Test Author", Series: "Tide", Position: 1, PublishedAt: pinIdentityTime,
+				Title: "Tide — Chapter 1", Author: "Test Author", Series: "Tide", SeriesIndex: "1", PublishedAt: pinIdentityTime,
 			})
 		}},
 		{"publication-preserve", func(_ *testing.T, content []byte) ([]byte, error) {
 			return withPublicationMetadata(content, publicationMetadata{
-				Title: "Tide — Chapter 1", Author: "Test Author", Series: "Tide", Position: 1, PublishedAt: pinIdentityTime,
+				Title: "Tide — Chapter 1", Author: "Test Author", Series: "Tide", SeriesIndex: "1", PublishedAt: pinIdentityTime,
 				PreserveEmbedded: true, Publication: &domain.PublicationMetadata{Description: "pinned description", Language: "en"},
 			})
 		}},

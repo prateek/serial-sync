@@ -195,11 +195,12 @@ Omitting `last_chapter` keeps the book open. Detected book numbers match these
 definitions; an input's `book_id = "book-two"` overrides title detection.
 Keep book-specific gaps on the book definition.
 
-When numbering restarts at 1, declared prior spans determine the series position.
-In this example Book Two chapter 1 is position 81. `series_position_start` can
-supply the position when earlier books are missing from the archive. Unknown
-positions are explained in preview and omitted from chapter metadata; they block
-volume completion. Intentional gaps reserve their positions.
+When numbering restarts at 1, declared prior spans determine the series position
+that volume coverage uses. In this example Book Two chapter 1 is position 81.
+`series_position_start` can supply the position when earlier books are missing
+from the archive. Unknown positions are explained in preview and block volume
+completion. Intentional gaps reserve their positions. The reader-facing
+[series index](#series-index) is separate and needs no declared spans.
 Known position overlaps are rejected even when an earlier book has no endpoint.
 If a chapter in an open book reaches a later book's explicit starting position,
 it remains a single with no scalar position until the conflicting mapping is fixed.
@@ -239,6 +240,40 @@ for volumes or retirement.
 For a full runnable example, use [config.demo.toml](../examples/config.demo.toml).
 
 For real-world rule patterns, use [rules.md](rules.md).
+
+## Series index
+
+Every EPUB carries a series index (`calibre:series_index` and EPUB 3
+`group-position`) that readers sort by. It follows the author's numbering:
+
+- the chapter number (`1369`), or a half chapter as written (`11.5`);
+- `book.chapter` (`5.25`) when numbering restarts per book, detected from
+  `Book 2`, `B2 Chapter 4`, `B2C4` or the author's `Title 3.1` shorthand. A
+  chapter without a book marker belongs to the most recent book;
+- a release without its own number (interlude, bonus, epilogue, a half chapter
+  inside a book, a repeated number) repeats the index of the release published
+  before it, and the reader orders the tie by publish date. A prologue that
+  opens a new book gets `book.0`;
+- part numbers for serials told in `[Part N]` posts, and release order
+  (`1`, `2`, `3`) for series where fewer than half the posts carry a number.
+
+BookOrbit accepts only digits with one optional decimal point and sorts the
+fraction as a whole number (`5.3` before `5.25`), so the index never carries
+letters. An anthology whose stories each carry their own numbers should follow
+release order instead:
+
+```toml
+[series.output]
+series_index = "release"
+```
+
+A release's index depends on the releases published before it in the same
+series, so a new release normally leaves earlier indexes alone. Two series-wide
+choices can change them: the first time a serial's numbering restarts, its
+earlier chapters move from `25` to `1.25`, and a young series can switch
+between release order and chapter numbers as posts accumulate. Sync rebuilds
+the recent chapters it sees; run `run --rebuild` for the series to update the
+rest.
 
 ## Authoring defaults and exceptions
 

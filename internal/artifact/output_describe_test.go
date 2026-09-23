@@ -141,7 +141,7 @@ func TestWithPublicationMetadataRewritesSeriesPosition(t *testing.T) {
 		Title:       "Harbor — Volume 1 (Chapters 1–2)",
 		Author:      "Test Author",
 		Series:      "Harbor",
-		Position:    42,
+		SeriesIndex: "42",
 		PublishedAt: time.Now().UTC(),
 	}
 	out, err := withPublicationMetadata(content, meta)

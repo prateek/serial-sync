@@ -18,7 +18,46 @@ import (
 // from the same function and hold behaviour is testable at this interface.
 func decideReleases(source string, releases []domain.NormalizedRelease, fresh map[string]bool, cfg *config.Config, previous []domain.DiscoveryCandidate, now time.Time) (map[string]classify.ExplainedDecision, []domain.DiscoveryCandidate) {
 	analysis := discovery.Analyze(source, releases, fresh, cfg, previous, now)
+	assignSeriesIndexes(cfg, releases, analysis.Decisions)
 	return analysis.Decisions, analysis.Candidates
+}
+
+// assignSeriesIndexes labels each reading copy with its series index, which
+// depends on the releases published before it in the same series.
+func assignSeriesIndexes(cfg *config.Config, releases []domain.NormalizedRelease, decisions map[string]classify.ExplainedDecision) {
+	// The latest edit of a release is the one discovery decided.
+	latest := map[string]domain.NormalizedRelease{}
+	for _, release := range releases {
+		if current, ok := latest[release.ProviderReleaseID]; !ok || release.EditedAt.After(current.EditedAt) {
+			latest[release.ProviderReleaseID] = release
+		}
+	}
+	bySeries := map[string][]sequence.IndexedRelease{}
+	for id, release := range latest {
+		decision := decisions[id].Decision
+		if decision.SeriesID == "" || decision.Sequence == nil {
+			continue
+		}
+		if kind := classify.SelectContent(release, decision).Kind; kind != "body" && kind != "attachment" {
+			continue
+		}
+		bySeries[decision.SeriesID] = append(bySeries[decision.SeriesID], sequence.IndexedRelease{
+			ReleaseID: id, PublishedAt: release.PublishedAt, Title: release.Title, Sequence: *decision.Sequence,
+		})
+	}
+	byRelease := map[string]bool{}
+	for _, series := range cfg.Series {
+		byRelease[series.ID] = series.Output.SeriesIndex == "release"
+	}
+	for seriesID, members := range bySeries {
+		for releaseID, index := range sequence.SeriesIndexes(members, byRelease[seriesID]) {
+			explained := decisions[releaseID]
+			numbered := *explained.Decision.Sequence
+			numbered.SeriesIndex = index
+			explained.Decision.Sequence = &numbered
+			decisions[releaseID] = explained
+		}
+	}
 }
 
 // observingReleases reads the stored history for a source and merges the
@@ -60,27 +99,17 @@ func (s *Service) observingReleases(ctx context.Context, source string, document
 }
 
 // decideSource is the sync-facing release decider: it returns the decisions
-// for every observed release. Only a hold rule makes a decision depend on the
-// source's history, so the stored releases are read only then; otherwise the
-// observed documents decide on their own with no store read. It writes
-// nothing; discovery candidate computation happens after releases are stored
-// so captured hashes sit in the evidence fingerprints.
+// for the source's stored history merged with the observed releases. Hold
+// rules and series indexes both depend on that history. It writes nothing;
+// discovery candidate computation happens after releases are stored so
+// captured hashes sit in the evidence fingerprints.
 func (s *Service) decideSource(ctx context.Context, source string, documents []provider.ReleaseDocument, observedAt time.Time, cfg *config.Config) (map[string]classify.ExplainedDecision, error) {
 	if cfg == nil {
 		cfg = s.Config
 	}
-	var releases []domain.NormalizedRelease
-	if cfg.Compiled().HoldsCandidates(source) {
-		var err error
-		releases, _, err = s.observingReleases(ctx, source, documents)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		releases = make([]domain.NormalizedRelease, 0, len(documents))
-		for _, doc := range documents {
-			releases = append(releases, doc.Normalized)
-		}
+	releases, _, err := s.observingReleases(ctx, source, documents)
+	if err != nil {
+		return nil, err
 	}
 	decisions, _ := decideReleases(source, releases, map[string]bool{}, cfg, nil, observedAt)
 	return decisions, nil

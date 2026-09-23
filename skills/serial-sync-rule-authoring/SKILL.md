@@ -137,7 +137,9 @@ After each edit to `series.toml`:
 1. Run `setup preview --show-posts`.
 2. Check which posts still land in fallback.
 3. Check whether any specific matcher is too broad.
-4. Check chapter numbers, book identities and series positions. For volumes,
+4. Check chapter numbers, book identities, series positions and the reader
+   series index (interludes share the preceding chapter's index; anthologies
+   of separately numbered stories need `series_index = "release"`). For volumes,
    inspect expected ranges and every missing slot. Keep ambiguous duplicates and
    unnumbered interludes as singles until an explicit mapping resolves them.
    Check that `final_chapter` leaves later chapters as singles and that open books

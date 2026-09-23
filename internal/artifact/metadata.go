@@ -15,11 +15,19 @@ import (
 
 type publicationMetadata struct {
 	Title, Author, Series string
-	Position              int
+	SeriesIndex           string
 	PublishedAt           time.Time
 	PreserveEmbedded      bool
 	IncludeAbout          bool
 	Publication           *domain.PublicationMetadata
+}
+
+// positionIndex renders a scalar series position, where zero means unknown.
+func positionIndex(position int) string {
+	if position <= 0 {
+		return ""
+	}
+	return strconv.Itoa(position)
 }
 
 func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]byte, error) {
@@ -68,8 +76,8 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 	}
 	if metadata.Series != "" {
 		pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: "calibre:series", Content: metadata.Series})
-		if metadata.Position > 0 {
-			pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: "calibre:series_index", Content: strconv.Itoa(metadata.Position)})
+		if metadata.SeriesIndex != "" {
+			pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Name: "calibre:series_index", Content: metadata.SeriesIndex})
 		}
 		if strings.HasPrefix(pkg.Version, "3") {
 			id := "serial-sync-series"
@@ -80,8 +88,8 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 				opfMeta{Property: "belongs-to-collection", Value: metadata.Series, Attrs: []xml.Attr{{Name: xml.Name{Local: "id"}, Value: id}}},
 				opfMeta{Property: "collection-type", Refines: "#" + id, Value: "series"},
 			)
-			if metadata.Position > 0 {
-				pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Property: "group-position", Refines: "#" + id, Value: strconv.Itoa(metadata.Position)})
+			if metadata.SeriesIndex != "" {
+				pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Property: "group-position", Refines: "#" + id, Value: metadata.SeriesIndex})
 			}
 		}
 	}

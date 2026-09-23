@@ -466,15 +466,17 @@ func TestMissingIntermediateBookDoesNotInventSeriesPositions(t *testing.T) {
 		t.Fatal(err)
 	}
 	chapter := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-bk03-ch0001.epub")
-	if opf := string(epubEntry(t, chapter, ".opf")); strings.Contains(opf, "calibre:series_index") || strings.Contains(opf, "group-position") {
-		t.Fatalf("ambiguous position was invented: %s", opf)
+	if opf := string(epubEntry(t, chapter, ".opf")); !strings.Contains(opf, `name="calibre:series_index" content="3.1"`) {
+		t.Fatalf("chapter lost its book.chapter index: %s", opf)
 	}
 	s.Config.Series[0].Books[1].SeriesPositionStart = 101
 	if _, err := s.Rebuild(context.Background(), app.RebuildOptions{}, "rebuild"); err != nil {
 		t.Fatal(err)
 	}
+	// Only the declared start resolves the scalar position a volume needs;
+	// the volume still sorts where its first chapter does.
 	volume := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-bk03.epub")
-	if !strings.Contains(string(epubEntry(t, volume, ".opf")), `name="calibre:series_index" content="101"`) {
+	if !strings.Contains(string(epubEntry(t, volume, ".opf")), `name="calibre:series_index" content="3.1"`) {
 		t.Fatal("explicit position did not resolve missing span")
 	}
 }
@@ -1481,8 +1483,56 @@ func TestAuthorBooksOverrideFixedSizeAndOrderRestartedChapters(t *testing.T) {
 		t.Fatalf("author books: %v, want %v", names, want)
 	}
 	opf := string(epubEntry(t, files[1], ".opf"))
-	if !strings.Contains(opf, `name="calibre:series_index" content="3"`) {
+	if !strings.Contains(opf, `name="calibre:series_index" content="2.1"`) {
 		t.Fatalf("book 2 must follow the two chapters of book 1: %s", opf)
+	}
+}
+
+func TestIncrementalSyncPlacesAnInterludeAfterTheChapterBeforeIt(t *testing.T) {
+	s, upstream := newReaderService(t)
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub"}
+	upstream.docs["alpha"] = upstream.docs["alpha"][:2]
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	library := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga")
+	chapterTwo := filepath.Join(library, "alpha-saga-ch0002.epub")
+	before := mustReadFile(t, chapterTwo)
+
+	// The provider lists only the newest posts, so the interlude's place
+	// comes from the stored history.
+	interlude, chapterThree := upstream.docs["alpha"][1], upstream.docs["alpha"][1]
+	interlude.Normalized.ProviderReleaseID, interlude.Normalized.Title = "a4", "Alpha Saga - Interlude"
+	interlude.Normalized.PublishedAt = time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC)
+	chapterThree.Normalized.ProviderReleaseID, chapterThree.Normalized.Title = "a5", "Alpha Saga - Chapter 3"
+	chapterThree.Normalized.PublishedAt = time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	upstream.docs["alpha"] = []provider.ReleaseDocument{interlude, chapterThree}
+	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	indexes := map[string]string{}
+	for _, file := range findFiles(t, library, ".epub") {
+		opf := string(epubEntry(t, file, ".opf"))
+		match := regexp.MustCompile(`name="calibre:series_index" content="([^"]*)"`).FindStringSubmatch(opf)
+		if match == nil {
+			t.Fatalf("%s has no series index: %s", file, opf)
+		}
+		indexes[filepath.Base(file)] = match[1]
+	}
+	want := map[string]string{"alpha-saga-ch0001.epub": "1", "alpha-saga-ch0002.epub": "2", "alpha-saga-ch0003.epub": "3"}
+	for name, index := range want {
+		if indexes[name] != index {
+			t.Fatalf("indexes = %v, want %v plus the interlude at 2", indexes, want)
+		}
+		delete(indexes, name)
+	}
+	for name, index := range indexes {
+		if len(indexes) != 1 || index != "2" {
+			t.Fatalf("interlude %s must share chapter 2's index: %v", name, indexes)
+		}
+	}
+	if !bytes.Equal(before, mustReadFile(t, chapterTwo)) {
+		t.Fatal("a later release rewrote an earlier chapter")
 	}
 }
 

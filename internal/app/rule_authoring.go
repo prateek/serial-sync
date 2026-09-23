@@ -376,7 +376,7 @@ func FormatRulesPreviewResult(result RulesPreviewResult, showPosts bool) string 
 				if post.Materializable {
 					lines = append(lines, "      output: "+post.Filename)
 					if seq := post.Sequence; seq != nil {
-						lines = append(lines, fmt.Sprintf("      sequence: book=%s chapter=%d chapter_label=%q part=%q position=%d origin=%s matched=%q %s", seq.BookID, seq.Chapter, seq.ChapterLabel, seq.Part, seq.Position, seq.Origin, seq.MatchedText, seq.Reason))
+						lines = append(lines, fmt.Sprintf("      sequence: book=%s chapter=%d chapter_label=%q part=%q position=%d series_index=%q origin=%s matched=%q %s", seq.BookID, seq.Chapter, seq.ChapterLabel, seq.Part, seq.Position, seq.SeriesIndex, seq.Origin, seq.MatchedText, seq.Reason))
 					}
 				}
 			}

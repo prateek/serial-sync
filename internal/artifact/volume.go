@@ -127,7 +127,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 	if err != nil {
 		return domain.Artifact{}, err
 	}
-	content, err = withPublicationMetadata(content, publicationMetadata{Title: title, Author: chapters[0].Track.CanonicalAuthor, Series: chapters[0].Track.TrackName, Position: volume.Members[0].Position, PublishedAt: chapters[0].Release.PublishedAt, Publication: volume.Publication, IncludeAbout: true})
+	content, err = withPublicationMetadata(content, publicationMetadata{Title: title, Author: chapters[0].Track.CanonicalAuthor, Series: chapters[0].Track.TrackName, SeriesIndex: volumeSeriesIndex(volume, chapters[0]), PublishedAt: chapters[0].Release.PublishedAt, Publication: volume.Publication, IncludeAbout: true})
 	if err != nil {
 		return domain.Artifact{}, err
 	}
@@ -195,4 +195,12 @@ func unpackEPUB(content []byte) (map[string][]byte, opfPackage, string, error) {
 		return nil, pkg, "", err
 	}
 	return files, pkg, packagePath, nil
+}
+
+// volumeSeriesIndex sorts a volume where its first chapter sorts.
+func volumeSeriesIndex(volume domain.VolumeEdition, first domain.PublishCandidate) string {
+	if recorded := ArchivedSequence(first.Artifact); recorded != nil && recorded.SeriesIndex != "" {
+		return recorded.SeriesIndex
+	}
+	return positionIndex(volume.Members[0].Position)
 }

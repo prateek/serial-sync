@@ -228,13 +228,13 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 	content, originalFileName, mimeType = profile.Content, profile.FileName, profile.MIMEType
 	validateEPUBCheck := described.NeedsEPUBCheck
 	if validateEPUBCheck || decision.Publication != nil && mimeType == "application/epub+zip" {
-		position := 0
+		seriesIndex := ""
 		if decision.Sequence != nil {
-			position = decision.Sequence.Position
+			seriesIndex = firstNonEmptyString(decision.Sequence.SeriesIndex, positionIndex(decision.Sequence.Position))
 		}
 		content, err = withPublicationMetadata(content, publicationMetadata{
 			Title: release.Title, Author: firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName),
-			Series: track.TrackName, Position: position, PublishedAt: release.PublishedAt,
+			Series: track.TrackName, SeriesIndex: seriesIndex, PublishedAt: release.PublishedAt,
 			PreserveEmbedded: described.PreserveEmbedded, Publication: decision.Publication,
 		})
 		if err != nil {

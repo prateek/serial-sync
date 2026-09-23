@@ -69,7 +69,7 @@ Both reject unknown config keys and invalid rule values before provider work.
 - `filesystem` and `exec` publishing are implemented
 - series output can preserve source attachments or emit EPUBCheck-validated EPUB with portable metadata and artwork, including EPUB 2 attachments; standalone chapters end with their original content, and assembled books/volumes can carry one author page
 - published artifact filenames are lowercase, dash-slugged, and stable enough for shells, URLs, and sync tools
-- generated chapter EPUBs have distinct titles and Calibre/EPUB 3 series positions
+- generated chapter EPUBs have distinct titles and a Calibre/EPUB 3 series index that follows the author's numbering (`book.chapter` when it restarts per book); interludes share the preceding chapter's index
 - curated author profiles and series/book artwork are retained outside content identity; `metadata.identity_source = "release"` repairs unreliable attachment titles/authors from the post and configured author; existing copies adopt metadata edits only through explicit rebuild
 - the [BookOrbit adapter](integrations/bookorbit/README.md) verifies readable imports and groups new-release notifications through ntfy with links to the reader; per-series muting keeps downloads and publication enabled. Deploy stock BookOrbit by default. The optional [Serial Reader experiment](integrations/bookorbit/reader/README.md) adds Previous/Next series navigation
 - optional volumes follow declared author books, falling back to configurable 50-chapter ranges; gaps keep chapters as singles

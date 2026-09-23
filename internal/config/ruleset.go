@@ -216,15 +216,3 @@ func (rs RuleSet) SourcesRoutingTo(seriesID string) []string {
 	}
 	return sources
 }
-
-// HoldsCandidates reports whether any rule for the source holds candidates,
-// which is the only case where a release's decision depends on its
-// neighbours' history.
-func (rs RuleSet) HoldsCandidates(sourceID string) bool {
-	for _, index := range rs.bySource[sourceID] {
-		if rs.items[index].Rule.HoldCandidates {
-			return true
-		}
-	}
-	return false
-}

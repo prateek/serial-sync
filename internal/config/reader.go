@@ -35,6 +35,9 @@ func validateReaderOutput(series SeriesConfig, sources map[string]struct{}) erro
 	if output.Bundling == "volume" && output.Format != "epub" {
 		return fmt.Errorf("volume bundling requires format = epub")
 	}
+	if output.SeriesIndex != "" && output.SeriesIndex != "author" && output.SeriesIndex != "release" {
+		return fmt.Errorf("series_index must be author or release")
+	}
 	if output.ChaptersPerVolume < 1 {
 		return fmt.Errorf("chapters_per_volume must be positive")
 	}

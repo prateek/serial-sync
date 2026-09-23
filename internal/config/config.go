@@ -130,6 +130,7 @@ type SeriesOutputConfig struct {
 	Format            string       `toml:"format"`
 	PrefaceMode       string       `toml:"preface_mode"`
 	Bundling          string       `toml:"bundling"`
+	SeriesIndex       string       `toml:"series_index"`
 	ChaptersPerVolume int          `toml:"chapters_per_volume"`
 }
 

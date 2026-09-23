@@ -99,3 +99,12 @@ func TestCompiledTracksSourceDefaults(t *testing.T) {
 		t.Fatalf("compiled set went stale after a source default changed: %q", got)
 	}
 }
+
+func TestSeriesIndexOrderMustBeAuthorOrRelease(t *testing.T) {
+	for value, valid := range map[string]bool{"": true, "author": true, "release": true, "chapter": false} {
+		err := validateReaderOutput(SeriesConfig{Output: SeriesOutputConfig{SeriesIndex: value}}, nil)
+		if (err == nil) != valid {
+			t.Fatalf("series_index %q: err = %v", value, err)
+		}
+	}
+}

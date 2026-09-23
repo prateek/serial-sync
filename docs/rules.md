@@ -372,7 +372,8 @@ That `prepend_post` mode is meant for the exact â€œauthor note / chapter introâ€
 ## Check reading order before bundling
 
 Start with singles, then inspect `setup preview --show-posts`. Each materializable
-post shows its chapter number, book mapping, scalar series position and filename.
+post shows its chapter number, book mapping, scalar series position, reader
+[series index](config.md#series-index) and filename.
 The matched text and its origin explain where each chapter number came from.
 Supported chapter markers include `chapter`, `chap`, `ch`, and `chaper`; number
 words such as `Chapter Twelve` also work. An attachment filename can supply a

@@ -76,13 +76,14 @@ func TestOpenBookCannotReuseALaterBooksPosition(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-bk01-ch0002.epub")
-	opf := string(epubEntry(t, path, ".opf"))
-	if strings.Contains(opf, "calibre:series_index") || strings.Contains(opf, "group-position") {
-		t.Fatalf("ambiguous chapter reused Book Two's position: %s", opf)
+	// The open chapter stays a single; its reader index is the author's
+	// book.chapter, never Book Two's scalar position.
+	if opf := string(epubEntry(t, path, ".opf")); !strings.Contains(opf, `name="calibre:series_index" content="1.2"`) {
+		t.Fatalf("open chapter lost its book.chapter index: %s", opf)
 	}
 	bookTwo := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", "alpha-saga-bk02.epub")
-	if opf := string(epubEntry(t, bookTwo, ".opf")); !strings.Contains(opf, `name="calibre:series_index" content="2"`) {
-		t.Fatalf("Book Two lost its explicit position: %s", opf)
+	if opf := string(epubEntry(t, bookTwo, ".opf")); !strings.Contains(opf, `name="calibre:series_index" content="2.1"`) {
+		t.Fatalf("Book Two does not sort with its first chapter: %s", opf)
 	}
 }
 

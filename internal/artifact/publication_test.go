@@ -31,7 +31,7 @@ func TestPortableMetadataPreservesStoryAndNavigation(t *testing.T) {
 				}
 			}
 			asset := testMetadataAsset(t)
-			metadata := publicationMetadata{Title: "Post title", Author: "Post author", Series: "Series", Position: 53, PreserveEmbedded: true, Publication: &domain.PublicationMetadata{Description: "A curated description.", DescriptionOverride: true, Language: "en", Cover: asset, Authors: []domain.AuthorProfile{{ID: "author", Name: "Original author", Biography: "Writes serials.", Portrait: asset, URL: "https://example.com/author"}}, Links: []string{"https://example.com/chapter"}}}
+			metadata := publicationMetadata{Title: "Post title", Author: "Post author", Series: "Series", SeriesIndex: "53", PreserveEmbedded: true, Publication: &domain.PublicationMetadata{Description: "A curated description.", DescriptionOverride: true, Language: "en", Cover: asset, Authors: []domain.AuthorProfile{{ID: "author", Name: "Original author", Biography: "Writes serials.", Portrait: asset, URL: "https://example.com/author"}}, Links: []string{"https://example.com/chapter"}}}
 			content, err := withPublicationMetadata(original, metadata)
 			if err != nil {
 				t.Fatal(err)
@@ -329,7 +329,7 @@ func TestPublicationRemovesOnlyGeneratedBackMatter(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				metadata := publicationMetadata{PreserveEmbedded: true, Series: "Series", Position: 2, IncludeAbout: includeAbout, Publication: &domain.PublicationMetadata{
+				metadata := publicationMetadata{PreserveEmbedded: true, Series: "Series", SeriesIndex: "2", IncludeAbout: includeAbout, Publication: &domain.PublicationMetadata{
 					Description: "Book synopsis.", SourceURL: "https://example.com/post", Cover: testMetadataAsset(t), CoverOverride: true,
 					Authors: []domain.AuthorProfile{{ID: "author", Name: "Author", Biography: "First paragraph.\n\nSecond paragraph.", URL: "https://example.com/author", Portrait: testMetadataAsset(t)}},
 					Links:   []string{"https://example.com/post", "https://example.com/author", "https://example.org/reading", "javascript:alert(1)"},
