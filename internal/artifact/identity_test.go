@@ -24,10 +24,11 @@ func TestPublicationIdentityPolicy(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				files, pkg, packagePath, err := unpackEPUB(original)
+				session, err := openEPUBPackage(original)
 				if err != nil {
 					t.Fatal(err)
 				}
+				files, pkg, packagePath := session.Files, session.Package, session.PackagePath
 				attr := func(name, value string) xml.Attr { return xml.Attr{Name: xml.Name{Local: name}, Value: value} }
 				pkg.Metadata.DCElements = []opfDCElement{
 					{Name: "title", Value: embeddedTitle, Attrs: []xml.Attr{attr("id", "old-title")}},
@@ -60,20 +61,22 @@ func TestPublicationIdentityPolicy(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, before, _, err := unpackEPUB(original)
+				beforeSession, err := openEPUBPackage(original)
 				if err != nil {
 					t.Fatal(err)
 				}
+				before := beforeSession.Package
 				for _, policy := range []domain.PublicationIdentitySource{"", domain.PublicationIdentityEmbedded, domain.PublicationIdentityRelease} {
 					metadata := publicationMetadata{Title: "Harbor Book Two Chapter 032", Author: "Canonical Author", PreserveEmbedded: true, Publication: &domain.PublicationMetadata{IdentitySource: policy}}
 					result, err := withPublicationMetadata(original, metadata)
 					if err != nil {
 						t.Fatal(err)
 					}
-					afterFiles, after, _, err := unpackEPUB(result)
+					afterSession, err := openEPUBPackage(result)
 					if err != nil {
 						t.Fatal(err)
 					}
+					afterFiles, after := afterSession.Files, afterSession.Package
 					for _, item := range before.Manifest.Items {
 						if strings.Contains(item.Properties, "nav") || item.MediaType == "application/x-dtbncx+xml" {
 							continue

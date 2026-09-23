@@ -1,13 +1,10 @@
 package artifact
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"net/url"
 	"os"
@@ -47,7 +44,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 	if err != nil {
 		return domain.Artifact{}, err
 	}
-	files, pkg, packagePath, err := unpackEPUB(content)
+	session, err := openEPUBPackage(content)
 	if err != nil {
 		return domain.Artifact{}, err
 	}
@@ -60,26 +57,25 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 		if err != nil {
 			return domain.Artifact{}, err
 		}
-		memberFiles, memberPackage, memberPath, err := unpackEPUB(data)
+		member, err := openEPUBPackage(data)
 		if err != nil {
 			return domain.Artifact{}, fmt.Errorf("chapter %s: %w", chapter.Release.Title, err)
 		}
 		prefix := fmt.Sprintf("members/%04d", i+1)
-		memberDir := path.Dir(memberPath)
 		items := map[string]opfItem{}
-		if err := removeGeneratedAbout(memberFiles, &memberPackage, memberPath); err != nil {
+		if err := member.removeGeneratedAbout(); err != nil {
 			return domain.Artifact{}, err
 		}
-		for _, item := range memberPackage.Manifest.Items {
+		for _, item := range member.Package.Manifest.Items {
 			originalID := item.ID
-			entry, err := resolveManifestHref(memberDir, item.Href)
+			entry, err := member.entry(item.Href)
 			if err != nil {
 				return domain.Artifact{}, fmt.Errorf("chapter resource %q: %w", item.Href, err)
 			}
 			if strings.HasPrefix(entry, "../") {
 				return domain.Artifact{}, fmt.Errorf("unsafe member path %q", entry)
 			}
-			payload, ok := memberFiles[entry]
+			payload, ok := member.Files[entry]
 			if !ok {
 				return domain.Artifact{}, fmt.Errorf("chapter resource %s is missing", entry)
 			}
@@ -94,21 +90,21 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			if item.MediaOverlay != "" {
 				item.MediaOverlay = fmt.Sprintf("member-%04d-%s", i+1, item.MediaOverlay)
 			}
-			files[path.Join("OEBPS", resourcePath)] = payload
-			pkg.Manifest.Items = append(pkg.Manifest.Items, item)
+			session.Files[path.Join("OEBPS", resourcePath)] = payload
+			session.Package.Manifest.Items = append(session.Package.Manifest.Items, item)
 			items[originalID] = item
 		}
 		first := true
-		memberNav, err := memberNavigation(memberFiles, memberPackage, memberPath, prefix)
+		memberNav, err := member.memberNavigation(prefix)
 		if err != nil {
 			return domain.Artifact{}, fmt.Errorf("chapter %s navigation: %w", chapter.Release.Title, err)
 		}
-		for _, ref := range memberPackage.Spine.Itemrefs {
+		for _, ref := range member.Package.Spine.Itemrefs {
 			item, ok := items[ref.IDRef]
 			if !ok {
 				continue
 			}
-			pkg.Spine.Itemrefs = append(pkg.Spine.Itemrefs, opfItemref{IDRef: item.ID, Linear: ref.Linear})
+			session.Package.Spine.Itemrefs = append(session.Package.Spine.Itemrefs, opfItemref{IDRef: item.ID, Linear: ref.Linear})
 			if first {
 				if len(memberNav) == 1 && memberNav[0].FileName == item.Href && memberNav[0].Title == chapter.Release.Title {
 					memberNav = memberNav[0].Children
@@ -121,9 +117,8 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			return domain.Artifact{}, fmt.Errorf("chapter %s has no reading content", chapter.Release.Title)
 		}
 	}
-	files["OEBPS/nav.xhtml"] = []byte(buildNavDocument(title, nav))
-	files[packagePath] = mustXML(pkg)
-	content, err = writeStructurallyValidatedEPUBArchive(files)
+	session.Files["OEBPS/nav.xhtml"] = []byte(buildNavDocument(title, nav))
+	content, err = session.write(packageIndented)
 	if err != nil {
 		return domain.Artifact{}, err
 	}
@@ -167,34 +162,6 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 		return domain.Artifact{}, err
 	}
 	return art, nil
-}
-
-func unpackEPUB(content []byte) (map[string][]byte, opfPackage, string, error) {
-	var pkg opfPackage
-	z, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
-	if err != nil {
-		return nil, pkg, "", err
-	}
-	files := map[string][]byte{}
-	for _, file := range z.File {
-		data, err := readZipFile(file)
-		if err != nil {
-			return nil, pkg, "", err
-		}
-		files[file.Name] = data
-	}
-	var container containerDocument
-	if err := xml.Unmarshal(files["META-INF/container.xml"], &container); err != nil {
-		return nil, pkg, "", err
-	}
-	if len(container.RootFile.RootFile) == 0 {
-		return nil, pkg, "", fmt.Errorf("missing EPUB rootfile")
-	}
-	packagePath := container.RootFile.RootFile[0].FullPath
-	if err := xml.Unmarshal(files[packagePath], &pkg); err != nil {
-		return nil, pkg, "", err
-	}
-	return files, pkg, packagePath, nil
 }
 
 // volumeSeriesIndex sorts a volume where its first chapter sorts.

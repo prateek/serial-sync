@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"path"
 	"sort"
 	"strings"
@@ -685,48 +684,15 @@ func normalizeEPUBMetadata(original []byte, title, author, identifier string, mo
 }
 
 func rewriteEPUBPackage(original []byte, title, author, identifier string, modified time.Time, prefaceHTML string, replaceIdentifier bool) ([]byte, error) {
-	reader, err := zip.NewReader(bytes.NewReader(original), int64(len(original)))
+	session, err := openEPUBPackage(original)
 	if err != nil {
 		return nil, err
 	}
-
-	files := map[string][]byte{}
-	for _, file := range reader.File {
-		rc, err := file.Open()
-		if err != nil {
-			return nil, err
-		}
-		data, readErr := io.ReadAll(rc)
-		_ = rc.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		files[file.Name] = data
-	}
-	if _, ok := files["mimetype"]; !ok {
-		files["mimetype"] = []byte("application/epub+zip")
+	if _, ok := session.Files["mimetype"]; !ok {
+		session.Files["mimetype"] = []byte("application/epub+zip")
 	}
 
-	containerData, ok := files["META-INF/container.xml"]
-	if !ok {
-		return nil, fmt.Errorf("epub missing META-INF/container.xml")
-	}
-	var container containerDocument
-	if err := xml.Unmarshal(containerData, &container); err != nil {
-		return nil, err
-	}
-	if len(container.RootFile.RootFile) == 0 {
-		return nil, fmt.Errorf("epub container missing rootfile")
-	}
-	opfPath := container.RootFile.RootFile[0].FullPath
-	opfData, ok := files[opfPath]
-	if !ok {
-		return nil, fmt.Errorf("epub missing package document %q", opfPath)
-	}
-	var pkg opfPackage
-	if err := xml.Unmarshal(opfData, &pkg); err != nil {
-		return nil, err
-	}
+	pkg := &session.Package
 	if strings.TrimSpace(pkg.Version) == "" {
 		pkg.Version = "3.0"
 	}
@@ -737,29 +703,26 @@ func rewriteEPUBPackage(original []byte, title, author, identifier string, modif
 	if strings.TrimSpace(pkg.Metadata.DC) == "" {
 		pkg.Metadata.DC = "http://purl.org/dc/elements/1.1/"
 	}
-	opfDir := path.Dir(opfPath)
-	if opfDir == "." {
-		opfDir = ""
-	}
-	fixedLayout := packageIsPrePaginated(pkg)
-	prefaceViewport := fixedLayoutViewport(fixedLayout, pkg, files, opfDir)
-	ensurePackageMetadata(&pkg, title, author, identifier, modified, files, opfDir, replaceIdentifier)
+	opfDir := session.Dir
+	fixedLayout := packageIsPrePaginated(*pkg)
+	prefaceViewport := fixedLayoutViewport(fixedLayout, *pkg, session.Files, opfDir)
+	ensurePackageMetadata(pkg, title, author, identifier, modified, session.Files, opfDir, replaceIdentifier)
 	if strings.HasPrefix(strings.TrimSpace(pkg.Version), "2") && strings.TrimSpace(pkg.Spine.Toc) == "" {
 		pkg.Spine.Toc = firstNCXID(pkg.Manifest.Items)
 	}
 	if replaceIdentifier {
-		if err := normalizeManifestXHTMLTitles(files, pkg, opfDir, title); err != nil {
+		if err := normalizeManifestXHTMLTitles(session.Files, *pkg, opfDir, title); err != nil {
 			return nil, err
 		}
 	}
 
 	if strings.TrimSpace(prefaceHTML) != "" {
-		prefaceFileName, prefaceArchivePath := uniquePrefacePath(files, opfDir)
+		prefaceFileName, prefaceArchivePath := uniquePrefacePath(session.Files, opfDir)
 		prefaceDocument, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName("Preface", prefaceHTML, pkg.Version, prefaceViewport, prefaceFileName)
 		if err != nil {
 			return nil, fmt.Errorf("build preface: %w", err)
 		}
-		files[prefaceArchivePath] = []byte(prefaceDocument.Content)
+		session.Files[prefaceArchivePath] = []byte(prefaceDocument.Content)
 
 		manifestID := uniqueManifestID(pkg.Manifest.Items, "serial-sync-preface")
 		manifestItem := opfItem{
@@ -774,8 +737,7 @@ func rewriteEPUBPackage(original []byte, title, author, identifier string, modif
 			pkg.Spine.Itemrefs = append([]opfItemref{{IDRef: manifestItem.ID}}, pkg.Spine.Itemrefs...)
 		}
 	}
-	files[opfPath] = mustXML(pkg)
-	return writeStructurallyValidatedEPUBArchive(files)
+	return session.write(packageIndented)
 }
 
 func manifestHasID(items []opfItem, id string) bool {

@@ -31,15 +31,16 @@ func positionIndex(position int) string {
 }
 
 func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]byte, error) {
-	files, pkg, packagePath, err := unpackEPUB(content)
+	session, err := openEPUBPackage(content)
 	if err != nil {
 		return nil, err
 	}
+	pkg := &session.Package
 	if strings.HasPrefix(pkg.Version, "2") && pkg.Spine.Toc == "" {
 		pkg.Spine.Toc = firstNCXID(pkg.Manifest.Items)
 	}
 	if metadata.Publication != nil && metadata.Publication.IdentitySource == domain.PublicationIdentityRelease {
-		replacePublicationIdentity(&pkg.Metadata, packagePath, metadata.Title, metadata.Author)
+		replacePublicationIdentity(&pkg.Metadata, session.PackagePath, metadata.Title, metadata.Author)
 	} else {
 		if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "title") {
 			setPublicationDC(&pkg.Metadata, "title", metadata.Title)
@@ -70,7 +71,7 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 	}
 	pkg.Metadata.Meta = kept
 	if metadata.Publication != nil {
-		if err := decoratePublication(files, &pkg, packagePath, *metadata.Publication, metadata.IncludeAbout); err != nil {
+		if err := session.decoratePublication(*metadata.Publication, metadata.IncludeAbout); err != nil {
 			return nil, err
 		}
 	}
@@ -81,7 +82,7 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 		}
 		if strings.HasPrefix(pkg.Version, "3") {
 			id := "serial-sync-series"
-			for suffix := 1; bytes.Contains(mustXML(pkg), []byte(`id="`+id+`"`)); suffix++ {
+			for suffix := 1; bytes.Contains(mustXML(*pkg), []byte(`id="`+id+`"`)); suffix++ {
 				id = fmt.Sprintf("serial-sync-series-%d", suffix)
 			}
 			pkg.Metadata.Meta = append(pkg.Metadata.Meta,
@@ -93,12 +94,7 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 			}
 		}
 	}
-	data, err := xml.Marshal(pkg)
-	if err != nil {
-		return nil, err
-	}
-	files[packagePath] = append([]byte(xml.Header), data...)
-	return writeStructurallyValidatedEPUBArchive(files)
+	return session.write(packageCompact)
 }
 
 func replacePublicationIdentity(metadata *opfMetadata, packagePath, title, author string) {

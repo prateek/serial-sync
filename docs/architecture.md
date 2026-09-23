@@ -10,7 +10,9 @@ The implementation follows the PRD’s ports-and-adapters shape:
   built lazily behind one access path
 - `internal/artifact`: canonical artifact planning and storage; the planned
   reading copy (name, type, validation) is one module shared by previews and
-  materialization
+  materialization; every edit to a reading copy's package document runs in one
+  edit session (unzip, container indirection, package-document parse, rezip)
+  instead of each stage unzipping on its own
 - `internal/publish`: replayable downstream publishers behind one target seam
   that states each target's capabilities (filesystem and exec adapters, plus an
   in-memory adapter for tests)

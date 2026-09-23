@@ -11,15 +11,15 @@ import (
 	"golang.org/x/net/html"
 )
 
-func removeAboutNavigation(files map[string][]byte, pkg opfPackage, packagePath, aboutID string) error {
+func (s *epubPackage) removeAboutNavigation(aboutID string) error {
 	if aboutID == "" {
 		return nil
 	}
-	base, about := path.Dir(packagePath), ""
-	for _, item := range pkg.Manifest.Items {
+	about := ""
+	for _, item := range s.Package.Manifest.Items {
 		if item.ID == aboutID {
 			var err error
-			about, err = resolveManifestHref(base, item.Href)
+			about, err = s.entry(item.Href)
 			if err != nil {
 				return err
 			}
@@ -28,16 +28,16 @@ func removeAboutNavigation(files map[string][]byte, pkg opfPackage, packagePath,
 	if about == "" {
 		return nil
 	}
-	for _, item := range pkg.Manifest.Items {
+	for _, item := range s.Package.Manifest.Items {
 		if !strings.Contains(" "+item.Properties+" ", " nav ") && item.MediaType != "application/x-dtbncx+xml" {
 			continue
 		}
-		entry, err := resolveManifestHref(base, item.Href)
+		entry, err := s.entry(item.Href)
 		if err != nil {
 			return err
 		}
 		for {
-			data := files[entry]
+			data := s.Files[entry]
 			decoder := xml.NewDecoder(bytes.NewReader(data))
 			type container struct {
 				start  int64
@@ -81,15 +81,15 @@ func removeAboutNavigation(files map[string][]byte, pkg opfPackage, packagePath,
 					last := stack[len(stack)-1]
 					stack = stack[:len(stack)-1]
 					if last.remove {
-						files[entry] = append(append([]byte{}, data[:last.start]...), data[decoder.InputOffset():]...)
+						s.Files[entry] = append(append([]byte{}, data[:last.start]...), data[decoder.InputOffset():]...)
 						break
 					}
 				}
-				if !bytes.Equal(files[entry], data) {
+				if !bytes.Equal(s.Files[entry], data) {
 					break
 				}
 			}
-			if bytes.Equal(files[entry], data) {
+			if bytes.Equal(s.Files[entry], data) {
 				break
 			}
 		}
@@ -105,17 +105,16 @@ type ncxPoint struct {
 	Points []ncxPoint `xml:"navPoint"`
 }
 
-func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, prefix string) ([]epubChapter, error) {
-	base := path.Dir(packagePath)
-	for _, item := range pkg.Manifest.Items {
+func (s *epubPackage) memberNavigation(prefix string) ([]epubChapter, error) {
+	for _, item := range s.Package.Manifest.Items {
 		if !strings.Contains(" "+item.Properties+" ", " nav ") {
 			continue
 		}
-		entry, err := resolveManifestHref(base, item.Href)
+		entry, err := s.entry(item.Href)
 		if err != nil {
 			return nil, err
 		}
-		document, err := html.Parse(bytes.NewReader(files[entry]))
+		document, err := html.Parse(bytes.NewReader(s.Files[entry]))
 		if err != nil {
 			return nil, err
 		}
@@ -139,18 +138,18 @@ func memberNavigation(files map[string][]byte, pkg opfPackage, packagePath, pref
 			return navigationList(toc, entry, prefix), nil
 		}
 	}
-	for _, item := range pkg.Manifest.Items {
+	for _, item := range s.Package.Manifest.Items {
 		if item.MediaType != "application/x-dtbncx+xml" {
 			continue
 		}
-		entry, err := resolveManifestHref(base, item.Href)
+		entry, err := s.entry(item.Href)
 		if err != nil {
 			return nil, err
 		}
 		var ncx struct {
 			Points []ncxPoint `xml:"navMap>navPoint"`
 		}
-		if err := xml.Unmarshal(files[entry], &ncx); err != nil {
+		if err := xml.Unmarshal(s.Files[entry], &ncx); err != nil {
 			return nil, err
 		}
 		var convert func([]ncxPoint) []epubChapter

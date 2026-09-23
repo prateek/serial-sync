@@ -36,14 +36,16 @@ func TestPortableMetadataPreservesStoryAndNavigation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before, beforePkg, packagePath, err := unpackEPUB(original)
+			beforeSession, err := openEPUBPackage(original)
 			if err != nil {
 				t.Fatal(err)
 			}
-			after, afterPkg, _, err := unpackEPUB(content)
+			before, beforePkg, packagePath := beforeSession.Files, beforeSession.Package, beforeSession.PackagePath
+			afterSession, err := openEPUBPackage(content)
 			if err != nil {
 				t.Fatal(err)
 			}
+			after, afterPkg := afterSession.Files, afterSession.Package
 			for _, item := range beforePkg.Manifest.Items {
 				if strings.Contains(item.Properties, "nav") || item.MediaType == "application/x-dtbncx+xml" {
 					continue
@@ -77,7 +79,10 @@ func TestPortableMetadataPreservesStoryAndNavigation(t *testing.T) {
 			}
 			again, err = withPublicationMetadata(content, metadata)
 			if err != nil || !bytes.Equal(content, again) {
-				againFiles, _, _, _ := unpackEPUB(again)
+				var againFiles map[string][]byte
+				if againSession, err := openEPUBPackage(again); err == nil {
+					againFiles = againSession.Files
+				}
 				for name, before := range after {
 					if !bytes.Equal(before, againFiles[name]) {
 						t.Logf("changed %s\nbefore: %s\nafter: %s", name, before, againFiles[name])
@@ -149,10 +154,11 @@ func TestVolumeKeepsInternalChaptersAndOneFinalAbout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, pkg, _, err := unpackEPUB(data)
+	session, err := openEPUBPackage(data)
 	if err != nil {
 		t.Fatal(err)
 	}
+	files, pkg := session.Files, session.Package
 	nav := string(files["OEBPS/nav.xhtml"])
 	for _, title := range []string{"First internal chapter", "Second internal chapter", ">About<"} {
 		if strings.Count(nav, title) != 1 {
@@ -205,10 +211,11 @@ func TestAttachmentPublicationTitles(t *testing.T) {
 			if _, err := m.Materialize(context.Background(), source, track, release, plan); err != nil {
 				t.Fatal(err)
 			}
-			_, pkg, _, err := unpackEPUB(plan.SelectedContent)
+			session, err := openEPUBPackage(plan.SelectedContent)
 			if err != nil {
 				t.Fatal(err)
 			}
+			pkg := session.Package
 			if pkg.Metadata.Title != input.title || pkg.Metadata.Creator != input.author {
 				t.Fatalf("attachment metadata = %q / %q, want %q / %q", pkg.Metadata.Title, pkg.Metadata.Creator, input.title, input.author)
 			}
@@ -221,17 +228,18 @@ func TestVolumePreservesNavigationGroupsAndFragmentLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, pkg, packagePath, err := unpackEPUB(original)
+	session, err := openEPUBPackage(original)
 	if err != nil {
 		t.Fatal(err)
 	}
+	files, pkg := session.Files, session.Package
 	files["OEBPS/nav.xhtml"] = []byte(`<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><span>Part One</span><ol><li><a href="#first">First chapter</a></li><li><a href="#second">Second chapter</a></li></ol></li></ol></nav><section id="first"><h1>First chapter</h1><p>First story.</p></section><section id="second"><h1>Second chapter</h1><p>Second story.</p></section></body></html>`)
 	for _, item := range pkg.Manifest.Items {
 		if item.Href == "nav.xhtml" {
 			pkg.Spine.Itemrefs = []opfItemref{{IDRef: item.ID}}
 		}
 	}
-	files[packagePath] = mustXML(pkg)
+	files[session.PackagePath] = mustXML(pkg)
 	original, err = writeEPUBArchive(files)
 	if err != nil {
 		t.Fatal(err)
@@ -252,10 +260,11 @@ func TestVolumePreservesNavigationGroupsAndFragmentLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembled, _, _, err := unpackEPUB(data)
+	assembledSession, err := openEPUBPackage(data)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assembled := assembledSession.Files
 	var nav struct {
 		Group struct {
 			Label    string `xml:"span"`
@@ -297,20 +306,22 @@ func TestPublicationRemovesOnlyGeneratedBackMatter(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				before, beforePkg, packagePath, err := unpackEPUB(original)
+				beforeSession, err := openEPUBPackage(original)
 				if err != nil {
 					t.Fatal(err)
 				}
-				files, pkg, _, err := unpackEPUB(original)
+				before, beforePkg, packagePath := beforeSession.Files, beforeSession.Package, beforeSession.PackagePath
+				session, err := openEPUBPackage(original)
 				if err != nil {
 					t.Fatal(err)
 				}
+				files := session.Files
 				for i := 0; i < 2; i++ {
-					if err := appendAboutPage(files, &pkg, packagePath, []publicationAuthor{{Name: "Old author", Biography: "Old biography."}}, nil, ""); err != nil {
+					if err := session.appendAboutPage([]publicationAuthor{{Name: "Old author", Biography: "Old biography."}}, nil, ""); err != nil {
 						t.Fatal(err)
 					}
 				}
-				for _, item := range pkg.Manifest.Items {
+				for _, item := range session.Package.Manifest.Items {
 					isNCX := item.MediaType == "application/x-dtbncx+xml"
 					if !isNCX && !strings.Contains(item.Properties, "nav") {
 						continue
@@ -324,8 +335,7 @@ func TestPublicationRemovesOnlyGeneratedBackMatter(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				files[packagePath] = mustXML(pkg)
-				legacy, err := writeStructurallyValidatedEPUBArchive(files)
+				legacy, err := session.write(packageIndented)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -338,10 +348,11 @@ func TestPublicationRemovesOnlyGeneratedBackMatter(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				after, resultPkg, _, err := unpackEPUB(result)
+				resultSession, err := openEPUBPackage(result)
 				if err != nil {
 					t.Fatal(err)
 				}
+				after, resultPkg := resultSession.Files, resultSession.Package
 				wantSpine := len(beforePkg.Spine.Itemrefs)
 				if includeAbout {
 					wantSpine++
@@ -423,10 +434,11 @@ func TestWrappedChapterRemovesGeneratedAbout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, pkg, _, err := unpackEPUB(plan.SelectedContent)
+	session, err := openEPUBPackage(plan.SelectedContent)
 	if err != nil {
 		t.Fatal(err)
 	}
+	files, pkg := session.Files, session.Package
 	if len(pkg.Spine.Itemrefs) != 2 {
 		t.Fatalf("wrapped chapter has %d reading sections, want preface + chapter", len(pkg.Spine.Itemrefs))
 	}
