@@ -267,5 +267,13 @@ func copyFile(src, dst, expectedHash string) error {
 	if err := os.Chmod(to.Name(), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(to.Name(), dst)
+	if err := os.Rename(to.Name(), dst); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(dst))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

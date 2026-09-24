@@ -110,6 +110,7 @@ type RunForensics struct {
 	ReleaseUnchanged    int                  `json:"release_unchanged"`
 	PublishPlanned      int                  `json:"publish_planned"`
 	PublishSkipped      int                  `json:"publish_skipped"`
+	PublishHeld         int                  `json:"publish_held,omitempty"`
 	PublishSucceeded    int                  `json:"publish_succeeded"`
 	PublishFailed       int                  `json:"publish_failed"`
 	ProgressHighlights  []string             `json:"progress_highlights,omitempty"`
@@ -803,6 +804,7 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 		ReleaseUnchanged:    record.KindCounts[observe.KindReleaseUnchanged],
 		PublishPlanned:      record.KindCounts[observe.KindPublishPlanned],
 		PublishSkipped:      record.KindCounts[observe.KindPublishSkipped],
+		PublishHeld:         record.KindCounts[observe.KindPublishHeld],
 		PublishSucceeded:    record.KindCounts[observe.KindPublishCompleted],
 		PublishFailed:       record.KindCounts[observe.KindPublishFailed],
 		ProgressHighlights:  record.ProgressHighlights,
@@ -1262,6 +1264,9 @@ func explainRunHighlights(bundle *domain.RunBundle, summary *RunForensics) []str
 	}
 	if summary.PublishSkipped > 0 {
 		highlights = append(highlights, fmt.Sprintf("%d publish action(s) were skipped as already up to date", summary.PublishSkipped))
+	}
+	if summary.PublishHeld > 0 {
+		highlights = append(highlights, fmt.Sprintf("%d revised release(s) were held because an earlier version was already handed off", summary.PublishHeld))
 	}
 	if summary.PublishFailed > 0 {
 		highlights = append(highlights, fmt.Sprintf("%d publish error(s) occurred", summary.PublishFailed))

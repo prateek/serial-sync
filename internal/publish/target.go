@@ -21,12 +21,30 @@ type DeliveryIdentity struct {
 	PublishHash string
 	DesiredKey  string
 	Intact      bool
+	// Handoff is set by a hand-off target when a published record already
+	// covers the candidate's release. Such a candidate is never delivered
+	// again: the destination owns the file once it lands.
+	Handoff Handoff
 }
 
-// Target is the seam behind a downstream publisher destination. Two adapters
-// exist, filesystem and exec, so the seam is real: the app executor asks a
-// Target for identity, delivery and retirement instead of branching on the
-// configured kind. The destination path formula, the ownership rules and the
+// Handoff says how a candidate relates to an earlier hand-off of the same
+// release.
+type Handoff int
+
+const (
+	// HandoffNone: no published record covers the release yet.
+	HandoffNone Handoff = iota
+	// HandoffSame: the release was handed off with these exact bytes.
+	HandoffSame
+	// HandoffRevised: the release was handed off with different bytes. The
+	// revision is held, because a second file would become a second book.
+	HandoffRevised
+)
+
+// Target is the seam behind a downstream publisher destination. Three
+// adapters exist, filesystem, drop and exec, so the seam is real: the app
+// executor asks a Target for identity, delivery and retirement instead of
+// branching on the configured kind. The destination path formula, the ownership rules and the
 // exec hook protocol live here beside their adapters.
 type Target interface {
 	TargetID() string
@@ -84,6 +102,10 @@ type Capabilities struct {
 	// target without it keeps prior records published; the planner emits no
 	// retirements for it, and volume or rename output needs it.
 	Retires bool
+	// HandsOff: the destination takes ownership of each delivered file and
+	// may rename or rewrite it, so the target keys deliveries by release
+	// identity and never replaces, renames or retires them.
+	HandsOff bool
 }
 
 // ErrRetirementUnsupported is returned by Retire on a target whose
@@ -94,6 +116,8 @@ func TargetFor(target config.PublisherConfig) (Target, error) {
 	switch NormalizedPublisherKind(target.Kind) {
 	case "filesystem":
 		return &FilesystemTarget{ID: target.ID, Path: target.Path}, nil
+	case "drop":
+		return &DropTarget{ID: target.ID, Path: target.Path}, nil
 	case "exec":
 		return &ExecTarget{ProtocolVersion: target.ProtocolVersion, ID: target.ID, Command: target.Command}, nil
 	default:

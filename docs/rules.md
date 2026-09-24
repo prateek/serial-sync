@@ -18,7 +18,7 @@ Each `[[series.inputs]]` matcher answers:
 
 The series owns output behavior: `format`, `preface_mode`, and optional `bundling`.
 
-Keep reading interest separate from classification. To keep downloading a series while silencing its new-chapter alerts, use `muted_series` in the [BookOrbit adapter configuration](../integrations/bookorbit/README.md). Keep read-through and pending-reading markers in the reader; those preferences do not change routing or EPUB metadata.
+Keep reading interest separate from classification. Muting, read-through and pending-reading markers belong in the reader; for BookOrbit, unfollow a series there to silence its new-chapter alerts while serial-sync keeps delivering it. Those preferences do not change routing or EPUB metadata.
 
 Matchers are applied by ascending `priority`. The first matching input wins.
 

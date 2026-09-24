@@ -61,6 +61,9 @@ func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope
 			}
 			for _, input := range series.AuthoringInputs() {
 				if s.sourceInScope(firstNonEmpty(input.Source, series.Source), scope.SourceID, scope.Rebuild, cfg) {
+					if pt.Capabilities().HandsOff {
+						return fmt.Errorf("%s publisher %q cannot deliver volume output", pt.Kind(), target.ID)
+					}
 					return fmt.Errorf("exec publisher %q requires protocol_version = 2 for volume output and retirement", target.ID)
 				}
 			}
@@ -72,7 +75,9 @@ func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope
 func (s *Service) validateLegacyReplacements(ctx context.Context, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
 	for _, target := range targets {
 		pt, targetErr := publish.TargetFor(target)
-		if targetErr != nil || pt.Capabilities().Retires {
+		if targetErr != nil || pt.Capabilities().Retires || pt.Capabilities().HandsOff {
+			// A hand-off target holds a renamed chapter as a revision instead
+			// of replacing it, so there is nothing to retire.
 			continue
 		}
 		for _, candidate := range candidates {
@@ -91,6 +96,10 @@ func (s *Service) validateLegacyReplacements(ctx context.Context, targets []conf
 
 func (s *Service) validateFrozenNames(ctx context.Context, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
 	for _, target := range targets {
+		if pt, err := publish.TargetFor(target); err == nil && pt.Capabilities().HandsOff {
+			// A hand-off target never renames a delivered file.
+			continue
+		}
 		pending, pendingErr := s.pendingDelivery(ctx, s.Config, deliveryScope{}, target)
 		for _, candidate := range candidates {
 			if candidate.Volume == nil && !artifact.IsLegacy(candidate.Artifact) {

@@ -62,7 +62,8 @@ type deliveryPlan struct {
 // snapshot and the desired candidates into the full per-target action list,
 // ordering and retirement set. The rebuild preview prints plan.Items and the
 // publish executor applies them, so dry runs and real runs share one
-// implementation of the add, replace, repair, unchanged and retire decisions.
+// implementation of the add, replace, repair, unchanged, held and retire
+// decisions.
 func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
 	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates, Maintenance: scope.Rebuild}
 	plan.EventScope = plan.ID
@@ -97,8 +98,15 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 			message = fmt.Sprintf("target %s: %v", target.ID, identityErr)
 			plan.Blocked = append(plan.Blocked, message)
 		}
+		switch identity.Handoff {
+		case publish.HandoffSame:
+			action = "unchanged"
+		case publish.HandoffRevised:
+			action = "held"
+			message = "revision held: this release was already handed off"
+		}
 		for _, record := range snapshot.Records {
-			if identityErr != nil || record.Record.Status != domain.PublishStatusPublished {
+			if identityErr != nil || identity.Handoff != publish.HandoffNone || record.Record.Status != domain.PublishStatusPublished {
 				continue
 			}
 			if pt.MatchesDestination(record, candidate) {

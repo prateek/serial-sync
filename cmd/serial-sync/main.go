@@ -16,6 +16,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/prateek/serial-sync/internal/app"
 	"github.com/prateek/serial-sync/internal/config"
+	"github.com/prateek/serial-sync/internal/observe"
 	"github.com/prateek/serial-sync/internal/provider"
 	"github.com/prateek/serial-sync/internal/provider/patreon"
 	runtimedaemon "github.com/prateek/serial-sync/internal/runtime/daemon"
@@ -354,6 +355,34 @@ func (cmd *DebugBundleCmd) Run(cli *CLI) error {
 }
 
 func (cmd *RunExecCmd) Run(cli *CLI) error {
+	if cmd.DryRun {
+		return cmd.run(cli)
+	}
+	health := observe.NewHealthcheck(os.Getenv(observe.HealthcheckURLEnv))
+	pingCtx := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 15*time.Second)
+	}
+	ctx, cancel := pingCtx()
+	reportPing(health.Start(ctx))
+	cancel()
+	err := cmd.run(cli)
+	ctx, cancel = pingCtx()
+	defer cancel()
+	if err != nil {
+		reportPing(health.Fail(ctx, err))
+	} else {
+		reportPing(health.Success(ctx))
+	}
+	return err
+}
+
+func reportPing(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning:", err)
+	}
+}
+
+func (cmd *RunExecCmd) run(cli *CLI) error {
 	if cmd.Rebuild {
 		service, cleanup, err := bootstrapMode(cli.ConfigPath, cmd.DryRun)
 		if err != nil {

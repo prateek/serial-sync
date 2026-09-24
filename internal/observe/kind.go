@@ -31,6 +31,7 @@ var (
 	KindReleaseSynced     = declareKind("release_synced", "sync")
 	KindPublishPlanned    = declareKind("publish_planned", "publish")
 	KindPublishSkipped    = declareKind("publish_skipped", "publish")
+	KindPublishHeld       = declareKind("publish_held", "publish")
 	KindPublishCompleted  = declareKind("publish_completed", "publish")
 	KindPublishFailed     = declareKind("publish_failed", "publish")
 )

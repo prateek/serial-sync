@@ -424,6 +424,10 @@ func (c *Config) Validate() error {
 			if publisher.Path == "" {
 				return fmt.Errorf("publisher %q path is required for filesystem targets", publisher.ID)
 			}
+		case "drop":
+			if publisher.Path == "" {
+				return fmt.Errorf("publisher %q path is required for drop targets", publisher.ID)
+			}
 		case "exec":
 			if len(publisher.Command) == 0 {
 				return fmt.Errorf("publisher %q command is required for exec targets", publisher.ID)

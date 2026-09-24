@@ -1,49 +1,32 @@
-# BookOrbit publication
+# BookOrbit library
 
-This adapter implements serial-sync's exec v2 delivery protocol and optional batch lifecycle. It is included in the serial-sync image at `/opt/serial-sync/bookorbit/hook.py`. Use stock BookOrbit 3.0.0 by default. The optional [reader experiment](reader/README.md) adds in-reader Previous/Next and explicit correction handling; those features are absent from the stock deployment.
+Serial-sync writes finished books into a BookOrbit library folder and stops there. BookOrbit's folder watcher imports each file, may rename it, and may write metadata back into it. Serial-sync makes no BookOrbit API calls and stores no BookOrbit IDs. The optional [reader experiment](reader/README.md) is a separate BookOrbit patch.
 
-Create a BookOrbit library using **one book per file**, with its watcher, scheduled scans, file renaming, and metadata writeback disabled. The adapter owns the scan sequence and published files. Give its account access to this library and permission to scan and delete files. Keep reader credentials in a private JSON file containing `username` and `password`.
+## Setup
 
-Mount the serial-sync destination into both containers. `library_root` is the path visible to serial-sync; `reader_root` is the corresponding path visible to BookOrbit. Copy [example.json](example.json) to `/config/bookorbit.json` and set the URLs, library ID, paths, and a random ntfy topic in the empty `notification.topic` field. Keep it and the credentials outside Git.
+Create a BookOrbit library with **one book per file** whose folder is the mount serial-sync writes to, and turn on its folder watcher. File renaming and metadata write-back can stay on. Mount the same folder into the serial-sync container, for example at `/library`, and point a `drop` publisher at it:
 
 ```toml
 [[publishers]]
 id = "bookorbit"
-kind = "exec"
-protocol_version = 2
-command = ["python3", "/opt/serial-sync/bookorbit/hook.py", "/config/bookorbit.json"]
-lifecycle_command = ["python3", "/opt/serial-sync/bookorbit/hook.py", "/config/bookorbit.json"]
+kind = "drop"
+path = "/library"
 enabled = true
 ```
 
-Every selected series must publish EPUB. Start with `announce = false` for the initial import. Enable it after the baseline is acknowledged; this prevents thousands of historical chapter notifications. `adopt_existing = true` permits adopting an existing file only when its bytes match the saved artifact exactly. Use this deliberately during migration, then turn it off.
+Every series delivered to this library must use single-chapter output. `drop` rejects `bundling = "volume"`, because it can never replace or retire a file after BookOrbit owns it.
 
-The adapter stages new paths, requests one batch scan, waits for completion, finds the exact imported paths, and downloads each new version to verify its SHA-256. A successful per-artifact acknowledgement means BookOrbit serves those bytes. Ordinary sync overwrites existing paths at their ordered delivery step. An explicit rebuild can batch replacements of stable singles when the lifecycle event includes previous publications proving the same path and release identity, and their artifact ID/hash match the adapter's ownership receipt. It checks every destination and required saved artifact before staging, then scans once and verifies every changed file before acknowledging publications. Missing predecessor proof, ambiguous identities, and volumes retain per-artifact delivery. Saved write intents and readiness receipts let an interrupted batch resume without adopting unknown files.
+## What a run does
 
-Every overwrite requires the same release-ID set as the owned reading copy. A volume that shrinks, grows, or changes membership must use a distinct filename and an ordered migration that verifies replacements before retiring the old copy. Legacy receipts without coverage require an explicit rebuild with matching single-release predecessor proof; unsupported volume replacements fail before changing the file. Maintenance also upgrades matching unchanged single receipts, so later corrections can use ordinary sync.
+- A new chapter lands at `<path>/<source>/<series>/<file>`. It is copied to a dot-prefixed temporary name in that folder, synced, checked against the artifact hash, and renamed into place. BookOrbit's watcher skips dot-prefixed paths, so it never sees a partial file.
+- The catalog records each hand-off by source and Patreon post ID. After that, serial-sync ignores the file: BookOrbit can move it or rewrite its bytes without causing a second drop.
+- A revised post, including a metadata-only rebuild, is **held**. It is not dropped again, because a second file would become a second book. The run reports it as `held`, and `debug run <id>` counts held revisions. To publish a revision, replace the book in BookOrbit by hand.
+- If the library root is missing, delivery fails instead of creating it, since a missing root usually means the volume is not mounted.
 
-Retirement requires all replacement receipts and unchanged owned files. Its completion record is saved before ownership cleanup, so restarting after deletion can acknowledge the same event. Unrelated files, symlinks, and user-modified copies cause a retryable conflict. Retirement of a file partly read by the publishing account is blocked until its position is migrated or the copy is finished. This adapter targets a personal library; additional readers need a progress audit before retirement. Use stable singles for ongoing series; arbitrary regrouping into a volume cannot preserve a locator automatically.
+## Alerts
 
-Receipts and the notification outbox live under `state_dir`; include them in backups alongside serial-sync state. Pending work uses saved artifact bytes. A failed import never announces a ready chapter. A failed notification retains readable publication receipts and retries the outbox. Notification batch membership remains fixed until all its outbox entries are drained, so a restart during cleanup cannot announce the remaining subset again. Do not delete receipts as a way to retry a run.
+BookOrbit sends new-chapter notifications, and readers unfollow series in BookOrbit. Serial-sync reports only run health. Set `SERIAL_SYNC_HEALTHCHECK_URL` to a Healthchecks.io ping URL, and each non-dry-run `run` pings `<url>/start`, then `<url>` on success or `<url>/fail` with a short sanitized reason. Unset, no pings are sent. The URL is a credential: keep it in a private env file, not in config or Git. Set the check's period and grace to match your schedule.
 
-Notifications are grouped by series and deduplicated by release coverage. Metadata rebuilds and unchanged runs are quiet. Multi-chapter source releases count as one new release in the summary; the adapter does not guess how many internal chapters a release contains. Use hosted ntfy for phone alerts that open the reading URL:
+## Hourly operation
 
-```json
-{"kind":"ntfy","url":"https://ntfy.sh","topic":"an-unguessable-random-topic"}
-```
-
-Set top-level `"muted_series": ["main-story", "side-stories"]` in the adapter JSON to silence new-release notifications for those configured `series.id` values (`track_key` for legacy rules). These are stable identifiers, not display titles or BookOrbit's numeric series IDs. Muting leaves downloads, publication, readable-version verification, and reading history unchanged. Other series and delivery-failure alerts still notify normally.
-
-The adapter checks muting when completing a notification batch, including retries. Muted releases are acknowledged silently; removing a mute announces future releases without replaying that backlog. After a notification succeeds, its saved receipt fixes which releases were announced through cleanup retries. Before first enabling muting on an older adapter installation, drain its existing outbox with the old preferences: legacy queued entries lack series IDs, and the adapter refuses to guess their identity. Empty or omitted `muted_series` preserves the previous behavior.
-
-Reading preferences belong to BookOrbit. Its bulk status action can mark existing chapter files as `want_to_read` or `read`; it does not change notification preferences. For historical read-through imports, snapshot exact book IDs and existing status/progress first, then use `PATCH /api/v1/books/:id/status` with `status = "read"` and `finishedAt = null` when the completion date is unknown. The bulk read action defaults new completions to today. Use verified author-book/chapter coverage for cutoffs, preserve existing reading locators, and leave later arrivals unread. Smart Scopes can group series for browsing, including future chapters, but changing a scope does not change the adapter's mute list.
-
-Use a fresh random topic and keep it outside the repository. Anyone who knows an unprotected hosted topic can read or publish its notifications; send only release summaries and reader URLs that still require authentication. In the ntfy phone app, subscribe to that topic on `https://ntfy.sh` before enabling it. The adapter sends the reading URL as ntfy's `click` field; the [iOS notification handler](https://github.com/binwiederhier/ntfy-ios/blob/893bae9cce985c6272ac70f9e75874bf8fc67a27/ntfy/App/AppDelegate.swift#L152) opens it when tapped. Verify an actual backgrounded-phone tap before treating setup as complete.
-
-Neither transport provides this adapter with an idempotency key. A crash after the service accepts a notification but before the local receipt is saved can repeat it. Both exe.dev tests reached the phone, but tapping the fresh test opened only the exe.dev app. The current exe payload does not satisfy reading-link navigation. ntfy passed Docker publication and API readback of the exact `click` URL, and the user confirmed its notification arrived and opened BookOrbit. It is now the active deployed transport. See the trial record below for deployment status.
-
-Run adapter checks with `python3 -m unittest discover -s integrations/bookorbit -v`. The [trial record](../../docs/research/reader-experience-validation.md) records runtime evidence and rollout status.
-
-For hourly VM operation, the [systemd units](systemd/) run the Docker workflow once per hour with a file lock. Install them under the service account's `~/.config/systemd/user`, keep the Compose project at `~/serial-sync`, and enable user lingering. Finish the baseline and pilot before enabling `serial-sync.timer`. Use `systemctl --user status serial-sync.service` and `journalctl --user -u serial-sync.service` to inspect delivery failures. The run itself emits the configured failure notification. Manual operational runs should take the same `run.lock`.
-
-When migrating already published files, retain a manifest of `source/series/filename` mapped to the predecessor's `sha256` and `artifact_id`, proven against successful old publisher receipts and the backup bytes. `python3 /opt/serial-sync/bookorbit/adopt.py /config/bookorbit.json /config/adoption-manifest.json` validates every file before adopting ownership. It does not grant readiness or notify. This permits a corrected new edition to replace its known predecessor during the first BookOrbit delivery. Unknown or changed files still block migration. Retain the manifest with the rollback snapshot.
+The [systemd units](systemd/) run the Docker workflow once per hour under a file lock. Install them under the service account's `~/.config/systemd/user`, keep the Compose project at `~/serial-sync`, and enable user lingering. Manual runs should take the same `run.lock`. Inspect runs with `systemctl --user status serial-sync.service` and `journalctl --user -u serial-sync.service`.

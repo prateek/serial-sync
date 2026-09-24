@@ -44,7 +44,6 @@ COPY scripts/install-epubcheck /tmp/install-epubcheck
 RUN /tmp/install-epubcheck && rm /tmp/install-epubcheck
 WORKDIR /work
 COPY --from=build /out/serial-sync /usr/local/bin/serial-sync
-COPY integrations/bookorbit /opt/serial-sync/bookorbit
 COPY scripts/container/google-chrome /usr/local/bin/google-chrome
 COPY scripts/container/serial-sync-with-novnc /usr/local/bin/serial-sync-with-novnc
 RUN chmod +x /usr/local/bin/google-chrome /usr/local/bin/serial-sync-with-novnc

@@ -19,7 +19,7 @@ The current MVP supports:
 
 - provider: `patreon`
 - auth modes: `fixture`, `username_password`
-- publisher kinds: `filesystem`, `exec`
+- publisher kinds: `filesystem`, `drop`, `exec`
 - matcher types: `tag`, `collection`, `title_regex`, `attachment_filename_regex`, `fallback`
 
 `setup check`, `setup preview`, and `run` use the same strict config loader.
@@ -121,6 +121,12 @@ path = "./publish"
 enabled = true
 
 [[publishers]]
+id = "library-inbox"
+kind = "drop"
+path = "./library"
+enabled = false
+
+[[publishers]]
 id = "post-publish-hook"
 kind = "exec"
 command = ["./examples/hooks/log-publish.sh"]
@@ -129,6 +135,9 @@ enabled = false
 
 Notes:
 
+- `filesystem` mirrors the catalog into `path`: it overwrites revised files and removes retired ones.
+- `drop` hands each release to a library manager that watches `path`, once. It writes atomically, never touches the file again, holds later revisions instead of dropping a second copy, and fails when `path` does not exist. It supports single-chapter output only. See the [BookOrbit library guide](../integrations/bookorbit/README.md).
+- a non-dry-run `run` pings the Healthchecks.io URL in `SERIAL_SYNC_HEALTHCHECK_URL`, when set: `/start` first, then the bare URL on success or `/fail` with a short sanitized reason.
 - `session_path` stores the persisted Patreon cookie bundle.
 - `log_root` stores per-run text logs, JSONL logs, and event payload files.
 - `totp_secret_env` is optional and only needed when Patreon asks for an authenticator-app code that can be satisfied with TOTP. The variable can hold the bare base32 secret or a full `otpauth://totp/...` URI, such as the one `op read` returns for a 1Password one-time password field. A URI's `period`, `digits`, and `algorithm` parameters are honored.
@@ -235,7 +244,7 @@ disabled source is blocked; enable that source before rebuilding the shared volu
 `anthology_mode` is deprecated in both series inputs and legacy rules. An explicit
 `false` emits a warning; remove the field. `true` is rejected: use series-level
 `bundling = "volume"` instead. Exec targets need [protocol version 2](hooks.md)
-for volumes or retirement.
+for volumes or retirement; `drop` targets cannot deliver volumes.
 
 For a full runnable example, use [config.demo.toml](../examples/config.demo.toml).
 
@@ -472,6 +481,4 @@ Review selected metadata with offline `setup preview --show-posts --format json`
 
 Older EPUB editions with per-chapter About pages require the same explicit rebuild, even without a config edit. With the normal mounts, preview one series using `docker compose run --rm serial-sync run --rebuild --dry-run --series <series-id>`, then remove `--dry-run` to apply it. The upgrade retains filenames and original chapter resources. Rescan/reconcile the library through its configured publisher after replacement, and redownload existing offline copies in Readest. A local rebuild does not update a phone download or prove that a reader retained saved progress; verify those separately before expanding the rebuild.
 
-The [BookOrbit integration](../integrations/bookorbit/README.md) documents controlled import, readiness receipts, grouped ntfy notifications with reading links, and the optional reader patch. Configure its private notification topic in the adapter JSON after subscribing on the phone. The adapter is separate from the portable metadata model.
-
-For notification-only exclusions, set `muted_series` to a JSON array of configured `series.id` values in the BookOrbit adapter JSON. This setting is not a TOML series field: it leaves source fetching, output, and reader progress unchanged. See the integration guide for queued-notification compatibility and bulk reading-status updates.
+A `drop` target never replaces a handed-off book, so a rebuild's new editions are held rather than delivered. The [BookOrbit library guide](../integrations/bookorbit/README.md) covers that setup.

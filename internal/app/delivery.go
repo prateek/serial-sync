@@ -163,6 +163,14 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 				})
 				continue
 			}
+			if itemByID[id].Action == "held" {
+				outcome.Skipped++
+				item := itemByID[id]
+				item.TargetRef = identity.Ref
+				outcome.Items = append(outcome.Items, item)
+				_ = recorder.EventDataK(ctx, "info", observe.KindPublishHeld, "publish held: revised release already handed off", "artifact", candidate.Artifact.ID, item)
+				continue
+			}
 			if dryRun {
 				delivered[candidate.Artifact.ID] = true
 				outcome.Published++
