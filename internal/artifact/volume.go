@@ -106,7 +106,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			}
 			session.Package.Spine.Itemrefs = append(session.Package.Spine.Itemrefs, opfItemref{IDRef: item.ID, Linear: ref.Linear})
 			if first {
-				if len(memberNav) == 1 && memberNav[0].FileName == item.Href && memberNav[0].Title == chapter.Release.Title {
+				if len(memberNav) == 1 && memberNav[0].FileName == item.Href {
 					memberNav = memberNav[0].Children
 				}
 				nav = append(nav, epubChapter{FileName: item.Href, Title: chapter.Release.Title, Children: memberNav})
@@ -117,7 +117,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 			return domain.Artifact{}, fmt.Errorf("chapter %s has no reading content", chapter.Release.Title)
 		}
 	}
-	session.Files["OEBPS/nav.xhtml"] = []byte(buildNavDocument(title, nav))
+	session.Files["OEBPS/nav.xhtml"] = []byte(buildNavDocument(title, nav, strings.SplitN(nav[0].FileName, "#", 2)[0]))
 	content, err = session.write(packageIndented)
 	if err != nil {
 		return domain.Artifact{}, err

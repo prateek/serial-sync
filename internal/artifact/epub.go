@@ -12,10 +12,11 @@ import (
 )
 
 type epubChapter struct {
-	Children []epubChapter
-	FileName string
-	Title    string
-	BodyHTML string
+	Children    []epubChapter
+	FileName    string
+	Title       string
+	BodyHTML    string
+	FrontMatter bool
 }
 
 type containerDocument struct {
@@ -638,6 +639,7 @@ func buildSimpleEPUB(title, author, identifier string, modified time.Time, chapt
 		Properties: "nav",
 	}}
 	spine := []opfItemref{}
+	bodyMatter := ""
 	for idx, chapter := range chapters {
 		id := fmt.Sprintf("chapter-%03d", idx+1)
 		document, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName(chapter.Title, chapter.BodyHTML, "3.0", "", chapter.FileName)
@@ -651,8 +653,11 @@ func buildSimpleEPUB(title, author, identifier string, modified time.Time, chapt
 			MediaType: "application/xhtml+xml",
 		})
 		spine = append(spine, opfItemref{IDRef: id})
+		if bodyMatter == "" && !chapter.FrontMatter {
+			bodyMatter = chapter.FileName
+		}
 	}
-	files["OEBPS/nav.xhtml"] = []byte(buildNavDocument(title, chapters))
+	files["OEBPS/nav.xhtml"] = []byte(buildNavDocument(title, chapters, bodyMatter))
 	pkg := opfPackage{
 		Xmlns:    "http://www.idpf.org/2007/opf",
 		UniqueID: "bookid",
@@ -693,7 +698,18 @@ func rewriteEPUBPackage(original []byte, title, author, identifier string, modif
 	}
 
 	pkg := &session.Package
-	if strings.TrimSpace(pkg.Version) == "" {
+	// Upgrading keeps the spine, so saved reading positions still resolve.
+	upgrade := strings.TrimSpace(prefaceHTML) != "" && strings.HasPrefix(strings.TrimSpace(pkg.Version), "2")
+	var legacyTOC []epubChapter
+	if upgrade {
+		if legacyTOC, err = session.memberNavigation(""); err != nil {
+			return nil, err
+		}
+	}
+	if upgrade {
+		upgradeLegacyMetadata(pkg)
+	}
+	if strings.TrimSpace(pkg.Version) == "" || upgrade {
 		pkg.Version = "3.0"
 	}
 	if strings.TrimSpace(pkg.Xmlns) == "" {
@@ -718,7 +734,7 @@ func rewriteEPUBPackage(original []byte, title, author, identifier string, modif
 
 	if strings.TrimSpace(prefaceHTML) != "" {
 		prefaceFileName, prefaceArchivePath := uniquePrefacePath(session.Files, opfDir)
-		prefaceDocument, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName("Preface", prefaceHTML, pkg.Version, prefaceViewport, prefaceFileName)
+		prefaceDocument, err := buildXHTMLDocumentForEPUBVersionWithViewportAndFileName(prefaceTitle, prefaceHTML, pkg.Version, prefaceViewport, prefaceFileName)
 		if err != nil {
 			return nil, fmt.Errorf("build preface: %w", err)
 		}
@@ -736,8 +752,81 @@ func rewriteEPUBPackage(original []byte, title, author, identifier string, modif
 		if !spineHasID(pkg.Spine.Itemrefs, manifestItem.ID) {
 			pkg.Spine.Itemrefs = append([]opfItemref{{IDRef: manifestItem.ID}}, pkg.Spine.Itemrefs...)
 		}
+		if upgrade {
+			if err := session.replaceLegacyTOC(title, legacyTOC); err != nil {
+				return nil, err
+			}
+		}
+		if err := session.navigatePreface(prefaceArchivePath); err != nil {
+			return nil, err
+		}
 	}
 	return session.write(packageIndented)
+}
+
+func upgradeLegacyMetadata(pkg *opfPackage) {
+	metadata := &pkg.Metadata
+	for _, meta := range metadata.Meta {
+		if meta.Name != "cover" {
+			continue
+		}
+		for i := range pkg.Manifest.Items {
+			if item := &pkg.Manifest.Items[i]; item.ID == meta.Content && strings.HasPrefix(item.MediaType, "image/") {
+				item.Properties = strings.TrimSpace(item.Properties + " cover-image")
+			}
+		}
+	}
+	legacy := func(attr xml.Attr) (string, bool) {
+		if attr.Name.Space == "http://www.idpf.org/2007/opf" {
+			return attr.Name.Local, true
+		}
+		if attr.Name.Space == "" && strings.HasPrefix(attr.Name.Local, "opf:") {
+			return strings.TrimPrefix(attr.Name.Local, "opf:"), true
+		}
+		return "", false
+	}
+	for i := range metadata.DCElements {
+		element := &metadata.DCElements[i]
+		id := ""
+		var kept []xml.Attr
+		var refinements []opfMeta
+		for _, attr := range element.Attrs {
+			name, isLegacy := legacy(attr)
+			switch {
+			case !isLegacy:
+				if attr.Name.Local == "id" {
+					id = attr.Value
+				}
+				kept = append(kept, attr)
+			case name == "role":
+				refinements = append(refinements, opfMeta{Property: "role", Value: attr.Value, Attrs: []xml.Attr{{Name: xml.Name{Local: "scheme"}, Value: "marc:relators"}}})
+			case name == "file-as":
+				refinements = append(refinements, opfMeta{Property: "file-as", Value: attr.Value})
+			}
+		}
+		if len(refinements) > 0 && id == "" {
+			id = fmt.Sprintf("serial-sync-%s-%d", element.Name, i+1)
+			kept = append(kept, xml.Attr{Name: xml.Name{Local: "id"}, Value: id})
+		}
+		for _, refinement := range refinements {
+			refinement.Refines = "#" + id
+			metadata.Meta = append(metadata.Meta, refinement)
+		}
+		element.Attrs = kept
+	}
+	stripLegacy := func(identifier *opfIdentifier) {
+		kept := identifier.Attrs[:0]
+		for _, attr := range identifier.Attrs {
+			if _, isLegacy := legacy(attr); !isLegacy {
+				kept = append(kept, attr)
+			}
+		}
+		identifier.Attrs = kept
+	}
+	stripLegacy(&metadata.Identifier)
+	for i := range metadata.Identifiers {
+		stripLegacy(&metadata.Identifiers[i])
+	}
 }
 
 func manifestHasID(items []opfItem, id string) bool {
@@ -1259,7 +1348,7 @@ func manifestItemUsesXMLNamespace(item opfItem, files map[string][]byte, opfDir,
 	}
 }
 
-func buildNavDocument(title string, chapters []epubChapter) string {
+func buildNavDocument(title string, chapters []epubChapter, bodyMatter string) string {
 	var builder strings.Builder
 	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="utf-8" /><title>`)
@@ -1285,8 +1374,17 @@ func buildNavDocument(title string, chapters []epubChapter) string {
 		}
 	}
 	writeEntries(chapters)
-	builder.WriteString(`</ol></nav></body></html>`)
+	builder.WriteString(`</ol></nav>`)
+	builder.WriteString(landmarksNav(bodyMatter))
+	builder.WriteString(`</body></html>`)
 	return builder.String()
+}
+
+func landmarksNav(bodyMatter string) string {
+	if bodyMatter == "" {
+		return ""
+	}
+	return `<nav epub:type="landmarks" hidden=""><ol><li><a epub:type="bodymatter" href="` + escapeHTML(bodyMatter) + `">Start of story</a></li></ol></nav>`
 }
 
 func writeEPUBArchive(files map[string][]byte) ([]byte, error) {

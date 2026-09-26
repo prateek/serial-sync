@@ -359,7 +359,7 @@ Recommended default:
 
 EPUBs generated, converted, or wrapped by serial-sync must pass EPUBCheck before storage. Only `preserve` EPUB attachments without wrapping remain byte-preserving. `epub` output includes selected metadata without generated back matter on standalone releases. Only assembled books/volumes can receive a final author page; a book label or attachment role alone does not establish completeness.
 
-For EPUB 2 attachments, wrapping retains author metadata and guide links while repairing empty guide sections. See the [output compatibility notes](config.md) before changing a series to pass-through output to avoid a validation failure.
+Wrapping an EPUB 2 attachment upgrades it to EPUB 3, keeping author metadata, cover, guide links and the spine while repairing empty guide sections. Wrapped chapters list the preface as "Author's note" and mark the story as body matter. Standalone `epub` chapters are titled by the chapter ("Chapter 430", "Book Two, Chapter 71"), never the series name; see the [output compatibility notes](config.md) and [chapter titles](config.md#portable-publication-metadata).
 
 For a full EPUBCheck sweep after publishing, run:
 
@@ -475,6 +475,6 @@ an explicit override after reviewing the candidate.
 
 Keep identity/routing rules separate from author profiles and artwork. Configure durable profiles under `[[author_profiles]]`, select them with source `author_profile` or series `author_profiles`, and put descriptions/covers in series or book `metadata`. See the [metadata configuration](config.md#portable-publication-metadata).
 
-Compare embedded titles and creators with the source posts when curating attachments. For a series whose embedded identity is unreliable, select `metadata.identity_source = "release"` to use each post's title and the canonical author. Books can override the inherited policy with `"embedded"`. Review the affected copies through explicit rebuild preview; a valid EPUB package can still contain the wrong chapter title.
+Compare embedded titles and creators with the source posts when curating attachments. For a series whose embedded identity is unreliable, select `metadata.identity_source = "release"` to use the chapter title derived from each post and the canonical author. Books can override the inherited policy with `"embedded"`. Review the affected copies through explicit rebuild preview; a valid EPUB package can still contain the wrong chapter title.
 
 Use captured creator identity or a reviewed public-web identity link. Do not promote a campaign banner, portrait, or loosely matched search image to a book cover. Keep selected asset bytes in the offline workspace and record their source URL. Preview and rebuild use the same metadata resolver as sync. Metadata is excluded from upstream content hashes; editing it changes new publications immediately and existing publications only through explicit rebuild.

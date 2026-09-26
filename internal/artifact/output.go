@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/sequence"
 )
 
 // outputProfile is applyOutputProfile's answer: the profiled bytes plus the
@@ -79,14 +80,15 @@ func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release do
 		if isHTMLSource(originalFileName, mimeType) {
 			chapters := []epubChapter{{
 				FileName: "chapter-001.xhtml",
-				Title:    normalized.Title,
+				Title:    readerChapterTitle(track, release, decision),
 				BodyHTML: string(content),
 			}}
 			if prefaceHTML != "" {
 				chapters = append([]epubChapter{{
-					FileName: "preface.xhtml",
-					Title:    "Preface",
-					BodyHTML: prefaceHTML,
+					FileName:    "preface.xhtml",
+					Title:       prefaceTitle,
+					BodyHTML:    prefaceHTML,
+					FrontMatter: true,
 				}}, chapters...)
 			}
 			epubContent, err := buildSimpleEPUB(track.TrackName, author, identifier, modified, chapters)
@@ -99,6 +101,17 @@ func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release do
 	default:
 		return outputProfile{Err: fmt.Errorf("unsupported output format %q", outputFormat)}
 	}
+}
+
+func readerChapterTitle(track domain.StoryTrack, release domain.Release, decision domain.TrackDecision) string {
+	if decision.OutputFormat != domain.OutputFormatEPUB {
+		return release.Title
+	}
+	seq := domain.Sequence{}
+	if decision.Sequence != nil {
+		seq = *decision.Sequence
+	}
+	return sequence.ChapterTitle(release.Title, track.TrackName, seq)
 }
 
 func isPDFSource(fileName, mimeType string) bool {

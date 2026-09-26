@@ -11,15 +11,19 @@ import (
 	"time"
 
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/sequence"
 )
 
 type publicationMetadata struct {
 	Title, Author, Series string
-	SeriesIndex           string
-	PublishedAt           time.Time
-	PreserveEmbedded      bool
-	IncludeAbout          bool
-	Publication           *domain.PublicationMetadata
+	// Chapter marks a standalone chapter in epub output.
+	Chapter          bool
+	ExpandedTitle    string
+	SeriesIndex      string
+	PublishedAt      time.Time
+	PreserveEmbedded bool
+	IncludeAbout     bool
+	Publication      *domain.PublicationMetadata
 }
 
 // positionIndex renders a scalar series position, where zero means unknown.
@@ -39,14 +43,27 @@ func withPublicationMetadata(content []byte, metadata publicationMetadata) ([]by
 	if strings.HasPrefix(pkg.Version, "2") && pkg.Spine.Toc == "" {
 		pkg.Spine.Toc = firstNCXID(pkg.Manifest.Items)
 	}
+	replacedTitles := []string{metadata.ExpandedTitle, pkg.Metadata.Title}
+	expanded := metadata.ExpandedTitle
 	if metadata.Publication != nil && metadata.Publication.IdentitySource == domain.PublicationIdentityRelease {
 		replacePublicationIdentity(&pkg.Metadata, session.PackagePath, metadata.Title, metadata.Author)
 	} else {
 		if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "title") {
 			setPublicationDC(&pkg.Metadata, "title", metadata.Title)
+		} else if metadata.Chapter {
+			expanded = pkg.Metadata.Title
+			setPublicationDC(&pkg.Metadata, "title", sequence.WithoutSeriesName(pkg.Metadata.Title, metadata.Series))
 		}
 		if !metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "creator") {
 			setPublicationDC(&pkg.Metadata, "creator", metadata.Author)
+		}
+	}
+	if metadata.Chapter {
+		if err := session.relabelChapterNavigation(firstDCValue(pkg.Metadata, "title"), metadata.Series, replacedTitles); err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(pkg.Version, "3") {
+			addExpandedTitle(pkg, expanded)
 		}
 	}
 	if !metadata.PublishedAt.IsZero() && (!metadata.PreserveEmbedded || !hasDCElement(pkg.Metadata.DCElements, "date")) {
@@ -172,4 +189,27 @@ func setPublicationDC(metadata *opfMetadata, name, value string) {
 		}
 	}
 	metadata.DCElements = append(metadata.DCElements, opfDCElement{Name: name, Value: value})
+}
+
+func firstDCValue(metadata opfMetadata, name string) string {
+	for _, element := range metadata.DCElements {
+		if element.Name == name {
+			return element.Value
+		}
+	}
+	return ""
+}
+
+func addExpandedTitle(pkg *opfPackage, expanded string) {
+	expanded = strings.TrimSpace(expanded)
+	if expanded == "" || strings.EqualFold(expanded, strings.TrimSpace(firstDCValue(pkg.Metadata, "title"))) {
+		return
+	}
+	id := "serial-sync-title-expanded"
+	for suffix := 1; bytes.Contains(mustXML(*pkg), []byte(`id="`+id+`"`)); suffix++ {
+		id = fmt.Sprintf("serial-sync-title-expanded-%d", suffix)
+	}
+	// Readers take the first dc:title as the main title.
+	pkg.Metadata.DCElements = append(pkg.Metadata.DCElements, opfDCElement{Name: "title", Value: expanded, Attrs: []xml.Attr{{Name: xml.Name{Local: "id"}, Value: id}}})
+	pkg.Metadata.Meta = append(pkg.Metadata.Meta, opfMeta{Property: "title-type", Refines: "#" + id, Value: "expanded"})
 }

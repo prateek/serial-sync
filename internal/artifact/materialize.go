@@ -232,8 +232,14 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 		if decision.Sequence != nil {
 			seriesIndex = firstNonEmptyString(decision.Sequence.SeriesIndex, positionIndex(decision.Sequence.Position))
 		}
+		chapter := decision.OutputFormat == domain.OutputFormatEPUB
+		expanded := ""
+		if chapter {
+			expanded = release.Title
+		}
 		content, err = withPublicationMetadata(content, publicationMetadata{
-			Title: release.Title, Author: firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName),
+			Title: readerChapterTitle(track, release, decision), Chapter: chapter, ExpandedTitle: expanded,
+			Author: firstNonEmptyString(track.CanonicalAuthor, normalized.CreatorName),
 			Series: track.TrackName, SeriesIndex: seriesIndex, PublishedAt: release.PublishedAt,
 			PreserveEmbedded: described.PreserveEmbedded, Publication: decision.Publication,
 		})

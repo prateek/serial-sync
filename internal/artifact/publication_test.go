@@ -188,8 +188,8 @@ func TestAttachmentPublicationTitles(t *testing.T) {
 		name, mime, title, author string
 		content                   []byte
 	}{
-		{"chapter-53.pdf", "application/pdf", "Harbor Chapter 53", "Ada", minimalPDF()},
-		{"chapter-53.html", "text/html", "Harbor Chapter 53", "Ada", []byte("<p>Chapter text.</p>")},
+		{"chapter-53.pdf", "application/pdf", "Chapter 53", "Ada", minimalPDF()},
+		{"chapter-53.html", "text/html", "Chapter 53", "Ada", []byte("<p>Chapter text.</p>")},
 		{"chapter-53.epub", "application/epub+zip", "Author supplied title", "Author supplied name", epub},
 	} {
 		t.Run(input.name, func(t *testing.T) {

@@ -245,7 +245,7 @@ func TestGeneratedSimpleEPUBFlattensUnsupportedEmbeddedMarkup(t *testing.T) {
 	assertEPUBCheckPasses(t, path)
 }
 
-func TestWrapEPUBWithPrefaceKeepsEPUB2IdentifierAndTOC(t *testing.T) {
+func TestWrapEPUBWithPrefaceUpgradesEPUB2Package(t *testing.T) {
 	t.Parallel()
 
 	original := buildEPUB2Fixture(t)
@@ -262,20 +262,26 @@ func TestWrapEPUBWithPrefaceKeepsEPUB2IdentifierAndTOC(t *testing.T) {
 	assertXMLWellFormed(t, "preface", preface)
 
 	opf := string(files["content.opf"])
+	if !strings.Contains(opf, `version="3.0"`) {
+		t.Fatalf("wrapped EPUB 2 package was not upgraded:\n%s", opf)
+	}
 	if !strings.Contains(opf, `unique-identifier="uuid_id"`) || !strings.Contains(opf, `id="uuid_id"`) {
-		t.Fatalf("EPUB 2 unique identifier was not preserved:\n%s", opf)
+		t.Fatalf("unique identifier was not preserved:\n%s", opf)
 	}
-	if !strings.Contains(opf, `<spine toc="ncx"`) {
-		t.Fatalf("EPUB 2 spine toc was not repaired:\n%s", opf)
+	if strings.Contains(opf, "opf:scheme") || strings.Contains(opf, `toc="ncx"`) {
+		t.Fatalf("EPUB 2-only markup survived the upgrade:\n%s", opf)
 	}
-	if !strings.Contains(opf, `<meta name="cover" content="cover-image"`) {
-		t.Fatalf("EPUB 2 cover metadata was not preserved:\n%s", opf)
+	if _, ok := files["toc.ncx"]; ok {
+		t.Fatal("NCX survived the upgrade")
 	}
-	if !strings.Contains(opf, `opf:scheme="UUID"`) {
-		t.Fatalf("EPUB 2 identifier attributes were not preserved:\n%s", opf)
+	if !strings.Contains(string(files["serial-sync-nav.xhtml"]), `<a href="chapter.xhtml">Chapter</a>`) {
+		t.Fatalf("NCX entries did not move to the navigation document:\n%s", files["serial-sync-nav.xhtml"])
+	}
+	if !strings.Contains(opf, `href="cover.png" media-type="image/png" properties="cover-image"`) {
+		t.Fatalf("cover was not carried into EPUB 3:\n%s", opf)
 	}
 	if !strings.Contains(opf, `<guide`) || !strings.Contains(opf, `type="text" title="Chapter" href="chapter.xhtml"`) {
-		t.Fatalf("EPUB 2 guide was not preserved:\n%s", opf)
+		t.Fatalf("guide was not preserved:\n%s", opf)
 	}
 }
 
@@ -322,9 +328,13 @@ func TestWrappedEPUB2PreservesLocalNamespaces(t *testing.T) {
 			}
 			var pkg struct {
 				Creator struct {
-					Role   string `xml:"http://www.idpf.org/2007/opf role,attr"`
-					FileAs string `xml:"http://www.idpf.org/2007/opf file-as,attr"`
+					ID string `xml:"id,attr"`
 				} `xml:"metadata>creator"`
+				Meta []struct {
+					Property string `xml:"property,attr"`
+					Refines  string `xml:"refines,attr"`
+					Value    string `xml:",chardata"`
+				} `xml:"metadata>meta"`
 				Guide struct {
 					Href string `xml:"href,attr"`
 				} `xml:"guide>reference"`
@@ -332,8 +342,16 @@ func TestWrappedEPUB2PreservesLocalNamespaces(t *testing.T) {
 			if err := xml.Unmarshal(unzipEntries(t, wrapped)["content.opf"], &pkg); err != nil {
 				t.Fatal(err)
 			}
-			if test.name == "creator" && (pkg.Creator.Role != "aut" || pkg.Creator.FileAs != "Author, Original") {
-				t.Fatalf("creator attributes lost: %+v", pkg.Creator)
+			if test.name == "creator" {
+				refined := map[string]string{}
+				for _, meta := range pkg.Meta {
+					if pkg.Creator.ID != "" && meta.Refines == "#"+pkg.Creator.ID {
+						refined[meta.Property] = meta.Value
+					}
+				}
+				if refined["role"] != "aut" || refined["file-as"] != "Author, Original" {
+					t.Fatalf("creator role and sort name lost in the upgrade: %+v", refined)
+				}
 			}
 			if pkg.Guide.Href != "chapter.xhtml" {
 				t.Fatalf("guide link lost: %+v", pkg.Guide)
@@ -362,8 +380,11 @@ func TestWrappedEPUB2DropsEmptyGuide(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := unzipEntries(t, wrapped)
-	if !bytes.Equal(got["chapter.xhtml"], files["chapter.xhtml"]) || !bytes.Equal(got["toc.ncx"], files["toc.ncx"]) {
-		t.Fatal("chapter content or navigation changed")
+	if !bytes.Equal(got["chapter.xhtml"], files["chapter.xhtml"]) {
+		t.Fatal("chapter content changed")
+	}
+	if strings.Contains(string(got["content.opf"]), "<guide") {
+		t.Fatalf("empty guide survived:\n%s", got["content.opf"])
 	}
 	file := filepath.Join(t.TempDir(), "wrapped.epub")
 	if err := os.WriteFile(file, wrapped, 0o644); err != nil {
