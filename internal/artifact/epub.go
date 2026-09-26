@@ -1352,18 +1352,18 @@ func buildNavDocument(title string, chapters []epubChapter, bodyMatter string) s
 	var builder strings.Builder
 	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="utf-8" /><title>`)
-	builder.WriteString(escapeHTML(title))
+	builder.WriteString(escapeXMLText(title))
 	builder.WriteString(`</title></head><body><nav epub:type="toc" id="toc"><h1>`)
-	builder.WriteString(escapeHTML(title))
+	builder.WriteString(escapeXMLText(title))
 	builder.WriteString(`</h1><ol>`)
 	var writeEntries func([]epubChapter)
 	writeEntries = func(entries []epubChapter) {
 		for _, chapter := range entries {
 			builder.WriteString(`<li>`)
 			if chapter.FileName == "" {
-				builder.WriteString(`<span>` + escapeHTML(chapter.Title) + `</span>`)
+				builder.WriteString(`<span>` + escapeXMLText(chapter.Title) + `</span>`)
 			} else {
-				builder.WriteString(`<a href="` + escapeHTML(chapter.FileName) + `">` + escapeHTML(chapter.Title) + `</a>`)
+				builder.WriteString(`<a href="` + escapeXMLText(chapter.FileName) + `">` + escapeXMLText(chapter.Title) + `</a>`)
 			}
 			if len(chapter.Children) > 0 {
 				builder.WriteString(`<ol>`)
@@ -1384,7 +1384,7 @@ func landmarksNav(bodyMatter string) string {
 	if bodyMatter == "" {
 		return ""
 	}
-	return `<nav epub:type="landmarks" hidden=""><ol><li><a epub:type="bodymatter" href="` + escapeHTML(bodyMatter) + `">Start of story</a></li></ol></nav>`
+	return `<nav epub:type="landmarks" hidden=""><ol><li><a epub:type="bodymatter" href="` + escapeXMLText(bodyMatter) + `">Start of story</a></li></ol></nav>`
 }
 
 func writeEPUBArchive(files map[string][]byte) ([]byte, error) {
@@ -1442,7 +1442,21 @@ func mustXML(value any) []byte {
 	if err != nil {
 		panic(err)
 	}
-	return append([]byte(xml.Header), data...)
+	return append([]byte(xml.Header), namedQuotes(data)...)
+}
+
+// namedQuotes rewrites the numeric quote references encoding/xml emits.
+// Readers whose XML parsers decode only the predefined entities, BookOrbit's
+// among them, otherwise show "&#39;" in titles. Attributes are always
+// double-quoted, so a literal apostrophe is safe anywhere.
+func namedQuotes(data []byte) []byte {
+	return bytes.ReplaceAll(bytes.ReplaceAll(data, []byte("&#39;"), []byte("'")), []byte("&#34;"), []byte("&quot;"))
+}
+
+// escapeXMLText escapes text and double-quoted attribute values for XML
+// without numeric references; see namedQuotes.
+func escapeXMLText(input string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace(input)
 }
 
 func safeIdentifier(title string) string {

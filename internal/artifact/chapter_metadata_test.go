@@ -315,3 +315,24 @@ func TestWrappedEPUB3GainsBodyMatterAndAnAuthorsNote(t *testing.T) {
 	assertTOC(t, session, "Author's note", "Chapter 9")
 	assertPassesEPUBCheck(t, session)
 }
+
+// BookOrbit's XML parser decodes named entities only, so a numeric reference
+// such as &#39; reaches the reader as literal text.
+func TestReaderFacingTextSpellsApostrophesOut(t *testing.T) {
+	session := planChapter(t, chapterPlanInput{
+		series: "Harbor", releaseTitle: "Harbor - Chapter 12: Hero's Due",
+		sequence: &domain.Sequence{Chapter: 12, Position: 12, MatchedText: "Chapter 12", SeriesIndex: "12"},
+		output:   domain.OutputFormatEPUB, identity: domain.PublicationIdentityRelease,
+		attachment: buildEPUB2Fixture(t), preface: true,
+	})
+	for name, data := range session.Files {
+		if !strings.HasSuffix(name, ".opf") && !strings.Contains(name, "nav") {
+			continue
+		}
+		if bytes.Contains(data, []byte("&#39;")) || bytes.Contains(data, []byte("&#34;")) {
+			t.Fatalf("%s spells a quote as a numeric reference:\n%s", name, data)
+		}
+	}
+	assertTitles(t, session.Package, [2]string{"Chapter 12: Hero's Due", ""}, [2]string{"Harbor - Chapter 12: Hero's Due", "expanded"})
+	assertTOC(t, session, "Author's note", "Chapter 12: Hero's Due")
+}

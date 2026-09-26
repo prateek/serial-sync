@@ -81,7 +81,7 @@ func (s *epubPackage) write(encoding packageEncoding) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		data = append([]byte(xml.Header), encoded...)
+		data = append([]byte(xml.Header), namedQuotes(encoded)...)
 	default:
 		return nil, fmt.Errorf("unknown package encoding %d", encoding)
 	}

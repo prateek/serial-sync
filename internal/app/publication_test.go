@@ -195,8 +195,9 @@ func writePublicationIdentityFixture(t *testing.T, file string) {
 }
 
 func TestPublicationFormatUpgradeRequiresExplicitRebuild(t *testing.T) {
-	// 2 predates the About-free recipe; 3 predates chapter titles and landmarks.
-	for _, previous := range []int{2, 3} {
+	// 2 predates the About-free recipe; 3 predates chapter titles and landmarks;
+	// 4 spelled apostrophes as numeric references.
+	for _, previous := range []int{2, 3, 4} {
 		t.Run(fmt.Sprintf("from output version %d", previous), func(t *testing.T) {
 			s, _ := newReaderService(t)
 			s.Config.Series[0].Output.Format = "epub"

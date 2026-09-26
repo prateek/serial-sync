@@ -283,7 +283,7 @@ func (s *epubPackage) relabelChapterNavigation(title, series string, replaced []
 			continue
 		}
 		data := s.Files[entry]
-		s.Files[entry] = append(append(append([]byte{}, data[:content[0].start]...), escapeHTML(title)...), data[content[0].end:]...)
+		s.Files[entry] = append(append(append([]byte{}, data[:content[0].start]...), escapeXMLText(title)...), data[content[0].end:]...)
 	}
 	return nil
 }
@@ -483,7 +483,7 @@ func (s *epubPackage) navigatePreface(preface string) error {
 			return err
 		}
 		dir := path.Dir(entry)
-		entryHTML := `<li><a href="` + escapeHTML(relativeHref(dir, preface)) + `">` + escapeHTML(prefaceTitle) + `</a></li>`
+		entryHTML := `<li><a href="` + escapeXMLText(relativeHref(dir, preface)) + `">` + escapeXMLText(prefaceTitle) + `</a></li>`
 		landmarks := ""
 		if bodyMatter != "" {
 			landmarks = landmarksNav(relativeHref(dir, bodyMatter))
