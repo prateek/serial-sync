@@ -645,16 +645,16 @@ func TestFailedRegroupDoesNotActivateOnlyPartOfTheNewVolumes(t *testing.T) {
 	shim := t.TempDir()
 	script := `#!/bin/sh
 n=0
-if [ -f "$READER_FAIL_COUNT" ]; then n=$(cat "$READER_FAIL_COUNT"); fi
-n=$((n+1))
-printf '%s' "$n" > "$READER_FAIL_COUNT"
-if [ "$n" -eq 2 ]; then echo 'injected validator failure' >&2; exit 1; fi
-exec "$READER_REAL_VALIDATOR" "$@"
+while IFS= read -r path; do
+  n=$((n+1))
+  pass=false
+  if [ "$n" -ne 2 ] && "$READER_REAL_VALIDATOR" "$path" >/dev/null 2>&1; then pass=true; fi
+  printf '{"path":"%s","pass":%s,"messages":[]}\n' "$path" "$pass"
+done
 `
-	if err := os.WriteFile(filepath.Join(shim, "epubcheck"), []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(shim, "serial-sync-epubcheck"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("READER_FAIL_COUNT", filepath.Join(shim, "count"))
 	t.Setenv("READER_REAL_VALIDATOR", realValidator)
 	originalPATH := os.Getenv("PATH")
 	t.Setenv("PATH", shim+string(os.PathListSeparator)+originalPATH)

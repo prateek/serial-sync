@@ -5,6 +5,17 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/serial-sync ./cmd/serial-sync
 
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS epubcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    default-jdk-headless \
+    unzip \
+    wget \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/install-epubcheck /src/scripts/install-epubcheck
+COPY third_party/epubcheck /src/third_party/epubcheck
+RUN BIN_DIR=/out/bin /src/scripts/install-epubcheck /opt/epubcheck
+
 FROM debian:trixie-slim
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -40,8 +51,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && groupadd --gid 10001 serialsync \
   && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/serialsync --shell /bin/bash serialsync \
   && mkdir -p /config /state /work
-COPY scripts/install-epubcheck /tmp/install-epubcheck
-RUN /tmp/install-epubcheck && rm /tmp/install-epubcheck
+COPY --from=epubcheck /opt/epubcheck /opt/epubcheck
+COPY --from=epubcheck /out/bin/ /usr/local/bin/
 WORKDIR /work
 COPY --from=build /out/serial-sync /usr/local/bin/serial-sync
 COPY scripts/container/google-chrome /usr/local/bin/google-chrome

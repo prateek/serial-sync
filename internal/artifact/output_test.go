@@ -206,8 +206,8 @@ func TestApplyOutputProfileAcceptsMultiIdentifierEPUBWithoutPreface(t *testing.T
 func TestMaterializeRejectsEPUBCheckInvalidOutput(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	root := t.TempDir()
 	materializer := New(root)

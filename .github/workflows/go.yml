@@ -12,6 +12,6 @@ jobs:
     container: golang:1.27-trixie
     steps:
       - uses: actions/checkout@v7
-      - run: apt-get update && apt-get install -y --no-install-recommends calibre default-jre-headless unzip
+      - run: apt-get update && apt-get install -y --no-install-recommends calibre default-jdk-headless unzip
       - run: scripts/install-epubcheck
       - run: go test -timeout 20m ./...

@@ -70,7 +70,7 @@ func TestPortableMetadataPreservesStoryAndNavigation(t *testing.T) {
 			if !strings.Contains(string(after[packagePath]), "Writes serials.") {
 				t.Fatal("author biography not retained in metadata")
 			}
-			if err := validateEPUBArchive(content); err != nil {
+			if err := validateEPUBArchive(t.Context(), content); err != nil {
 				t.Fatal(err)
 			}
 			again, err := withPublicationMetadata(original, metadata)
@@ -244,7 +244,7 @@ func TestVolumePreservesNavigationGroupsAndFragmentLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateEPUBArchive(original); err != nil {
+	if err := validateEPUBArchive(t.Context(), original); err != nil {
 		t.Fatalf("source EPUB: %v", err)
 	}
 	file := filepath.Join(t.TempDir(), "member.epub")
@@ -402,7 +402,7 @@ func TestPublicationRemovesOnlyGeneratedBackMatter(t *testing.T) {
 						}
 					}
 				}
-				if err := validateEPUBArchive(result); err != nil {
+				if err := validateEPUBArchive(t.Context(), result); err != nil {
 					t.Fatal(err)
 				}
 				again, err := withPublicationMetadata(result, metadata)
@@ -451,7 +451,7 @@ func TestWrappedChapterRemovesGeneratedAbout(t *testing.T) {
 	if !bytes.Contains(files["OEBPS/chapter.xhtml"], []byte("Story ending.")) {
 		t.Fatal("story lost")
 	}
-	if err := validateEPUBArchive(plan.SelectedContent); err != nil {
+	if err := validateEPUBArchive(t.Context(), plan.SelectedContent); err != nil {
 		t.Fatal(err)
 	}
 }

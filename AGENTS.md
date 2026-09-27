@@ -17,7 +17,7 @@
 - If workflow/output behavior changes, update `README.md`, `docs/config.md`, `docs/rules.md`, and `skills/serial-sync-rule-authoring/SKILL.md` in the same change.
 
 Verify with:
-- `go test ./...`
+- `go test ./...` (natively this needs `serial-sync-epubcheck` on `PATH`: run `BIN_DIR=~/.local/bin scripts/install-epubcheck ~/.local/share/epubcheck` with a JDK first on `PATH`)
 - `go run ./cmd/serial-sync --config ./examples/config.demo.toml setup check`
 - a fixture-backed `setup preview` or `run` when changing authoring/output behavior
 - a Docker-based end-to-end run when changing browser/bootstrap, container runtime, or Calibre-backed conversion behavior

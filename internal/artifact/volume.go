@@ -126,7 +126,7 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 	if err != nil {
 		return domain.Artifact{}, err
 	}
-	if err := validateEPUBArchive(content); err != nil {
+	if err := validateEPUBArchive(ctx, content); err != nil {
 		return domain.Artifact{}, err
 	}
 	sum := sha256.Sum256(content)

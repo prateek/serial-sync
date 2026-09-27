@@ -291,7 +291,7 @@ func (m *Materializer) Materialize(ctx context.Context, source domain.Source, tr
 	normalizedPath := filepath.Join(dir, baseName+".normalized.json")
 	rawPath := filepath.Join(dir, baseName+".raw.json")
 	if plan.ValidateEPUBCheck {
-		if err := validateEPUBArchive(plan.SelectedContent); err != nil {
+		if err := validateEPUBArchive(ctx, plan.SelectedContent); err != nil {
 			return domain.Artifact{}, err
 		}
 	}

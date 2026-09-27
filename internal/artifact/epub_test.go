@@ -2,7 +2,6 @@ package artifact
 
 import (
 	"bytes"
-	"context"
 	"encoding/xml"
 	"os"
 	"os/exec"
@@ -59,8 +58,8 @@ func TestBuildSimpleEPUBProducesXMLWellFormedEPUB3(t *testing.T) {
 func TestGeneratedSimpleEPUBPassesEPUBCheck(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -90,8 +89,8 @@ func TestGeneratedSimpleEPUBPassesEPUBCheck(t *testing.T) {
 func TestGeneratedSimpleEPUBWithRemoteImagePassesEPUBCheck(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -111,8 +110,8 @@ func TestGeneratedSimpleEPUBWithRemoteImagePassesEPUBCheck(t *testing.T) {
 func TestGeneratedSimpleEPUBWithLinkedRemoteImagePassesEPUBCheck(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -139,8 +138,8 @@ func TestGeneratedSimpleEPUBWithLinkedRemoteImagePassesEPUBCheck(t *testing.T) {
 func TestGeneratedSimpleEPUBDropsInlineStyleURLs(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -164,8 +163,8 @@ func TestGeneratedSimpleEPUBDropsInlineStyleURLs(t *testing.T) {
 func TestGeneratedSimpleEPUBDropsRootRelativeLinks(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -193,8 +192,8 @@ func TestGeneratedSimpleEPUBDropsRootRelativeLinks(t *testing.T) {
 func TestGeneratedSimpleEPUBPreservesSameDocumentLinks(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -221,8 +220,8 @@ func TestGeneratedSimpleEPUBPreservesSameDocumentLinks(t *testing.T) {
 func TestGeneratedSimpleEPUBFlattensUnsupportedEmbeddedMarkup(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content, err := buildSimpleEPUB("Main Series", "Author Name", "urn:uuid:11111111-1111-1111-1111-111111111111", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), []epubChapter{{
 		FileName: "chapter-001.xhtml",
@@ -288,8 +287,8 @@ func TestWrapEPUBWithPrefaceUpgradesEPUB2Package(t *testing.T) {
 func TestWrappedEPUB2PassesEPUBCheck(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	original := buildEPUB2Fixture(t)
 	wrapped, err := wrapEPUBWithPreface(original, "Wrapped Book", "Author Name", "urn:uuid:22222222-2222-2222-2222-222222222222", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), "<p>preface</p>")
@@ -414,8 +413,8 @@ func TestWrapEPUBWithPrefaceKeepsSelectedIdentifier(t *testing.T) {
 func TestWrapEPUBWithPrefaceDropsDuplicatePrefaceIDs(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	original := buildMultiIdentifierEPUB3Fixture(t)
 	wrapped, err := wrapEPUBWithPreface(original, "Wrapped Book", "Author Name", "urn:uuid:22222222-2222-2222-2222-222222222222", time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC), `<p id="note">first</p><p id="note">second</p>`)
@@ -475,7 +474,7 @@ func TestValidateEPUBArchiveResolvesPercentEncodedManifestHrefs(t *testing.T) {
 	t.Parallel()
 
 	content := buildPercentEncodedHrefFixture(t)
-	if err := validateEPUBArchive(content); err != nil {
+	if err := validateEPUBArchive(t.Context(), content); err != nil {
 		t.Fatalf("validateEPUBArchive: %v", err)
 	}
 }
@@ -484,7 +483,7 @@ func TestValidateEPUBArchiveSelectsPackageIdentifier(t *testing.T) {
 	t.Parallel()
 
 	content := buildMultiIdentifierEPUB3Fixture(t)
-	if err := validateEPUBArchive(content); err != nil {
+	if err := validateEPUBArchive(t.Context(), content); err != nil {
 		t.Fatalf("validateEPUBArchive: %v", err)
 	}
 }
@@ -493,7 +492,7 @@ func TestValidateEPUBArchiveAllowsRefinedDCTermsModified(t *testing.T) {
 	t.Parallel()
 
 	content := buildRefinedModifiedEPUB3Fixture(t)
-	if err := validateEPUBArchive(content); err != nil {
+	if err := validateEPUBArchive(t.Context(), content); err != nil {
 		t.Fatalf("validateEPUBArchive: %v", err)
 	}
 }
@@ -502,7 +501,7 @@ func TestValidateEPUBArchiveRequiresManifestResources(t *testing.T) {
 	t.Parallel()
 
 	content := buildMissingManifestResourceFixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "missing resource") {
 		t.Fatalf("validateEPUBArchive error = %v, want missing resource", err)
 	}
@@ -512,7 +511,7 @@ func TestValidateEPUBArchiveRejectsDuplicateManifestIDs(t *testing.T) {
 	t.Parallel()
 
 	content := buildDuplicateManifestIDFixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "appears more than once") {
 		t.Fatalf("validateEPUBArchive error = %v, want duplicate manifest id", err)
 	}
@@ -522,7 +521,7 @@ func TestValidateEPUBArchiveRequiresMetadataRefinesTargets(t *testing.T) {
 	t.Parallel()
 
 	content := buildMissingMetadataRefinesFixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "refines missing target") {
 		t.Fatalf("validateEPUBArchive error = %v, want missing refines target", err)
 	}
@@ -532,7 +531,7 @@ func TestValidateEPUBArchiveRequiresCollectionTypeTarget(t *testing.T) {
 	t.Parallel()
 
 	content := buildInvalidCollectionTypeFixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "collection-type") {
 		t.Fatalf("validateEPUBArchive error = %v, want collection-type target error", err)
 	}
@@ -542,7 +541,7 @@ func TestValidateEPUBArchiveRequiresValidDCTermsModified(t *testing.T) {
 	t.Parallel()
 
 	content := buildInvalidModifiedEPUB3Fixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "dcterms:modified") {
 		t.Fatalf("validateEPUBArchive error = %v, want invalid dcterms:modified error", err)
 	}
@@ -551,11 +550,11 @@ func TestValidateEPUBArchiveRequiresValidDCTermsModified(t *testing.T) {
 func TestValidateEPUBArchiveRejectsXHTMLContentModelViolations(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content := buildInvalidXHTMLContentModelFixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "epubcheck validation failed") {
 		t.Fatalf("validateEPUBArchive error = %v, want EPUBCheck content-model error", err)
 	}
@@ -564,11 +563,11 @@ func TestValidateEPUBArchiveRejectsXHTMLContentModelViolations(t *testing.T) {
 func TestValidateEPUBArchiveRejectsUndeclaredRemoteResources(t *testing.T) {
 	t.Parallel()
 
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	content := buildUndeclaredRemoteResourceEPUB3Fixture(t)
-	err := validateEPUBArchive(content)
+	err := validateEPUBArchive(t.Context(), content)
 	if err == nil || !strings.Contains(err.Error(), "epubcheck validation failed") {
 		t.Fatalf("validateEPUBArchive error = %v, want EPUBCheck remote-resource error", err)
 	}
@@ -603,8 +602,8 @@ func TestWrapEPUBWithPrefacePreservesOPFAttributes(t *testing.T) {
 	if !strings.Contains(preface, `content="width=1024, height=768"`) {
 		t.Fatalf("preface should reuse the fixed-layout viewport:\n%s", preface)
 	}
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	path := filepath.Join(t.TempDir(), "wrapped-preserved.epub")
 	if err := os.WriteFile(path, wrapped, 0o644); err != nil {
@@ -658,8 +657,8 @@ func TestWrapEPUBWithPrefaceRepairsEmbeddedSVGManifestProperty(t *testing.T) {
 	if !strings.Contains(opf, `properties="svg"`) {
 		t.Fatalf("wrapped OPF should mark XHTML items with embedded SVG:\n%s", opf)
 	}
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	path := filepath.Join(t.TempDir(), "wrapped-svg.epub")
 	if err := os.WriteFile(path, wrapped, 0o644); err != nil {
@@ -704,8 +703,8 @@ func TestWrapEPUBWithPrefaceSanitizesCalibreEPUB3Metadata(t *testing.T) {
 	if got := strings.Count(opf, `property="dcterms:modified"`); got != 1 {
 		t.Fatalf("dcterms:modified count = %d, want 1\n%s", got, opf)
 	}
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 	path := filepath.Join(t.TempDir(), "wrapped-calibre.epub")
 	if err := os.WriteFile(path, wrapped, 0o644); err != nil {
@@ -1343,16 +1342,7 @@ func assertXMLWellFormed(t *testing.T, name string, content []byte) {
 func assertEPUBCheckPasses(t *testing.T, path string) {
 	t.Helper()
 
-	externalToolMu.Lock()
-	defer externalToolMu.Unlock()
-
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, "epubcheck", path).CombinedOutput()
-	if ctx.Err() != nil {
-		t.Fatalf("epubcheck timed out: %v\n%s", ctx.Err(), string(output))
-	}
-	if err != nil {
-		t.Fatalf("epubcheck failed: %v\n%s", err, string(output))
+	if err := sharedEPUBCheck.validate(t.Context(), path, epubcheckTimeout); err != nil {
+		t.Fatal(err)
 	}
 }

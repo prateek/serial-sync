@@ -132,7 +132,7 @@ func TestPublicationIdentityPolicy(t *testing.T) {
 						t.Fatal("identity record link survived or unrelated record link was removed")
 					}
 					if embeddedTitle == "Unknown" {
-						if err := validateEPUBArchive(result); err != nil {
+						if err := validateEPUBArchive(t.Context(), result); err != nil {
 							t.Fatal(err)
 						}
 					}

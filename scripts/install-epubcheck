@@ -1,15 +1,23 @@
 #!/bin/sh
-# Install a pinned EPUBCheck release plus an `epubcheck` wrapper on Linux.
-# Used by the Docker image and CI. Distro packages ship EPUBCheck 4.x, and
-# Debian's /usr/bin/epubcheck is a bare .jar symlink that needs binfmt_misc,
-# which containers don't provide.
+# Install a pinned EPUBCheck release plus `epubcheck` and `serial-sync-epubcheck`
+# wrappers on Linux. Used by the Docker image and CI. Distro packages ship
+# EPUBCheck 4.x, and Debian's /usr/bin/epubcheck is a bare .jar symlink that
+# needs binfmt_misc, which containers don't provide.
 #
-# usage: scripts/install-epubcheck [install-dir]   (needs java on PATH at runtime)
+# `serial-sync-epubcheck` is the long-lived validator serial-sync talks to
+# (third_party/epubcheck); `epubcheck` stays for one-off checks.
+#
+# usage: scripts/install-epubcheck [install-dir]
+#   Needs a JDK on PATH; the wrappers pin the `java` found there at install time.
 set -eu
+
+JAVA=$(command -v java) || { echo "install-epubcheck: java is required" >&2; exit 1; }
+command -v javac >/dev/null || { echo "install-epubcheck: javac is required (install a JDK)" >&2; exit 1; }
 
 EPUBCHECK_VERSION=${EPUBCHECK_VERSION:-5.4.0}
 EPUBCHECK_SHA256=${EPUBCHECK_SHA256:-33350c61038e71dfb3d45a76aed04bf5481e6d5500cb780f6e98db8bbd15a28c}
 INSTALL_DIR=${1:-/opt/epubcheck}
+HELPER_SRC=$(cd "$(dirname "$0")/.." && pwd)/third_party/epubcheck/SerialSyncEPUBCheck.java
 BIN_DIR=${BIN_DIR:-/usr/local/bin}
 
 url="https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip"
@@ -23,12 +31,20 @@ else
 fi
 echo "${EPUBCHECK_SHA256}  $tmp/epubcheck.zip" | sha256sum -c - >/dev/null
 unzip -q "$tmp/epubcheck.zip" -d "$tmp"
+javac --release 11 -Xlint:-options -cp "$tmp/epubcheck-${EPUBCHECK_VERSION}/epubcheck.jar" \
+  -d "$tmp/epubcheck-${EPUBCHECK_VERSION}/serial-sync" "$HELPER_SRC"
 
 rm -rf "$INSTALL_DIR"
 mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
 mv "$tmp/epubcheck-${EPUBCHECK_VERSION}" "$INSTALL_DIR"
 cat > "$BIN_DIR/epubcheck" <<EOF
 #!/bin/sh
-exec java -jar "$INSTALL_DIR/epubcheck.jar" "\$@"
+exec "$JAVA" -jar "$INSTALL_DIR/epubcheck.jar" "\$@"
 EOF
 chmod +x "$BIN_DIR/epubcheck"
+
+cat > "$BIN_DIR/serial-sync-epubcheck" <<EOF
+#!/bin/sh
+exec "$JAVA" -Xmx256m -cp "$INSTALL_DIR/epubcheck.jar:$INSTALL_DIR/serial-sync" SerialSyncEPUBCheck "\$@"
+EOF
+chmod +x "$BIN_DIR/serial-sync-epubcheck"

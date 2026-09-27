@@ -18,8 +18,8 @@ func TestConvertPDFToEPUBProducesStableEPUBCheckValidOutput(t *testing.T) {
 	if _, err := exec.LookPath("ebook-convert"); err != nil {
 		t.Fatalf("ebook-convert is required for PDF to EPUB integration validation: %v", err)
 	}
-	if _, err := exec.LookPath("epubcheck"); err != nil {
-		t.Fatalf("epubcheck is required for EPUB integration validation: %v", err)
+	if _, err := exec.LookPath(epubcheckCommand); err != nil {
+		t.Fatalf("%s is required for EPUB integration validation: %v", epubcheckCommand, err)
 	}
 
 	modified := time.Date(2026, 5, 6, 12, 34, 56, 0, time.UTC)

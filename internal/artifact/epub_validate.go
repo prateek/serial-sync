@@ -8,19 +8,16 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
-	"os/exec"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 )
 
-func validateEPUBArchive(content []byte) error {
+func validateEPUBArchive(ctx context.Context, content []byte) error {
 	if err := validateEPUBArchiveStructure(content); err != nil {
 		return err
 	}
-	return validateEPUBCheck(content)
+	return validateEPUBCheck(ctx, content)
 }
 
 func validateEPUBArchiveStructure(content []byte) error {
@@ -220,33 +217,6 @@ func validEPUBModifiedTimestamp(value string) bool {
 	}
 	_, err := time.Parse("2006-01-02T15:04:05Z", value)
 	return err == nil
-}
-
-func validateEPUBCheck(content []byte) error {
-	epubcheckPath, err := exec.LookPath("epubcheck")
-	if err != nil {
-		return fmt.Errorf("epubcheck is required for EPUB validation: %w", err)
-	}
-	workDir, err := os.MkdirTemp("", "serial-sync-epubcheck-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(workDir)
-
-	epubPath := filepath.Join(workDir, "book.epub")
-	if err := os.WriteFile(epubPath, content, 0o644); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, epubcheckPath, epubPath).CombinedOutput()
-	if ctx.Err() != nil {
-		return fmt.Errorf("epubcheck validation timed out: %w: %s", ctx.Err(), string(output))
-	}
-	if err != nil {
-		return fmt.Errorf("epubcheck validation failed: %w: %s", err, string(output))
-	}
-	return nil
 }
 
 func validateMetadataRefines(pkg opfPackage) error {
