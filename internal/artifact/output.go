@@ -64,40 +64,36 @@ func applyOutputProfile(ctx context.Context, track domain.StoryTrack, release do
 			}
 			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
 		}
-		if isPDFSource(originalFileName, mimeType) {
-			epubContent, err := convertPDFToEPUB(ctx, content, track.TrackName, author, identifier, modified)
-			if err != nil {
+		bodyHTML := ""
+		switch {
+		case isPDFSource(originalFileName, mimeType):
+			var err error
+			if bodyHTML, err = pdfBodyHTML(ctx, content); err != nil {
 				return outputProfile{Err: err}
 			}
-			if prefaceHTML != "" {
-				epubContent, err = wrapEPUBWithPreface(epubContent, track.TrackName, author, identifier, modified, prefaceHTML)
-				if err != nil {
-					return outputProfile{Err: err}
-				}
-			}
-			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
+		case isHTMLSource(originalFileName, mimeType):
+			bodyHTML = string(content)
+		default:
+			return outputProfile{Err: fmt.Errorf("output format %q is only supported for EPUB, PDF, or HTML/text sources", outputFormat)}
 		}
-		if isHTMLSource(originalFileName, mimeType) {
-			chapters := []epubChapter{{
-				FileName: "chapter-001.xhtml",
-				Title:    readerChapterTitle(track, release, decision),
-				BodyHTML: string(content),
-			}}
-			if prefaceHTML != "" {
-				chapters = append([]epubChapter{{
-					FileName:    "preface.xhtml",
-					Title:       prefaceTitle,
-					BodyHTML:    prefaceHTML,
-					FrontMatter: true,
-				}}, chapters...)
-			}
-			epubContent, err := buildSimpleEPUB(track.TrackName, author, identifier, modified, chapters)
-			if err != nil {
-				return outputProfile{Err: err}
-			}
-			return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
+		chapters := []epubChapter{{
+			FileName: "chapter-001.xhtml",
+			Title:    readerChapterTitle(track, release, decision),
+			BodyHTML: bodyHTML,
+		}}
+		if prefaceHTML != "" {
+			chapters = append([]epubChapter{{
+				FileName:    "preface.xhtml",
+				Title:       prefaceTitle,
+				BodyHTML:    prefaceHTML,
+				FrontMatter: true,
+			}}, chapters...)
 		}
-		return outputProfile{Err: fmt.Errorf("output format %q is only supported for EPUB attachments or HTML/text sources", outputFormat)}
+		epubContent, err := buildSimpleEPUB(track.TrackName, author, identifier, modified, chapters)
+		if err != nil {
+			return outputProfile{Err: err}
+		}
+		return outputProfile{Content: epubContent, FileName: described.FileName, MIMEType: described.MIMEType, NeedsCheck: true}
 	default:
 		return outputProfile{Err: fmt.Errorf("unsupported output format %q", outputFormat)}
 	}

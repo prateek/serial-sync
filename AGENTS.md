@@ -1,11 +1,11 @@
 # serial-sync agent notes
 
 - This repo is a Patreon-first sync utility. Keep the public CLI small: `setup`, `run`, `debug`. Prefer `run` for normal execution.
-- Prefer Docker/container execution for user-facing flows and all real end-to-end runs. The image is the intended runtime and includes Chromium, Xvfb, and Calibre. Assume config at `/config/config.toml` and mutable state at `/state`. Use direct `go run` only for local development, unit/integration tests, and small fixture-backed checks.
+- Prefer Docker/container execution for user-facing flows and all real end-to-end runs. The image is the intended runtime and includes Chromium, Xvfb, poppler, and EPUBCheck. Assume config at `/config/config.toml` and mutable state at `/state`. Use direct `go run` only for local development, unit/integration tests, and small fixture-backed checks.
 - Config checking and all preview modes are read-only: use the strict loader without store initialization or run records. Dump refresh installs a generation atomically and preserves authored files.
 - Authoring is dump-first and offline: use `setup dump` + `setup preview`. Do not reintroduce wizard/live-discover-style primary flows.
 - Treat config as source fetch + series mapping: `sources` define upstream access; `series` / `series.inputs` decide classification; output belongs at the series layer; sources may carry defaults their inputs inherit.
-- Output modes are only `preserve` and `epub`. `preserve` keeps originals; `preface_mode = "prepend_post"` wraps existing EPUBs; `epub` may convert PDFs via Calibre. Published folders are user-facing only.
+- Output modes are only `preserve` and `epub`. `preserve` keeps originals; `preface_mode = "prepend_post"` wraps existing EPUBs; `epub` may convert PDFs by reflowing `pdftohtml` text. Published folders are user-facing only.
 - Keep provider-specific logic inside `internal/provider/<provider>`, store-specific logic inside `internal/store/<backend>`, and query-layer SQL in SQLC-managed files. Handwritten SQL should stay limited to SQLite setup/migration glue.
 - Book labels select identity, never coverage. Keep extended chapter and part values intact and out of fixed-range volumes until explicitly overridden. Applied-library comparisons must use the rebuild planner.
 - Keep identity enrichment outside content hashes and bind durable metadata to its capture. Preview, sync, and rebuild must consume the same selected-content reference and holding decisions.
@@ -20,4 +20,4 @@ Verify with:
 - `go test ./...` (natively this needs `serial-sync-epubcheck` on `PATH`: run `BIN_DIR=~/.local/bin scripts/install-epubcheck ~/.local/share/epubcheck` with a JDK first on `PATH`)
 - `go run ./cmd/serial-sync --config ./examples/config.demo.toml setup check`
 - a fixture-backed `setup preview` or `run` when changing authoring/output behavior
-- a Docker-based end-to-end run when changing browser/bootstrap, container runtime, or Calibre-backed conversion behavior
+- a Docker-based end-to-end run when changing browser/bootstrap, container runtime, or PDF conversion behavior

@@ -24,7 +24,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SERIAL_SYNC_CONTAINER=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    calibre \
     chromium \
     chromium-sandbox \
     default-jre-headless \
@@ -33,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     gnupg \
     novnc \
+    poppler-utils \
     python3 \
     tini \
     unzip \

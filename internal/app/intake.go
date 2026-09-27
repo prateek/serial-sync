@@ -171,7 +171,7 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 			current = artifact.IsCurrent(*storedArtifact, release, track, decision)
 			if current && storedState.Intact {
 				// Current and intact on disk: never re-plan. Re-planning
-				// a PDF would re-run Calibre for bytes that already match.
+				// a PDF would re-run the conversion for bytes that already match.
 				noopEarly = true
 			}
 		}

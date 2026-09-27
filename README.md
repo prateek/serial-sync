@@ -62,7 +62,7 @@ Both reject unknown config keys and invalid rule values before provider work.
 - `setup dump` now captures normalized posts, raw Patreon post JSON, and downloaded attachments into the same workspace
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
-- the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb, Calibre, EPUBCheck, and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
+- the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb, poppler's `pdftohtml`, EPUBCheck, and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
 - the daemon exposes `/healthz`, `/status`, and `/metrics`
 - every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
 - the bundled fixture demo still exists in `examples/config.demo.toml`

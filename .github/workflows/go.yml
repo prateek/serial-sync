@@ -8,10 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Debian trixie like the Dockerfile, so tests run against the Calibre the image ships.
+    # Debian trixie like the Dockerfile, so tests run against the poppler the image ships.
     container: golang:1.27-trixie
     steps:
       - uses: actions/checkout@v7
-      - run: apt-get update && apt-get install -y --no-install-recommends calibre default-jdk-headless unzip
+      - run: apt-get update && apt-get install -y --no-install-recommends default-jdk-headless poppler-utils unzip
       - run: scripts/install-epubcheck
       - run: go test -timeout 20m ./...

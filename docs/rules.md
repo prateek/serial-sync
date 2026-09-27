@@ -343,7 +343,7 @@ Do not split those into separate series-extra buckets unless you explicitly want
 Set output policy once per series:
 
 - `format = "preserve"`: keep the source format when possible
-- `format = "epub"`: emit EPUB output for HTML/text sources and PDF attachments via Calibre; existing EPUB attachments are enriched while retaining original story resources and navigation
+- `format = "epub"`: emit EPUB output for HTML/text sources and PDF attachments (text reflowed from poppler's `pdftohtml`); existing EPUB attachments are enriched while retaining original story resources and navigation
 
 Set preface behavior once per series:
 

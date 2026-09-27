@@ -134,7 +134,7 @@ func PublicationFingerprint(metadata *domain.PublicationMetadata) string {
 
 func outputVersion(decision domain.TrackDecision) int {
 	if decision.OutputFormat == domain.OutputFormatEPUB {
-		return 5
+		return 6
 	}
 	return 2
 }

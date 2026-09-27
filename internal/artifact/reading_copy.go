@@ -56,7 +56,7 @@ func describeOutputProfile(outputFormat domain.OutputFormat, originalFileName, m
 }
 
 // isEPUBConvertible reports whether the output profile can produce an EPUB
-// from these inputs at all: PDF converts via Calibre and HTML builds
+// from these inputs at all: PDF text reflows via pdftohtml and HTML builds
 // directly; anything else is left alone (Plan rejects it with its own error).
 func isEPUBConvertible(fileName, mimeType string) bool {
 	if strings.EqualFold(strings.TrimSpace(mimeType), "application/pdf") || strings.EqualFold(filepath.Ext(fileName), ".pdf") {

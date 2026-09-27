@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,8 +19,7 @@ import (
 // steps: no store, provider or EPUB checker is involved.
 
 // The describe-only preview and the materializing Plan must agree on the
-// reading copy's file name and type for the same inputs. The PDF row needs
-// Calibre and runs only in the container.
+// reading copy's file name and type for the same inputs.
 func TestReadingCopyDescribeAgreesWithMaterialize(t *testing.T) {
 	track := domain.StoryTrack{TrackKey: "harbor", TrackName: "Harbor", CanonicalAuthor: "Test Author"}
 	release := domain.Release{ID: "rel_1", SourceID: "fictional", ProviderReleaseID: "r1", Title: "Harbor Chapter 1"}
@@ -59,24 +57,18 @@ func TestReadingCopyDescribeAgreesWithMaterialize(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name         string
-		normalized   domain.NormalizedRelease
-		decision     domain.TrackDecision
-		needsCalibre bool
+		name       string
+		normalized domain.NormalizedRelease
+		decision   domain.TrackDecision
 	}{
 		{name: "text_post preserve", normalized: textPost, decision: strategy(base, domain.OutputFormatPreserve, domain.ContentStrategyTextPost, "")},
 		{name: "text_post epub", normalized: textPost, decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyTextPost, "")},
 		{name: "epub attachment preserve", normalized: epubAttachment(""), decision: strategy(base, domain.OutputFormatPreserve, domain.ContentStrategyAttachmentOnly, "")},
 		{name: "epub attachment epub", normalized: epubAttachment(""), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, "")},
 		{name: "epub attachment epub with preface", normalized: epubAttachment(""), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, domain.PrefaceModePrependPost)},
-		{name: "pdf attachment epub", normalized: pdfAttachment("../../testdata/fixtures/reader/chapter.pdf"), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, ""), needsCalibre: true},
+		{name: "pdf attachment epub", normalized: pdfAttachment("../../testdata/fixtures/reader/chapter.pdf"), decision: strategy(base, domain.OutputFormatEPUB, domain.ContentStrategyAttachmentOnly, "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.needsCalibre {
-				if _, err := exec.LookPath("ebook-convert"); err != nil {
-					t.Skip("Calibre-backed conversion runs in the container")
-				}
-			}
 			normalized := tc.normalized
 			for i := range normalized.Attachments {
 				if normalized.Attachments[i].LocalPath == "" {

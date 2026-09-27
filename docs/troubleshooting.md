@@ -39,11 +39,11 @@ Live Patreon bootstrap uses a dedicated browser profile in a headed browser sess
 
 The bundled container defaults `SERIAL_SYNC_CHROME_NO_SANDBOX=true` because many Docker and homelab runtimes block Chromium's namespace sandbox even for an unprivileged browser user. If your runtime supports the sandbox, set `SERIAL_SYNC_CHROME_NO_SANDBOX=false` and retry.
 
-## PDF to EPUB conversion fails on Ubuntu 24.04
+## PDF to EPUB conversion fails
 
-Outside the bundled image, `format = "epub"` converts PDF attachments with whatever `ebook-convert` is on `PATH`. Ubuntu 24.04 packages Calibre 7.6.0, whose EPUB 3 output step crashes with `TypeError: sequence item 1: expected str instance, bytes found`, so every PDF conversion fails with `ebook-convert failed`. Run `ebook-convert --version` to check.
+`format = "epub"` extracts PDF text with poppler's `pdftohtml`. Outside the bundled image, install it (`apt install poppler-utils` or `brew install poppler`); without it every PDF release fails with `pdftohtml (poppler-utils) is required`.
 
-Use the Docker image, which ships Debian trixie's Calibre 8.5.0; that is the version the test suite runs against. A newer Calibre is not a safe substitute: 9.15.0 converts without crashing, but for a PDF with no table of contents it writes an empty navigation list that EPUBCheck rejects, so those releases fail EPUB validation instead.
+A PDF with embedded images fails with `has an image; PDF conversion supports text-only chapters`. Conversion keeps only text, so it refuses rather than dropping pictures. Route that series to `format = "preserve"` to publish the PDF as-is.
 
 ## I want a fully offline demo
 
