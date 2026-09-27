@@ -1,8 +1,13 @@
 name: container-publish
 
+# A main commit is published only after its `go` run passed, so an image tagged
+# sha-<short> means that commit's tests passed. Release tags publish on push.
 on:
-  push:
+  workflow_run:
+    workflows: ["go"]
+    types: [completed]
     branches: ["main"]
+  push:
     tags:
       - "v*"
   workflow_dispatch:
@@ -17,9 +22,22 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    env:
+      # On workflow_run, github.sha is the default branch's head when go finished, not the tested commit.
+      REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.REVISION }}
+
+      - id: revision
+        run: |
+          echo "short=${REVISION::7}" >> "$GITHUB_OUTPUT"
+          # go runs can finish out of order; only the current tip may move :main.
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          echo "tip=$([ "$tip" = "$REVISION" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v4
 
@@ -36,11 +54,13 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=main,enable=${{ github.ref_type != 'tag' && steps.revision.outputs.tip == 'true' }}
             type=semver,pattern={{version}},enable=${{ github.ref_type == 'tag' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.ref_type == 'tag' }}
             type=semver,pattern={{major}},enable=${{ github.ref_type == 'tag' }}
-            type=sha
+            type=raw,value=sha-${{ steps.revision.outputs.short }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
 
       - uses: docker/build-push-action@v7
         with:
