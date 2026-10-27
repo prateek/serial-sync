@@ -731,19 +731,8 @@ func (s *Service) InspectSource(ctx context.Context, id string) (*SourceInspect,
 }
 
 func (s *Service) InspectRun(ctx context.Context, id string) (*domain.RunBundle, error) {
-	run, err := s.Repo.GetRunBundle(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if run == nil {
-		return nil, fmt.Errorf("unknown run %q", id)
-	}
-	events, err := s.loadRunEvents(id, run.Events)
-	if err != nil {
-		return nil, err
-	}
-	run.Events = events
-	return run, nil
+	bundle, _, err := s.loadRunRecord(ctx, id)
+	return bundle, err
 }
 
 func (s *Service) ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, error) {
@@ -776,16 +765,15 @@ func (s *Service) ListRunEvents(ctx context.Context, runID string, filter RunEve
 }
 
 func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, error) {
-	bundle, err := s.InspectRun(ctx, runID)
+	bundle, record, err := s.loadRunRecord(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	// The run record is the durable log, and internal/observe owns reading it.
-	// Forensics is that read, named for the CLI; nothing here re-derives counts.
-	record, err := observe.ReadRun(s.Config.Runtime.LogRoot, runID)
-	if err != nil {
-		return nil, err
-	}
+	return s.formatRunForensics(bundle, record.Forensics()), nil
+}
+
+func (s *Service) formatRunForensics(bundle *domain.RunBundle, record observe.Forensics) *RunForensics {
+	runID := bundle.Run.ID
 	result := &RunForensics{
 		Run:                 bundle.Run,
 		LogText:             filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
@@ -813,7 +801,7 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 		result.RecentErrors = append(result.RecentErrors, eventRecordFromLog(event))
 	}
 	result.Highlights = append(result.Highlights, explainRunHighlights(bundle, result)...)
-	return result, nil
+	return result
 }
 
 func (s *Service) ListPublishRecords(ctx context.Context, sourceFilter, targetFilter string) ([]domain.PublishRecordBundle, error) {
@@ -832,14 +820,11 @@ func (s *Service) InspectPublishRecord(ctx context.Context, id string) (*domain.
 }
 
 func (s *Service) SupportBundle(ctx context.Context, runID string) (string, error) {
-	bundle, err := s.InspectRun(ctx, runID)
+	bundle, record, err := s.loadRunRecord(ctx, runID)
 	if err != nil {
 		return "", err
 	}
-	forensics, err := s.ExplainRun(ctx, runID)
-	if err != nil {
-		return "", err
-	}
+	forensics := s.formatRunForensics(bundle, record.Forensics())
 	dir := filepath.Join(s.Config.Runtime.SupportRoot, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err

@@ -9,13 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prateek/serial-sync/internal/domain"
 )
 
-// LogEvent is one line of a run's JSONL event log, the durable record of what
-// happened. RunRecord is the whole read: the run's identity plus every event,
-// and the derived forensics counts, phase timings and progress highlights the
-// debug commands print. internal/observe owns both writing and reading this
-// record; the app formats it.
+// LogEvent is one event from a run's JSONL log.
 type LogEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 	EventID     string    `json:"event_id,omitempty"`
@@ -32,13 +30,17 @@ type LogEvent struct {
 	DryRun      bool      `json:"dry_run"`
 }
 
-// RunRecord is one run's read-back: identity, events and derived forensics.
+// RunRecord contains a run's selected events, without reading their payloads.
 type RunRecord struct {
-	RunID              string
-	Command            string
-	SourceScope        string
-	DryRun             bool
-	Events             []LogEvent
+	RunID       string
+	Command     string
+	SourceScope string
+	DryRun      bool
+	Events      []LogEvent
+}
+
+// Forensics contains counts and payload-derived details for a run record.
+type Forensics struct {
 	KindCounts         map[Kind]int
 	ComponentCounts    map[string]int
 	EntityCounts       map[string]int
@@ -52,65 +54,63 @@ type RunRecord struct {
 	RecentErrors       []LogEvent
 }
 
-// ReadRun loads the JSONL event log for runID under logRoot. A missing log is
-// an empty record, not an error: runs executed without logging configured
-// have nothing to read, and debug commands report that as zero events.
-func ReadRun(logRoot, runID string) (RunRecord, error) {
-	record := RunRecord{
-		RunID: runID, KindCounts: map[Kind]int{}, ComponentCounts: map[string]int{},
-		EntityCounts: map[string]int{}, PhaseTimingsMS: map[string]int64{},
-	}
-	path := filepath.Join(logRoot, runID+".jsonl")
-	file, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return record, nil
-	}
+// ReadRun loads JSONL events without reading payloads. Missing or empty logs
+// use fallback events in their given order. With no events, nil fallback keeps
+// Events nil; a non-nil empty fallback produces an empty, non-nil Events slice.
+// Malformed logs return an error rather than falling back.
+func ReadRun(logRoot, runID string, fallback []domain.EventRecord) (RunRecord, error) {
+	record := RunRecord{RunID: runID}
+	events, err := readLogEvents(filepath.Join(logRoot, runID+".jsonl"), runID)
 	if err != nil {
 		return record, err
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for index := 0; scanner.Scan(); index++ {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	if len(events) == 0 && fallback != nil {
+		events = make([]LogEvent, 0, len(fallback))
+		for _, event := range fallback {
+			events = append(events, LogEvent{
+				Timestamp: event.Timestamp, EventID: event.ID, RunID: event.RunID,
+				Level: event.Level, Kind: Kind(event.Kind), Component: event.Component,
+				Message: event.Message, EntityKind: event.EntityKind, EntityID: event.EntityID,
+				PayloadRef: event.PayloadRef,
+			})
 		}
-		var event LogEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return record, fmt.Errorf("parse run log %s: %w", path, err)
-		}
-		if strings.TrimSpace(event.EventID) == "" {
-			event.EventID = SyntheticEventID(runID, index)
-		}
-		if strings.TrimSpace(event.RunID) == "" {
-			event.RunID = runID
-		}
-		record.Events = append(record.Events, event)
-		record.KindCounts[Classify(event)]++
+	}
+	record.Events = events
+	return record, nil
+}
+
+// Forensics derives counts and details from these events, reading their payload
+// references where available. It does not reopen or reparse the run log.
+func (r RunRecord) Forensics() Forensics {
+	forensics := Forensics{
+		KindCounts: map[Kind]int{}, ComponentCounts: map[string]int{},
+		EntityCounts: map[string]int{}, PhaseTimingsMS: map[string]int64{},
+	}
+	for _, event := range r.Events {
+		forensics.KindCounts[Classify(event)]++
 		if component := strings.TrimSpace(event.Component); component != "" {
-			record.ComponentCounts[component]++
+			forensics.ComponentCounts[component]++
 		}
 		if entityKind := strings.TrimSpace(event.EntityKind); entityKind != "" {
-			record.EntityCounts[entityKind]++
+			forensics.EntityCounts[entityKind]++
 		}
 		switch strings.ToLower(strings.TrimSpace(event.Level)) {
 		case "warn", "warning":
-			record.WarningEvents++
+			forensics.WarningEvents++
 		case "error":
-			record.ErrorEvents++
-			record.RecentErrors = append(record.RecentErrors, event)
-			if len(record.RecentErrors) > 5 {
-				record.RecentErrors = record.RecentErrors[len(record.RecentErrors)-5:]
+			forensics.ErrorEvents++
+			forensics.RecentErrors = append(forensics.RecentErrors, event)
+			if len(forensics.RecentErrors) > 5 {
+				forensics.RecentErrors = forensics.RecentErrors[len(forensics.RecentErrors)-5:]
 			}
 		default:
-			record.InfoEvents++
+			forensics.InfoEvents++
 		}
 		if strings.Contains(strings.ToLower(event.Message), "rate limited") {
-			record.RetryEvents++
+			forensics.RetryEvents++
 		}
 		if strings.TrimSpace(event.PayloadRef) != "" {
-			record.EventPayloadCount++
+			forensics.EventPayloadCount++
 		}
 		payload, payloadErr := loadPayload(event.PayloadRef)
 		if payloadErr != nil {
@@ -118,17 +118,62 @@ func ReadRun(logRoot, runID string) (RunRecord, error) {
 		}
 		if durationMS, ok := payloadInt64(payload, "duration_ms"); ok {
 			if phase := phaseName(event); phase != "" {
-				record.PhaseTimingsMS[phase] = durationMS
+				forensics.PhaseTimingsMS[phase] = durationMS
 			}
 		}
 		if highlight := progressHighlight(event, payload); highlight != "" {
-			record.ProgressHighlights = append(record.ProgressHighlights, highlight)
-			if len(record.ProgressHighlights) > 8 {
-				record.ProgressHighlights = record.ProgressHighlights[len(record.ProgressHighlights)-8:]
+			forensics.ProgressHighlights = append(forensics.ProgressHighlights, highlight)
+			if len(forensics.ProgressHighlights) > 8 {
+				forensics.ProgressHighlights = forensics.ProgressHighlights[len(forensics.ProgressHighlights)-8:]
 			}
 		}
 	}
-	return record, scanner.Err()
+	return forensics
+}
+
+func readLogEvents(path, runID string) ([]LogEvent, error) {
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var events []LogEvent
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for index := 0; scanner.Scan(); index++ {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			LogEvent
+			Timestamp string `json:"timestamp"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, fmt.Errorf("parse run log %s: %w", path, err)
+		}
+		event := entry.LogEvent
+		event.Timestamp, err = time.Parse(time.RFC3339Nano, strings.TrimSpace(entry.Timestamp))
+		if err != nil {
+			return nil, fmt.Errorf("parse run log %s: %w", path, err)
+		}
+		event.EventID = strings.TrimSpace(event.EventID)
+		if event.EventID == "" {
+			event.EventID = SyntheticEventID(runID, index)
+		}
+		event.RunID = strings.TrimSpace(event.RunID)
+		if event.RunID == "" {
+			event.RunID = runID
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read run log %s: %w", path, err)
+	}
+	return events, nil
 }
 
 // Classify answers the event's kind: the declared kind when the writer set
