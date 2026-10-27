@@ -30,3 +30,7 @@ BookOrbit sends new-chapter notifications, and readers unfollow series in BookOr
 ## Hourly operation
 
 The [systemd units](systemd/) run the Docker workflow once per hour under a file lock. Install them under the service account's `~/.config/systemd/user`, keep the Compose project at `~/serial-sync`, and enable user lingering. Manual runs should take the same `run.lock`. Inspect runs with `systemctl --user status serial-sync.service` and `journalctl --user -u serial-sync.service`.
+
+## Monitor and trigger runs in BookOrbit
+
+The optional [runner bridge](runner/README.md) adds a separate authenticated control service for BookOrbit's External tools page. It wraps the existing systemd execution path and records parent run history without changing file delivery or giving serial-sync BookOrbit credentials. It does not expose cancellation until safe process shutdown is supported.
