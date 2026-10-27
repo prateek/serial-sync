@@ -1,0 +1,14 @@
+[Unit]
+Description=Serial Sync run monitoring and control
+
+[Service]
+Type=simple
+WorkingDirectory=%h/serial-sync
+ExecStart=/usr/bin/python3 %h/serial-sync-runner/runner.py --config %h/serial-sync/config/runner.toml serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

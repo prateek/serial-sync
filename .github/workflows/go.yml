@@ -12,6 +12,7 @@ jobs:
     container: golang:1.27-trixie
     steps:
       - uses: actions/checkout@v7
-      - run: apt-get update && apt-get install -y --no-install-recommends default-jdk-headless poppler-utils unzip
+      - run: apt-get update && apt-get install -y --no-install-recommends default-jdk-headless poppler-utils unzip python3
       - run: scripts/install-epubcheck
+      - run: python3 -m unittest discover -s integrations/bookorbit/runner -v
       - run: go test -timeout 20m ./...

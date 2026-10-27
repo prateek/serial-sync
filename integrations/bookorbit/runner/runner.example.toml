@@ -1,0 +1,11 @@
+# Use absolute paths. The bridge and execution wrapper run as the sync service user.
+state_dir = "/home/exedev/serial-sync/runner-state"
+catalog = "/home/exedev/serial-sync/state/state.db"
+logs = "/home/exedev/serial-sync/state/logs"
+token_file = "/home/exedev/serial-sync/config/runner-token"
+unit = "serial-sync.service"
+manual_unit = "serial-sync-manual@.service"
+lock_path = "/home/exedev/serial-sync/run.lock"
+listen_host = "127.0.0.1"
+listen_port = 8091
+schedule = "Hourly, managed by systemd"
