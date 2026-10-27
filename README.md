@@ -125,6 +125,12 @@ catalog or calling hooks: a same-path replacement that would not cover its old
 volume, a cyclic rename, or a retirement whose file was edited outside the
 library fails the run, and a plan that collides with edited destination bytes is
 blocked until the file is restored or the ownership resolved.
+Preview checks archived reading-copy hashes as well as metadata: a missing or
+corrupt archived copy needs rebuilding even when its published copy is intact.
+It checks captured inputs without writing captures or running converters; input
+failures block preview and execution with the same reason. Archive repairs may
+show a potential replacement and reading-position warning: preview does not
+regenerate bytes. A rebuild that reproduces the delivered bytes can skip delivery.
 Preview and rebuild both exclude disabled sources and retain their published files.
 If the publisher lives outside `/state`, mount its folder too, read-only for the
 preview. See [the rebuild walkthrough](docs/first-source.md#rebuild-stored-output)

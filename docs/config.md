@@ -32,6 +32,16 @@ fallbacks above other inputs and identical selectors; the first input still wins
 `setup preview` uses this main config unless `--series-file` is supplied. Compare
 it with another complete config using `--compare <path>` and either `--stored`
 or `--workspace <path>`; see [replay and comparison](rules.md#replay-and-compare-the-main-config).
+
+Stored-library preview shares release assessment with rebuild execution. It
+checks archived reading-copy integrity and captured attachment hashes, without
+writing captures, converting content, or generating output. Missing or corrupt
+archived copies require rebuilding; unavailable or corrupt captured inputs block
+the affected series before delivery. Replacement actions and reading-position
+notices for archive repairs are conservative: preview cannot know the regenerated
+digest without producing bytes. A same-byte rebuild can skip delivery; inspect
+the next preview after repair.
+
 Sources may declare `ignore_labels = ["fantasy", "news"]` to suppress matching
 label names from discovery. It has no effect on routing or publication.
 

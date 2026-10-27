@@ -103,8 +103,20 @@ checks can inspect them. Disabled or removed sources and publishers retain deliv
 files. Creator filters limit the planned source scope; a partial mixed-source volume
 can block replacement. Workspace-only replay reports applied state as unavailable.
 
-These plans do not run conversions or publisher hooks. After reviewing and promoting
-the candidate config, use `run --rebuild` to apply changes to stored output.
+Release assessment checks both metadata currentness and archived reading-copy
+integrity. Missing or corrupt archived bytes require rebuilding even if the
+published file is intact. Captured attachments are checked across the release,
+including files not selected for output, matching execution's capture checks.
+Unavailable selected attachments needed for rebuilding block both paths.
+Archive repair can show a potential replacement and a reading-position warning
+because preview does not generate bytes or run conversions. Execution may
+reproduce the same reading copy and skip delivery, leaving the published file's
+bytes and modification time unchanged. After repair, a fresh preview should show
+unchanged copies without a replacement warning.
+
+These plans do not write captures, generate output, run conversions or publisher
+hooks. After reviewing and promoting the candidate config, use `run --rebuild`
+to apply changes to stored output.
 Ordinary sync preserves output for unchanged content.
 
 ## Discovery candidates

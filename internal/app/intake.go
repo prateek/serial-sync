@@ -70,7 +70,41 @@ func (s *Service) intakeHandleRelease(ctx context.Context, recorder *observe.Rec
 	return ri.apply(ctx, recorder, sourceCfg, plan)
 }
 
+type intakeAssessment struct {
+	Source         domain.Source
+	Normalized     domain.NormalizedRelease
+	Materializable bool
+	Plan           intakePlan
+}
+
 func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision, stored *StoredArtifactRef, dryRun, rebuild bool) (intakePlan, error) {
+	assessment, err := ri.assess(ctx, ri.s.Config, sourceCfg, doc, decision, stored, rebuild)
+	if err != nil {
+		return intakePlan{}, err
+	}
+	plan := assessment.Plan
+	plan.DryRun = dryRun
+	normalized, err := ri.s.captureAttachments(sourceCfg.ID, assessment.Normalized, dryRun)
+	if err != nil {
+		return intakePlan{}, err
+	}
+	plan.NormalizedJSON, err = json.Marshal(normalized)
+	if err != nil {
+		return intakePlan{}, err
+	}
+	if plan.NeedsMaterialize {
+		plan.ArtifactPlan, err = ri.s.Files.Plan(ctx, assessment.Source, plan.Track, plan.Release, normalized, plan.Decision, doc.RawJSON)
+		if err != nil {
+			return intakePlan{}, err
+		}
+		if stored != nil && stored.Release != nil && stored.Release.ContentHash == plan.ContentHash && plan.StoredArtifact != nil && plan.StoredState.Intact && plan.StoredArtifact.SHA256 == plan.ArtifactPlan.SHA256 && plan.StoredArtifact.Filename == plan.ArtifactPlan.Filename && !rebuild {
+			plan.Action, plan.NeedsMaterialize = "noop", false
+		}
+	}
+	return plan, nil
+}
+
+func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceCfg config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision, stored *StoredArtifactRef, rebuild bool) (intakeAssessment, error) {
 	s := ri.s
 	source := domain.Source{
 		ID:            sourceCfg.ID,
@@ -87,16 +121,15 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 	if stored != nil && stored.Release != nil {
 		releaseID = stored.Release.ID
 	}
-	// Capture attachments to get hashes (read-only on dry run)
 	var captureErr error
-	doc.Normalized, captureErr = s.captureAttachments(source.ID, doc.Normalized, dryRun)
+	doc.Normalized, captureErr = inspectAttachments(doc.Normalized)
 	if captureErr != nil {
-		return intakePlan{}, captureErr
+		return intakeAssessment{}, captureErr
 	}
 	if decision.SelectedContent != nil && decision.SelectedContent.Kind == "attachment" {
 		attachment, ok := classify.SelectAttachment(doc.Normalized, decision)
 		if !ok {
-			return intakePlan{}, fmt.Errorf("selected attachment changed during capture")
+			return intakeAssessment{}, fmt.Errorf("selected attachment changed during capture")
 		}
 		selected := *decision.SelectedContent
 		selected.SHA256 = attachment.SHA256
@@ -122,14 +155,13 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 
 	normalizedJSON, err := json.Marshal(doc.Normalized)
 	if err != nil {
-		return intakePlan{}, err
+		return intakeAssessment{}, err
 	}
 
 	var track domain.StoryTrack
 	var storedState artifact.StoredState
 	var storedArtifact *domain.Artifact
 	var artifactPlan domain.ArtifactPlan
-	var artifactErr error
 	pinnedPublication := false
 	frozen := false
 
@@ -154,18 +186,19 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 	}
 
 	if !pinnedPublication && !frozen {
-		decision.Publication, err = s.publicationMetadata(source.ID, doc.Normalized, decision)
+		decision.Publication, err = publicationMetadataFor(cfg, source.ID, doc.Normalized, decision)
 		if err != nil {
-			return intakePlan{}, err
+			return intakeAssessment{}, err
 		}
 	}
 
+	materializable := classify.CanMaterialize(doc.Normalized, decision)
 	current := false
 	noopEarly := false
 	if !frozen {
 		track, err = s.resolveTrack(ctx, source, decision)
 		if err != nil {
-			return intakePlan{}, err
+			return intakeAssessment{}, err
 		}
 		if storedArtifact != nil && stored != nil && stored.Release != nil && stored.Release.ContentHash == contentHash {
 			current = artifact.IsCurrent(*storedArtifact, release, track, decision)
@@ -175,16 +208,14 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 				noopEarly = true
 			}
 		}
-		if !noopEarly && classify.CanMaterialize(doc.Normalized, decision) {
-			artifactPlan, artifactErr = s.Files.Plan(ctx, source, track, release, doc.Normalized, decision, doc.RawJSON)
-			if artifactErr != nil {
-				return intakePlan{}, artifactErr
-			}
+		if materializable {
+			description := artifact.Describe(track, release, doc.Normalized, decision)
+			artifactPlan.Filename, artifactPlan.MIMEType, artifactPlan.ArtifactKind = description.FileName, description.MIMEType, description.ArtifactKind
 		}
 	}
 
 	action := "create"
-	needsMaterialize := artifactPlan.SHA256 != ""
+	needsMaterialize := materializable
 	blockReason := ""
 
 	switch {
@@ -208,43 +239,39 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 		needsMaterialize = false
 	case stored.Release.ContentHash == contentHash:
 		action = "update"
-		existingBytesValid := false
-		if storedArtifact != nil {
-			existingBytesValid = storedState.Intact
-		}
-		switch {
-		case storedArtifact == nil && artifactPlan.SHA256 == "":
+		if storedArtifact == nil && !needsMaterialize {
 			action = "noop"
-			needsMaterialize = false
-		case storedArtifact != nil && existingBytesValid && storedArtifact.SHA256 == artifactPlan.SHA256 && storedArtifact.Filename == artifactPlan.Filename && (!rebuild || current):
-			action = "noop"
-			needsMaterialize = false
-		}
-		if action == "noop" && storedArtifact != nil {
-			artifactPlan.Filename, artifactPlan.ArtifactKind = storedArtifact.Filename, storedArtifact.ArtifactKind
 		}
 	default:
 		action = "update"
 	}
 
-	return intakePlan{
-		DryRun:                dryRun,
-		Action:                action,
-		BlockReason:           blockReason,
-		Track:                 track,
-		Release:               release,
-		ArtifactPlan:          artifactPlan,
-		StoredArtifact:        storedArtifact,
-		StoredState:           storedState,
-		ContentHash:           contentHash,
-		NormalizedJSON:        normalizedJSON,
-		RawJSON:               doc.RawJSON,
-		NeedsMaterialize:      needsMaterialize,
-		Decision:              decision,
-		NormalizedSourceType:  doc.Normalized.SourceType,
-		NormalizedCreatorID:   doc.Normalized.CreatorID,
-		NormalizedCreatorName: doc.Normalized.CreatorName,
-	}, nil
+	if needsMaterialize && classify.SelectContent(doc.Normalized, decision).Kind == "attachment" {
+		if _, err := artifact.SelectedAttachment(doc.Normalized, decision); err != nil {
+			return intakeAssessment{}, err
+		}
+	}
+	return intakeAssessment{
+		Source:         source,
+		Normalized:     doc.Normalized,
+		Materializable: materializable,
+		Plan: intakePlan{
+			Action:                action,
+			BlockReason:           blockReason,
+			Track:                 track,
+			Release:               release,
+			ArtifactPlan:          artifactPlan,
+			StoredArtifact:        storedArtifact,
+			StoredState:           storedState,
+			ContentHash:           contentHash,
+			NormalizedJSON:        normalizedJSON,
+			RawJSON:               doc.RawJSON,
+			NeedsMaterialize:      needsMaterialize,
+			Decision:              decision,
+			NormalizedSourceType:  doc.Normalized.SourceType,
+			NormalizedCreatorID:   doc.Normalized.CreatorID,
+			NormalizedCreatorName: doc.Normalized.CreatorName,
+		}}, nil
 }
 
 func (ri *releaseIntake) apply(ctx context.Context, recorder *observe.Recorder, sourceCfg config.SourceConfig, plan intakePlan) (domain.SyncItemPlan, bool, bool, error) {

@@ -167,6 +167,18 @@ func New(root string) *Materializer {
 	return &Materializer{Root: root}
 }
 
+// SelectedAttachment requires a matching selected attachment with a local capture path.
+func SelectedAttachment(normalized domain.NormalizedRelease, decision domain.TrackDecision) (domain.Attachment, error) {
+	attachment, ok := classify.SelectAttachment(normalized, decision)
+	if !ok {
+		return domain.Attachment{}, errors.New("selected attachment no longer matches the captured release")
+	}
+	if attachment.LocalPath == "" {
+		return domain.Attachment{}, fmt.Errorf("selected attachment %q is missing a local_path", attachment.FileName)
+	}
+	return attachment, nil
+}
+
 func (m *Materializer) Plan(ctx context.Context, source domain.Source, track domain.StoryTrack, release domain.Release, normalized domain.NormalizedRelease, decision domain.TrackDecision, rawJSON []byte) (domain.ArtifactPlan, error) {
 	if !classify.CanMaterialize(normalized, decision) {
 		return domain.ArtifactPlan{}, errors.New("release does not produce a materializable canonical artifact")
@@ -190,12 +202,9 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 	selection := classify.SelectContent(normalized, decision)
 	switch selection.Kind {
 	case "attachment":
-		attachment, ok := classify.SelectAttachment(normalized, decision)
-		if !ok {
-			return domain.ArtifactPlan{}, errors.New("selected attachment no longer matches the captured release")
-		}
-		if attachment.LocalPath == "" {
-			return domain.ArtifactPlan{}, fmt.Errorf("selected attachment %q is missing a local_path", attachment.FileName)
+		attachment, err := SelectedAttachment(normalized, decision)
+		if err != nil {
+			return domain.ArtifactPlan{}, err
 		}
 		content, err = os.ReadFile(attachment.LocalPath)
 		if err != nil {
