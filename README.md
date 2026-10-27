@@ -48,6 +48,10 @@ the previous capture and your authored files. `setup check` and `setup preview`
 are offline and read-only; they work without writable state or a database.
 Both reject unknown config keys and invalid rule values before provider work.
 
+The optional [steady container runtime](docs/browser-runtime.md) reuses saved
+sessions without installing a browser. The default full image retains automatic
+bootstrap and noVNC reauthentication.
+
 ## What It Does
 
 - syncs releases from provider-backed sources

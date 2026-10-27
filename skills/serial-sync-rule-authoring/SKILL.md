@@ -18,6 +18,11 @@ The canonical loop is:
 6. Iterate until fallback/unmatched looks acceptable.
 7. Merge the resulting `[[sources]]` and `[[series]]` into the real config.
 
+When using the optional browser-free `steady` container, reuse a saved session.
+For missing or expired sessions, follow [the runtime reauthentication handoff](../../docs/browser-runtime.md)
+with the full image and the same config/state mounts, or import an exported
+serial-sync session bundle. Resume dump/preview after authentication.
+
 ## Commands
 
 Bootstrap auth if needed:

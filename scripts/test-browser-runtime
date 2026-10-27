@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+FULL_IMAGE=${FULL_IMAGE:-serial-sync:full}
+STEADY_IMAGE=${STEADY_IMAGE:-serial-sync:steady}
+TEST_ARCH=$(docker image inspect --format '{{.Architecture}}' "$FULL_IMAGE")
+TEST_PLATFORM="linux/$TEST_ARCH"
+TEST_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR"' EXIT
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$REPO_ROOT"
+cp scripts/test-novnc-lifecycle.py "$TEST_DIR/novnc.py"
+CGO_ENABLED=0 GOOS=linux GOARCH="$TEST_ARCH" go test -p 2 -c ./internal/provider/patreon -o "$TEST_DIR/patreon.test"
+CGO_ENABLED=0 GOOS=linux GOARCH="$TEST_ARCH" go test -p 2 -c ./internal/runtime/display -o "$TEST_DIR/display.test"
+chmod 555 "$TEST_DIR/patreon.test" "$TEST_DIR/display.test" "$TEST_DIR/novnc.py"
+
+digest() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi
+}
+PATREON_SHA=$(digest "$TEST_DIR/patreon.test" | cut -d ' ' -f 1)
+DISPLAY_SHA=$(digest "$TEST_DIR/display.test" | cut -d ' ' -f 1)
+NOVNC_SHA=$(digest "$TEST_DIR/novnc.py" | cut -d ' ' -f 1)
+printf 'Host fixture SHA256: patreon=%s display=%s novnc=%s\n' "$PATREON_SHA" "$DISPLAY_SHA" "$NOVNC_SHA"
+
+run_fixture() {
+  image="$1"
+  shift
+  steady=0
+  if [ "$image" = "$STEADY_IMAGE" ]; then steady=1; fi
+  docker run --rm --platform "$TEST_PLATFORM" --network none --init \
+    --add-host www.patreon.com:127.0.0.1 \
+    -e GOMAXPROCS=2 -e JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 \
+    -e SERIAL_SYNC_TEST_CONTAINER=1 -e SERIAL_SYNC_TEST_STEADY="$steady" \
+    -e SERIAL_SYNC_TEST_BROWSER=1 -e BROWSER_FIXTURE_BINARY=/tests/patreon.test \
+    -e EXPECTED_PATREON_SHA="$PATREON_SHA" -e EXPECTED_DISPLAY_SHA="$DISPLAY_SHA" -e EXPECTED_NOVNC_SHA="$NOVNC_SHA" \
+    -v "$TEST_DIR:/tests:ro" --entrypoint /bin/sh "$image" -c '
+      set -eu
+      sha256sum /tests/patreon.test /tests/display.test /tests/novnc.py
+      printf "%s  /tests/patreon.test\n%s  /tests/display.test\n%s  /tests/novnc.py\n" "$EXPECTED_PATREON_SHA" "$EXPECTED_DISPLAY_SHA" "$EXPECTED_NOVNC_SHA" | sha256sum -c - || exit 97
+      exec "$@"
+    ' checked-fixture "$@"
+}
+
+run_fixture "$STEADY_IMAGE" /tests/patreon.test -test.v -test.run TestContainerSavedSessionRun
+run_fixture "$FULL_IMAGE" /tests/patreon.test -test.v -test.run TestContainerSavedSessionRun
+run_fixture "$STEADY_IMAGE" /tests/patreon.test -test.v -test.run 'TestForceBootstrap|TestSteadySessionRecovery|TestBrowserUnavailable|TestListReleasesLiveSessionReuse|Test.*Budget|TestProfileSessionsRefresh'
+run_fixture "$FULL_IMAGE" /tests/patreon.test -test.v -test.run TestChromium
+run_fixture "$FULL_IMAGE" /tests/display.test -test.v
+run_fixture "$FULL_IMAGE" python3 /tests/novnc.py
+
+docker image inspect --format '{{.RepoTags}} {{.Architecture}} {{.Size}} bytes' "$FULL_IMAGE" "$STEADY_IMAGE"

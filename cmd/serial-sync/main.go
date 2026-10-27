@@ -64,7 +64,7 @@ type SetupAuthCmd struct {
 	SourceID      string `name:"source" help:"Limit auth work to one source."`
 	AuthProfileID string `name:"auth-profile" help:"Limit auth work to one auth profile."`
 	ImportSession string `name:"import-session" help:"Import this session bundle JSON file instead of bootstrapping auth."`
-	Force         bool   `name:"force" help:"Discard any existing session and log in again during bootstrap."`
+	Force         bool   `name:"force" help:"Force a fresh login instead of reusing the saved session."`
 }
 
 type SetupDumpCmd struct {

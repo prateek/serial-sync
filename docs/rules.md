@@ -24,6 +24,10 @@ Matchers are applied by ascending `priority`. The first matching input wins.
 
 Prefer one `[[series]]` per reader-facing serial or franchise. Use multiple `[[series.inputs]]` when a creator splits that serial across Patreon-specific tags or collections like `Book 11`, `Book 12`, `AA1`, or `AA2`.
 
+The optional [steady runtime](browser-runtime.md) supports saved-session dumps
+and offline authoring. Complete browser reauthentication in the full image using
+the same config and state mounts before retrying a missing or expired session.
+
 ## Recommended Workflow
 
 1. Run `setup dump` for the authors you care about.

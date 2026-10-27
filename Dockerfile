@@ -1,9 +1,11 @@
-FROM golang:1.27-trixie AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-trixie AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/serial-sync ./cmd/serial-sync
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/serial-sync ./cmd/serial-sync
 
 FROM --platform=$BUILDPLATFORM debian:trixie-slim AS epubcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,30 +18,27 @@ COPY scripts/install-epubcheck /src/scripts/install-epubcheck
 COPY third_party/epubcheck /src/third_party/epubcheck
 RUN BIN_DIR=/out/bin /src/scripts/install-epubcheck /opt/epubcheck
 
-FROM debian:trixie-slim
-ARG TARGETARCH
-ENV DEBIAN_FRONTEND=noninteractive \
-    SERIAL_SYNC_BROWSER_USER=serialsync \
-    SERIAL_SYNC_CHROME_NO_SANDBOX=true \
-    SERIAL_SYNC_CONTAINER=1
+FROM debian:trixie-slim AS runtime-base
+ENV DEBIAN_FRONTEND=noninteractive SERIAL_SYNC_CONTAINER=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    chromium \
-    chromium-sandbox \
-    default-jre-headless \
-    fluxbox \
-    fonts-liberation \
-    gosu \
-    gnupg \
-    novnc \
-    poppler-utils \
-    python3 \
-    tini \
-    unzip \
-    websockify \
-    wget \
-    x11vnc \
-    xvfb \
+    ca-certificates default-jre-headless poppler-utils tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /config /state /work
+COPY --from=epubcheck /opt/epubcheck /opt/epubcheck
+COPY --from=epubcheck /out/bin/ /usr/local/bin/
+WORKDIR /work
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/serial-sync"]
+
+FROM runtime-base AS steady
+COPY --from=build /out/serial-sync /usr/local/bin/serial-sync
+
+FROM runtime-base AS full
+ARG TARGETARCH
+ENV SERIAL_SYNC_BROWSER_USER=serialsync \
+    SERIAL_SYNC_CHROME_NO_SANDBOX=true
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium chromium-sandbox fluxbox fonts-liberation gosu gnupg novnc \
+    python3 unzip websockify wget x11vnc xvfb \
   && install -d -m 0755 /etc/apt/keyrings \
   && if [ "$TARGETARCH" = "amd64" ]; then \
        wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg; \
@@ -49,13 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
      fi \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid 10001 serialsync \
-  && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/serialsync --shell /bin/bash serialsync \
-  && mkdir -p /config /state /work
-COPY --from=epubcheck /opt/epubcheck /opt/epubcheck
-COPY --from=epubcheck /out/bin/ /usr/local/bin/
-WORKDIR /work
-COPY --from=build /out/serial-sync /usr/local/bin/serial-sync
+  && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/serialsync --shell /bin/bash serialsync
 COPY scripts/container/google-chrome /usr/local/bin/google-chrome
 COPY scripts/container/serial-sync-with-novnc /usr/local/bin/serial-sync-with-novnc
 RUN chmod +x /usr/local/bin/google-chrome /usr/local/bin/serial-sync-with-novnc
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/serial-sync"]
+COPY --from=build /out/serial-sync /usr/local/bin/serial-sync

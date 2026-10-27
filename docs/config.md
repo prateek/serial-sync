@@ -82,6 +82,10 @@ copies still follow correction and explicit rebuild policies.
 
 ## Live auth example
 
+Both [container runtimes](browser-runtime.md) use the same auth profile and
+`session_path`. The optional `steady` target needs a saved or imported session;
+use the full image with the same mounts for browser reauthentication.
+
 ```toml
 [runtime]
 log_root = "/state/logs"

@@ -79,14 +79,12 @@ func (c *Client) BootstrapAuth(ctx context.Context, auth config.AuthProfile, sou
 	if auth.SessionPath == "" {
 		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("patreon auth profile %q must define session_path", auth.ID)
 	}
-	if force {
-		if err := os.Remove(auth.SessionPath); err != nil && !os.IsNotExist(err) {
-			return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("remove existing Patreon session: %w", err)
+	if !force {
+		if _, authState, err := c.resolveLiveSession(ctx, auth, source); err == nil {
+			return provider.AuthBootstrapResult{State: authState, Action: "reused"}, nil
+		} else if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
+			return provider.AuthBootstrapResult{State: authState, Action: "failed"}, err
 		}
-	} else if _, authState, err := c.resolveLiveSession(ctx, auth, source); err == nil {
-		return provider.AuthBootstrapResult{State: authState, Action: "reused"}, nil
-	} else if authState == domain.AuthStateChallengeNeeded || authState == domain.AuthStateAuthenticated {
-		return provider.AuthBootstrapResult{State: authState, Action: "failed"}, err
 	}
 	if c.bootstrap == nil {
 		return provider.AuthBootstrapResult{State: domain.AuthStateReauthRequired, Action: "failed"}, fmt.Errorf("no Patreon bootstrapper configured")
