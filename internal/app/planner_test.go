@@ -15,7 +15,7 @@ import (
 // sequenced chapters, active editions and output config as values and need no
 // store, provider or EPUB tooling.
 
-func planRequest(series config.SeriesConfig, rebuild bool, candidates []domain.PublishCandidate, existing []domain.VolumeEdition, sequences map[string]domain.Sequence) volumeEvaluation {
+func planRequest(series config.SeriesConfig, output config.SeriesOutputConfig, rebuild bool, candidates []domain.PublishCandidate, existing []domain.VolumeEdition, sequences map[string]domain.Sequence) volumeFacts {
 	inputs := map[string]domain.NormalizedRelease{}
 	histories := map[string]map[string]classify.ExplainedDecision{}
 	bySource := map[string][]domain.PublishCandidate{}
@@ -42,7 +42,7 @@ func planRequest(series config.SeriesConfig, rebuild bool, candidates []domain.P
 	for _, candidate := range candidates {
 		sourcesByRelease[candidate.Release.ID] = candidate.Source.ID
 	}
-	return volumeEvaluation{
+	request := volumeEvaluation{
 		rebuild:          rebuild,
 		candidates:       candidates,
 		existing:         existing,
@@ -53,6 +53,7 @@ func planRequest(series config.SeriesConfig, rebuild bool, candidates []domain.P
 		archiveValid:     map[string]bool{},
 		config:           &config.Config{Sources: []config.SourceConfig{{ID: "fictional", Enabled: true}}},
 	}
+	return captureVolumeFacts(series, output, request)
 }
 
 func planChapter(t *testing.T, seriesID, releaseID string, chapter, position int) (domain.PublishCandidate, domain.Sequence) {
@@ -82,7 +83,7 @@ func TestPlannerCompletesFixedRangeAndKeepsNextRangeOpen(t *testing.T) {
 		candidates = append(candidates, candidate)
 		sequences[row.id] = seq
 	}
-	result, err := planSeriesVolumes(series, output, planRequest(series, false, candidates, nil, sequences))
+	result, err := planSeriesVolumes(series, output, planRequest(series, output, false, candidates, nil, sequences))
 	plans, editions, builds, removed, failures, block := result.Plans, result.Editions, result.Builds, result.Removed, result.Failures, result.BlockSeries
 	_ = removed
 	if err != nil || block || len(failures) != 0 {
@@ -116,7 +117,7 @@ func TestPlannerFlagsGapsIntentionalsAndDuplicates(t *testing.T) {
 		candidates = append(candidates, candidate)
 		sequences[row.id] = seq
 	}
-	result, err := planSeriesVolumes(series, output, planRequest(series, false, candidates, nil, sequences))
+	result, err := planSeriesVolumes(series, output, planRequest(series, output, false, candidates, nil, sequences))
 	plans := result.Plans
 	if err != nil {
 		t.Fatal(err)
@@ -144,13 +145,13 @@ func TestPlannerFreezesUnchangedAndRebuildsChangedEditions(t *testing.T) {
 	candidate, seq := planChapter(t, series.ID, "r1", 1, 1)
 	candidate2, seq2 := planChapter(t, series.ID, "r2", 2, 2)
 	two := []domain.PublishCandidate{candidate, candidate2}
-	recipe := volumeRecipe(series, nil)
+	recipe := volumeAssemblyRecipe(series, nil, "Harbor — Volume 1 (Chapters 1–2)", nil, "1", domain.VolumePlan{GroupID: "range:1:2", First: 1, Last: 2, Filename: "harbor-vol01.epub"}, two)
 	existing := []domain.VolumeEdition{{
 		ID: "volume_existing", SeriesID: series.ID, SourceID: "fictional", TrackID: "fictional/harbor", GroupID: "range:1:2", First: 1, Last: 2, RecipeHash: hashBytes(recipe), Active: true,
 		Members:  []domain.VolumeMember{{ReleaseID: "r1", ContentHash: "hash-r1", Position: 1}, {ReleaseID: "r2", ContentHash: "hash-r2", Position: 2}},
 		Artifact: domain.Artifact{ID: "volume_existing", Filename: "harbor-vol01.epub", StorageRef: "/archive.epub", SHA256: "abc"},
 	}}
-	request := planRequest(series, false, two, existing, map[string]domain.Sequence{"r1": seq, "r2": seq2})
+	request := planRequest(series, output, false, two, existing, map[string]domain.Sequence{"r1": seq, "r2": seq2})
 	request.archiveValid["volume_existing"] = true
 	result, err := planSeriesVolumes(series, output, request)
 	plans, editions, builds, failures := result.Plans, result.Editions, result.Builds, result.Failures
@@ -199,7 +200,7 @@ func TestPlannerGroupsBookChaptersAndKeepsExplicitSingles(t *testing.T) {
 	seq.KeepSingle = true
 	candidates = append(candidates, candidate)
 	sequences["r3"] = seq
-	result, err := planSeriesVolumes(series, output, planRequest(series, false, candidates, nil, sequences))
+	result, err := planSeriesVolumes(series, output, planRequest(series, output, false, candidates, nil, sequences))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +232,7 @@ func TestPlannerFinalChapterTruncationAndBundlingDisabled(t *testing.T) {
 		candidates = append(candidates, candidate)
 		sequences[row.id] = seq
 	}
-	result, err := planSeriesVolumes(final, out, planRequest(final, false, candidates, nil, sequences))
+	result, err := planSeriesVolumes(final, out, planRequest(final, out, false, candidates, nil, sequences))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +249,7 @@ func TestPlannerFinalChapterTruncationAndBundlingDisabled(t *testing.T) {
 		Artifact: domain.Artifact{ID: "volume_old", Filename: "harbor-vol01.epub"},
 	}}
 	plain := config.SeriesOutputConfig{Format: "epub", Bundling: "preserve", PrefaceMode: "none"}
-	request := planRequest(final, false, candidates, existing, sequences)
+	request := planRequest(final, plain, false, candidates, existing, sequences)
 	request.archiveValid["volume_old"] = true
 	result, err = planSeriesVolumes(final, plain, request)
 	if err != nil || len(result.Plans) != 1 || result.Plans[0].Status != "pending_rebuild" || !strings.Contains(result.Plans[0].Reason, "bundling disabled") {
@@ -258,5 +259,48 @@ func TestPlannerFinalChapterTruncationAndBundlingDisabled(t *testing.T) {
 	result, err = planSeriesVolumes(final, plain, request)
 	if err != nil || len(result.Removed) != 1 || result.Removed[0] != "range:1:2" {
 		t.Fatalf("rebuild with bundling disabled retires the edition: %+v %v", result.Removed, err)
+	}
+}
+
+func TestPlannerRegroupingCannotReuseAnotherGroupEditionIdentity(t *testing.T) {
+	series := config.SeriesConfig{ID: "harbor", Title: "Harbor", Source: "fictional", Books: []config.BookConfig{{ID: "one", Number: 1, Title: "Collected", LastChapter: 1}}}
+	output := config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 1}
+	candidate, seq := planChapter(t, series.ID, "r1", 1, 1)
+	seq.BookID, seq.Book = "one", 1
+	request := planRequest(series, output, true, []domain.PublishCandidate{candidate}, nil, map[string]domain.Sequence{"r1": seq})
+	first, err := planSeriesVolumes(series, output, request)
+	if err != nil || len(first.Editions) != 1 {
+		t.Fatalf("initial: %+v %v", first, err)
+	}
+	series.Books[0].ID = "renamed"
+	seq.BookID = "renamed"
+	request = planRequest(series, output, true, []domain.PublishCandidate{candidate}, first.Editions, map[string]domain.Sequence{"r1": seq})
+	request.archiveValid[first.Editions[0].Artifact.ID] = true
+	second, err := planSeriesVolumes(series, output, request)
+	if err != nil || len(second.Editions) != 1 || second.Editions[0].ID == first.Editions[0].ID {
+		t.Fatalf("regroup aliased the prior edition: %+v %v", second, err)
+	}
+}
+
+func TestPlannerBookCoverageChangeUpdatesEditionFacts(t *testing.T) {
+	series := config.SeriesConfig{ID: "harbor", Title: "Harbor", Source: "fictional", Books: []config.BookConfig{{ID: "one", Number: 1, Title: "Collected", LastChapter: 2}}}
+	output := config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+	first, seq1 := planChapter(t, series.ID, "r1", 1, 1)
+	second, seq2 := planChapter(t, series.ID, "r2", 2, 2)
+	seq1.BookID, seq1.Book = "one", 1
+	seq2.BookID, seq2.Book = "one", 1
+	candidates := []domain.PublishCandidate{first, second}
+	sequences := map[string]domain.Sequence{"r1": seq1, "r2": seq2}
+	request := planRequest(series, output, true, candidates, nil, sequences)
+	initial, err := planSeriesVolumes(series, output, request)
+	if err != nil || len(initial.Editions) != 1 {
+		t.Fatalf("initial: %+v %v", initial, err)
+	}
+	series.Books[0].LastChapter = 1
+	request = planRequest(series, output, true, candidates, initial.Editions, sequences)
+	request.archiveValid[initial.Editions[0].Artifact.ID] = true
+	updated, err := planSeriesVolumes(series, output, request)
+	if err != nil || len(updated.Editions) != 1 || updated.Editions[0].Last != 1 || updated.Editions[0].ID == initial.Editions[0].ID {
+		t.Fatalf("coverage change retained stale edition facts: %+v %v", updated, err)
 	}
 }

@@ -121,7 +121,11 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 				break
 			}
 		}
-		plan.Items = append(plan.Items, domain.PublishItemResult{ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: pt.Kind(), TargetRef: identity.Ref, Action: action, Message: message})
+		conditional := candidate.Volume != nil && candidate.Planned && (action == "add" || action == "replace" || action == "repair")
+		if conditional {
+			message = "Volume may be rebuilt and delivered after member bytes are regenerated; an unchanged edition keeps the current output."
+		}
+		plan.Items = append(plan.Items, domain.PublishItemResult{Conditional: conditional, ArtifactID: candidate.Artifact.ID, TargetID: target.ID, TargetKind: pt.Kind(), TargetRef: identity.Ref, Action: action, Message: message})
 	}
 	if !pt.Capabilities().Retires {
 		return plan, nil
@@ -154,6 +158,7 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 			}
 		}
 		var related []string
+		conditional := false
 		for _, replacement := range candidates {
 			covers := required[replacement.Release.ID] && replacement.Release.ID != ""
 			if replacement.Volume != nil {
@@ -164,6 +169,7 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 				}
 			}
 			if covers {
+				conditional = conditional || replacement.Volume != nil && replacement.Planned
 				related = append(related, replacement.Artifact.ID)
 			}
 		}
@@ -174,7 +180,11 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 			plan.Blocked = append(plan.Blocked, item.Message)
 			continue
 		}
-		plan.Items = append(plan.Items, domain.PublishItemResult{ArtifactID: old.Artifact.ID, TargetID: target.ID, TargetKind: old.Record.TargetKind, TargetRef: old.Record.TargetRef, Action: "retire"})
+		message := ""
+		if conditional {
+			message = "Retirement depends on the regenerated volume being delivered; an unchanged edition keeps the current output."
+		}
+		plan.Items = append(plan.Items, domain.PublishItemResult{Conditional: conditional, ArtifactID: old.Artifact.ID, TargetID: target.ID, TargetKind: old.Record.TargetKind, TargetRef: old.Record.TargetRef, Action: "retire", Message: message})
 		plan.Retirements = append(plan.Retirements, planRetirement{
 			RecordID:    old.Record.ID,
 			ReleaseID:   old.Release.ID,

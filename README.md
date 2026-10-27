@@ -114,7 +114,12 @@ The default user path is:
 ## Rebuild an existing library
 
 Normal runs retain legacy filenames and completed volumes. Preview an explicit
-migration from the stored catalog before rebuilding a series:
+migration from the stored catalog before rebuilding a series. Rebuild also checks
+chapter reading-copy editions, so presentation changes can update a volume even
+when upstream text is unchanged. Unknown member bytes are reported as a
+conditional rebuild: the volume may change after regeneration, while identical
+editions keep the current output. The updated recipe refreshes older volumes on
+explicit rebuild; preview and apply one series at a time with `--series <series-id>`:
 
 ```sh
 docker run --rm --network none \

@@ -57,6 +57,12 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 		if err != nil {
 			return domain.Artifact{}, err
 		}
+		if chapter.Artifact.SHA256 != "" {
+			sum := sha256.Sum256(data)
+			if hex.EncodeToString(sum[:]) != chapter.Artifact.SHA256 {
+				return domain.Artifact{}, fmt.Errorf("chapter %s: archived reading copy does not match its recorded hash", chapter.Release.Title)
+			}
+		}
 		member, err := openEPUBPackage(data)
 		if err != nil {
 			return domain.Artifact{}, fmt.Errorf("chapter %s: %w", chapter.Release.Title, err)
@@ -166,6 +172,9 @@ func (m *Materializer) BuildVolume(ctx context.Context, volume domain.VolumeEdit
 
 // volumeSeriesIndex sorts a volume where its first chapter sorts.
 func volumeSeriesIndex(volume domain.VolumeEdition, first domain.PublishCandidate) string {
+	if volume.SeriesIndex != "" {
+		return volume.SeriesIndex
+	}
 	if recorded := ArchivedSequence(first.Artifact); recorded != nil && recorded.SeriesIndex != "" {
 		return recorded.SeriesIndex
 	}

@@ -306,6 +306,7 @@ type VolumeMember struct {
 }
 
 type VolumeEdition struct {
+	SeriesIndex string               `json:"series_index,omitempty"`
 	Publication *PublicationMetadata `json:"publication,omitempty"`
 	Notes       []string             `json:"notes,omitempty"`
 	ID          string               `json:"id"`
@@ -335,12 +336,13 @@ type VolumePlan struct {
 }
 
 type PublishItemResult struct {
-	ArtifactID string `json:"artifact_id"`
-	TargetID   string `json:"target_id"`
-	TargetKind string `json:"target_kind"`
-	TargetRef  string `json:"target_ref"`
-	Action     string `json:"action"`
-	Message    string `json:"message,omitempty"`
+	Conditional bool   `json:"conditional,omitempty"`
+	ArtifactID  string `json:"artifact_id"`
+	TargetID    string `json:"target_id"`
+	TargetKind  string `json:"target_kind"`
+	TargetRef   string `json:"target_ref"`
+	Action      string `json:"action"`
+	Message     string `json:"message,omitempty"`
 }
 
 type PublishResult struct {

@@ -1276,6 +1276,13 @@ func FormatSyncResult(result domain.SyncResult) string {
 	return strings.Join(lines, "\n")
 }
 
+func publishActionLabel(item domain.PublishItemResult) string {
+	if item.Conditional {
+		return "conditional " + item.Action
+	}
+	return item.Action
+}
+
 func FormatPublishResult(result domain.PublishResult) string {
 	verb := "published"
 	if result.DryRun {
@@ -1289,7 +1296,7 @@ func FormatPublishResult(result domain.PublishResult) string {
 		lines = append(lines, formatVolumePlan(volume))
 	}
 	for _, item := range result.Items {
-		line := fmt.Sprintf("- [%s] %s -> %s (%s, %s)", item.Action, item.ArtifactID, item.TargetID, item.TargetKind, item.TargetRef)
+		line := fmt.Sprintf("- [%s] %s -> %s (%s, %s)", publishActionLabel(item), item.ArtifactID, item.TargetID, item.TargetKind, item.TargetRef)
 		if strings.TrimSpace(item.Message) != "" {
 			line += " :: " + item.Message
 		}

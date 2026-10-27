@@ -413,7 +413,14 @@ range or starting position when preview reports an overlap.
 Normal sync preserves completed volumes. A correction to an existing member is
 captured and reported as pending rebuild; a late chapter absent from the frozen
 membership remains a single. Use the [offline rebuild workflow](first-source.md#rebuild-stored-output)
-to apply corrections or regroup an existing library.
+to apply corrections, chapter presentation changes, or regroup an existing library.
+Volume reuse follows the member reading-copy editions as well as release content
+and positions. A rebuild preview reports `conditional_rebuild` for planned member changes
+without generating EPUBs. Delivery and retirement actions are explicitly conditional
+until member bytes are regenerated; identical editions keep the volume frozen.
+Preview never promises `frozen` for an edition that activation would change.
+The recipe upgrade refreshes older volumes on explicit rebuild; review one series
+at a time with `--series` as described in [volume output](config.md#volume-output).
 
 ## Choosing Priorities
 

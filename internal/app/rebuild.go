@@ -286,7 +286,11 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 		result.Blocked = append(result.Blocked, plan.Blocked...)
 		for _, item := range plan.Items {
 			if item.Action == "replace" || item.Action == "retire" {
-				result.Notices = append(result.Notices, "Replacing delivered books may reset saved reading positions; check a small reader sample before a larger migration.")
+				notice := "Replacing delivered books may reset saved reading positions; check a small reader sample before a larger migration."
+				if item.Conditional {
+					notice = "Volume delivery is conditional on regenerated member bytes. If replacement occurs, saved reading positions may reset; check a small reader sample before a larger migration."
+				}
+				result.Notices = append(result.Notices, notice)
 				break
 			}
 		}

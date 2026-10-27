@@ -82,7 +82,7 @@ func formatAppliedLibrary(comparison AppliedLibraryComparison) []string {
 		}
 		lines = append(lines, fmt.Sprintf("  %s: %d action(s), %d blocked", entry.name, len(entry.plan.Actions), len(entry.plan.Blocked)))
 		for _, item := range entry.plan.Actions {
-			lines = append(lines, fmt.Sprintf("    %s %s: %s", item.Action, item.TargetID, item.TargetRef))
+			lines = append(lines, fmt.Sprintf("    %s %s: %s", publishActionLabel(item), item.TargetID, item.TargetRef))
 		}
 		for _, blocked := range entry.plan.Blocked {
 			lines = append(lines, "    blocked: "+blocked)

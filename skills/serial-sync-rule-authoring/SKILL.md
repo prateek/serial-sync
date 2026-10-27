@@ -177,6 +177,12 @@ For an existing library, use the containerized offline rebuild commands in
 [`docs/first-source.md`](../../docs/first-source.md#rebuild-stored-output). Preview
 the selected source/series/target with read-only mounts before applying output
 changes. Completed volumes and legacy output stay unchanged on normal runs.
+Check member presentation changes even when upstream text is unchanged: rebuild
+compares chapter reading-copy editions. Treat `conditional_rebuild` and conditional
+delivery actions as possible changes after member bytes are regenerated; activation
+retains identical editions. A `frozen` preview promises no volume edition change.
+The recipe upgrade refreshes older volumes on explicit rebuild, so preview and
+apply a series-scoped migration with `--series <series-id>`.
 Rebuild and its dry-run exclude disabled sources; enable every source needed by
 the selected volume before rebuilding it.
 Validate a small Calibre and reader sample before a large migration. Exec hooks

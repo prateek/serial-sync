@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/classify"
@@ -82,19 +84,109 @@ type volumeEvaluation struct {
 	archiveValid               map[string]bool
 	series                     []config.SeriesConfig
 	config                     *config.Config
-	// publication resolves the metadata a volume edition carries; the pure
-	// planner accepts it rather than reading config assets itself.
+	// publication is resolved during fact capture, before pure planning.
 	publication func(sourceID string, release domain.NormalizedRelease, decision domain.TrackDecision) (*domain.PublicationMetadata, error)
+}
+
+type volumeFacts struct {
+	sourceFilter, seriesFilter string
+	rebuild                    bool
+	candidates                 []domain.PublishCandidate
+	existing                   []domain.VolumeEdition
+	inputs                     map[string]domain.NormalizedRelease
+	scope                      map[string]bool
+	sourcesByRelease           map[string]string
+	archiveValid               map[string]bool
+	chapters                   map[string]volumeChapterFacts
+}
+
+type volumeChapterFacts struct {
+	sequence       domain.Sequence
+	legacy         bool
+	publication    *domain.PublicationMetadata
+	publicationErr error
+}
+
+func captureVolumeFacts(series config.SeriesConfig, output config.SeriesOutputConfig, request volumeEvaluation) volumeFacts {
+	facts := volumeFacts{
+		sourceFilter: request.sourceFilter, seriesFilter: request.seriesFilter, rebuild: request.rebuild,
+		candidates: request.candidates, existing: request.existing, inputs: request.inputs,
+		scope: request.scope, sourcesByRelease: request.sourcesByRelease, archiveValid: request.archiveValid,
+		chapters: map[string]volumeChapterFacts{},
+	}
+	if !volumeSeriesInScope(series.ID, facts) || output.Bundling != "volume" {
+		return facts
+	}
+	rules := request.config.Compiled()
+	for _, candidate := range request.candidates {
+		if candidate.Track.TrackKey != series.ID || candidate.Assignment.ReleaseRole != domain.ReleaseRoleChapter {
+			continue
+		}
+		chapter := volumeChapterFacts{}
+		if request.scope[candidate.Source.ID] {
+			normalized, present := request.inputs[candidate.Release.ID]
+			if !present {
+				continue
+			}
+			decision := authoringDecisionFor(candidate.Source.ID, normalized, request.histories[candidate.Source.ID], request.config, rules)
+			if decision.Sequence == nil {
+				continue
+			}
+			chapter.sequence = *decision.Sequence
+			if !request.rebuild && chapter.sequence.Chapter > 0 && !chapter.sequence.KeepSingle && candidate.Artifact.MetadataRef != "" {
+				chapter.legacy = artifact.InspectSidecar(candidate.Artifact).Legacy
+			}
+		} else {
+			stored := artifact.InspectSidecar(candidate.Artifact)
+			chapter.sequence = archivedSequence(candidate, series, stored.Sequence)
+			chapter.legacy = candidate.Artifact.MetadataRef != "" && stored.Legacy
+		}
+		facts.chapters[candidate.Release.ID] = chapter
+	}
+	if request.publication != nil {
+		// Reuse grouping/completeness policy to select the only chapters whose
+		// publication facts can affect an assembly. This preliminary plan is never applied.
+		assessment, err := planSeriesVolumes(series, output, facts)
+		if err == nil && !assessment.BlockSeries && len(assessment.Failures) == 0 {
+			for _, candidate := range assessment.publicationChapters {
+				chapter := facts.chapters[candidate.Release.ID]
+				chapter.publication, chapter.publicationErr = request.publication(candidate.Source.ID, request.inputs[candidate.Release.ID], domain.TrackDecision{SeriesID: series.ID, BookID: chapter.sequence.BookID, OutputFormat: domain.OutputFormatEPUB})
+				facts.chapters[candidate.Release.ID] = chapter
+			}
+		}
+	}
+	return facts
+}
+
+func volumeSeriesInScope(seriesID string, request volumeFacts) bool {
+	if request.seriesFilter != "" && seriesID != request.seriesFilter {
+		return false
+	}
+	if request.sourceFilter == "" && !request.rebuild {
+		return true
+	}
+	for _, candidate := range request.candidates {
+		if candidate.Track.TrackKey == seriesID && request.scope[candidate.Source.ID] {
+			return true
+		}
+	}
+	for _, volume := range request.existing {
+		if volume.Active && volume.SeriesID == seriesID && request.scope[volume.SourceID] {
+			return true
+		}
+	}
+	return false
 }
 
 // volumePlanResult is the planner's one result value.
 type volumePlanResult struct {
-	Plans       []domain.VolumePlan
-	Editions    []domain.VolumeEdition
-	Builds      []volumeBuild
-	Removed     []string
-	Failures    []error
-	BlockSeries bool
+	publicationChapters []domain.PublishCandidate
+	Plans               []domain.VolumePlan
+	Editions            []domain.VolumeEdition
+	Builds              []volumeBuild
+	Removed             []string
+	Failures            []error
+	BlockSeries         bool
 }
 
 type volumeBuild struct {
@@ -110,12 +202,9 @@ type volumeBuild struct {
 // materialize them. It performs no reads, builds or store writes; the caller
 // supplies the member-to-source map and archive integrity verdicts, and
 // activation materializes and stores the returned builds.
-func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputConfig, request volumeEvaluation) (volumePlanResult, error) {
-	sourceFilter, seriesFilter := request.sourceFilter, request.seriesFilter
+func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputConfig, request volumeFacts) (volumePlanResult, error) {
 	rebuild := request.rebuild
 	candidates, existing, inputs := request.candidates, request.existing, request.inputs
-	cfg := request.config
-	rules := cfg.Compiled()
 	active := map[string]domain.VolumeEdition{}
 	for _, volume := range existing {
 		if volume.Active {
@@ -126,25 +215,10 @@ func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputCon
 	var newEditions []domain.VolumeEdition
 	var builds []volumeBuild
 	var removedGroups []string
+	var publicationChapters []domain.PublishCandidate
 	var failures []error
-	if seriesFilter != "" && series.ID != seriesFilter {
+	if !volumeSeriesInScope(series.ID, request) {
 		return volumePlanResult{}, nil
-	}
-	if sourceFilter != "" || rebuild {
-		selected := false
-		for _, candidate := range candidates {
-			if candidate.Track.TrackKey == series.ID && request.scope[candidate.Source.ID] {
-				selected = true
-			}
-		}
-		for _, old := range active {
-			if old.SeriesID == series.ID && request.scope[old.SourceID] {
-				selected = true
-			}
-		}
-		if !selected {
-			return volumePlanResult{}, nil
-		}
 	}
 	if rebuild {
 		mixedScope := false
@@ -214,24 +288,14 @@ func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputCon
 		if candidate.Track.TrackKey != series.ID || candidate.Assignment.ReleaseRole != domain.ReleaseRoleChapter {
 			continue
 		}
-		var seq domain.Sequence
-		if !request.scope[candidate.Source.ID] {
-			seq = archivedSequence(candidate, series)
-		} else {
-			normalized, present := inputs[candidate.Release.ID]
-			if !present {
+		chapter, captured := request.chapters[candidate.Release.ID]
+		if !captured {
+			if _, present := inputs[candidate.Release.ID]; !present && request.scope[candidate.Source.ID] {
 				failures = append(failures, fmt.Errorf("missing stored input for %s", candidate.Release.ProviderReleaseID))
-				continue
 			}
-			decision := authoringDecisionFor(candidate.Source.ID, normalized, request.histories[candidate.Source.ID], cfg, rules)
-			if decision.Sequence == nil {
-				// A held release is under review: its decision carries no
-				// sequence. It fills no chapter slot and the range stays
-				// open.
-				continue
-			}
-			seq = *decision.Sequence
+			continue
 		}
+		seq := chapter.sequence
 		if seq.BookID != "" {
 			hasBooks = true
 		}
@@ -312,7 +376,7 @@ func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputCon
 		seen := map[int]bool{}
 		for _, chapter := range group.chapters {
 			seq := group.sequences[chapter.Release.ID]
-			if !rebuild && chapter.Artifact.MetadataRef != "" && artifact.IsLegacy(chapter.Artifact) {
+			if !rebuild && request.chapters[chapter.Release.ID].legacy {
 				complete = false
 				plan.Status, plan.Reason = "pending_rebuild", "legacy chapters require an explicit migration rebuild"
 			}
@@ -382,23 +446,31 @@ func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputCon
 			members = append(members, domain.VolumeMember{ReleaseID: chapter.Release.ID, ContentHash: chapter.Release.ContentHash, Position: group.sequences[chapter.Release.ID].Position})
 		}
 		first := group.chapters[0]
-		var metadata *domain.PublicationMetadata
-		if request.publication != nil {
-			var metaErr error
-			metadata, metaErr = request.publication(first.Source.ID, inputs[first.Release.ID], domain.TrackDecision{SeriesID: series.ID, BookID: group.sequences[first.Release.ID].BookID, OutputFormat: domain.OutputFormatEPUB})
-			if metaErr != nil {
-				return volumePlanResult{}, metaErr
+		publicationChapters = append(publicationChapters, first)
+		firstFacts := request.chapters[first.Release.ID]
+		if firstFacts.publicationErr != nil {
+			return volumePlanResult{}, firstFacts.publicationErr
+		}
+		metadata := firstFacts.publication
+		seriesIndex := group.sequences[first.Release.ID].SeriesIndex
+		if seriesIndex == "" {
+			seriesIndex = strconv.Itoa(members[0].Position)
+		}
+		recipe := volumeAssemblyRecipe(series, metadata, group.title, notes, seriesIndex, plan, group.chapters)
+		recipeHash := hashBytes(recipe)
+		uncertain := false
+		for _, chapter := range group.chapters {
+			if chapter.Planned {
+				uncertain = true
 			}
 		}
-		recipe := volumeRecipe(series, metadata)
-		recipeHash := hashBytes(recipe)
 		prior, exists := active[series.ID+"/"+key]
 		archiveValid := request.archiveValid[prior.Artifact.ID]
-		if exists && (!rebuild || prior.RecipeHash == recipeHash && reflect.DeepEqual(prior.Members, members) && archiveValid) {
+		if exists && (!rebuild || !uncertain && prior.RecipeHash == recipeHash && reflect.DeepEqual(prior.Members, members) && archiveValid) {
 			retainedGroups[key] = true
 			plan.Status = "frozen"
 			plan.Filename = prior.Artifact.Filename
-			if prior.RecipeHash != recipeHash || !reflect.DeepEqual(prior.Members, members) {
+			if uncertain || prior.RecipeHash != recipeHash || !reflect.DeepEqual(prior.Members, members) {
 				plan.Status = "pending_rebuild"
 				plan.Reason = "stored inputs or output settings changed"
 			}
@@ -410,13 +482,21 @@ func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputCon
 		}
 		fingerprint, _ := json.Marshal(members)
 		volume := domain.VolumeEdition{ID: "volume_" + hashBytes(append(recipe, fingerprint...)), SeriesID: series.ID, SourceID: group.chapters[0].Source.ID, TrackID: group.chapters[0].Track.ID, GroupID: key, First: plan.First, Last: plan.Last, RecipeHash: recipeHash, Active: true, Members: members}
+		volume.SeriesIndex = seriesIndex
 		volume.Notes = notes
 		volume.Publication = metadata
 		volume.Artifact = domain.Artifact{ID: volume.ID, TrackID: volume.TrackID, Filename: plan.Filename, MIMEType: "application/epub+zip"}
+		if uncertain {
+			volume.Artifact.State = domain.ArtifactStatePlanned
+		}
 		newEditions = append(newEditions, volume)
 		builds = append(builds, volumeBuild{edition: volume, title: group.title, chapters: group.chapters})
 		retainedGroups[key] = true
 		plan.Status = "complete"
+		if uncertain {
+			plan.Status = "conditional_rebuild"
+			plan.Reason = "member bytes must be regenerated; volume may rebuild or remain frozen"
+		}
 		plans = append(plans, plan)
 	}
 	if rebuild && len(failures) == failureStart {
@@ -426,18 +506,41 @@ func planSeriesVolumes(series config.SeriesConfig, output config.SeriesOutputCon
 			}
 		}
 	}
-	return volumePlanResult{Plans: plans, Editions: newEditions, Builds: builds, Removed: removedGroups, Failures: failures}, nil
+	return volumePlanResult{publicationChapters: publicationChapters, Plans: plans, Editions: newEditions, Builds: builds, Removed: removedGroups, Failures: failures}, nil
 }
 
-// volumeRecipe is the edition identity input: the series configuration, the
-// publication metadata fingerprint and the assembly version, so a change to
-// any of them plans a new edition.
 func volumeRecipe(series config.SeriesConfig, metadata *domain.PublicationMetadata) []byte {
 	recipe, _ := json.Marshal(struct {
-		Series          config.SeriesConfig
+		SeriesID        string
+		Title           string
 		Metadata        string
 		AssemblyVersion int
-	}{series, artifact.PublicationFingerprint(metadata), 5})
+	}{series.ID, series.Title, artifact.PublicationFingerprint(metadata), 6})
+	return recipe
+}
+
+func volumeAssemblyRecipe(series config.SeriesConfig, metadata *domain.PublicationMetadata, title string, notes []string, index string, plan domain.VolumePlan, chapters []domain.PublishCandidate) []byte {
+	type member struct {
+		ReadingCopy           string
+		Title                 string
+		Author                string
+		Series                string
+		PublishedAt, EditedAt string
+	}
+	members := make([]member, 0, len(chapters))
+	for _, chapter := range chapters {
+		members = append(members, member{chapter.Artifact.SHA256, chapter.Release.Title, chapter.Track.CanonicalAuthor, chapter.Track.TrackName, chapter.Release.PublishedAt.UTC().Format(time.RFC3339Nano), chapter.Release.EditedAt.UTC().Format(time.RFC3339Nano)})
+	}
+	recipe, _ := json.Marshal(struct {
+		Base        json.RawMessage
+		GroupID     string
+		First, Last int
+		Filename    string
+		Title       string
+		Notes       []string
+		SeriesIndex string
+		Members     []member
+	}{volumeRecipe(series, metadata), plan.GroupID, plan.First, plan.Last, plan.Filename, title, notes, index, members})
 	return recipe
 }
 
@@ -527,7 +630,8 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation,
 			continue
 		}
 		output := cfg.SeriesOutput(series)
-		planned, planErr := planSeriesVolumes(series, output, request)
+		facts := captureVolumeFacts(series, output, request)
+		planned, planErr := planSeriesVolumes(series, output, facts)
 		if planErr != nil {
 			return plans, nil, planErr
 		}
@@ -622,7 +726,7 @@ func (s *Service) volumeCandidates(ctx context.Context, chapters []domain.Publis
 		for _, member := range volume.Members {
 			covered[member.ReleaseID] = true
 		}
-		result = append(result, domain.PublishCandidate{Source: *source, Track: *track, Artifact: volume.Artifact, Volume: &volume})
+		result = append(result, domain.PublishCandidate{Source: *source, Track: *track, Artifact: volume.Artifact, Volume: &volume, Planned: volume.Artifact.State == domain.ArtifactStatePlanned})
 	}
 	for _, chapter := range chapters {
 		if !covered[chapter.Release.ID] {

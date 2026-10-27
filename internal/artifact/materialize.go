@@ -51,19 +51,22 @@ type StoredState struct {
 	Sequence    *domain.Sequence
 }
 
-// Inspect reads the artifact's sidecar once and returns its stored state.
-// Intake passes canonical artifacts only; volume sidecars (VolumeEdition JSON)
-// never reach it.
-func Inspect(artifact domain.Artifact) StoredState {
-	state := StoredState{Legacy: IsLegacy(artifact)}
-	if meta, ok := readCanonicalSidecar(artifact); ok {
-		state.Publication = meta.Decision.Publication
-		state.Sequence = meta.Decision.Sequence
-	} else {
-		state.Blocked = true
-		state.BlockReason = "unreadable sidecar"
+// InspectSidecar captures canonical metadata without opening the reading copy.
+func InspectSidecar(artifact domain.Artifact) StoredState {
+	meta, ok := readCanonicalSidecar(artifact)
+	if !ok {
+		return StoredState{Legacy: true, Blocked: true, BlockReason: "unreadable sidecar"}
 	}
-	// Intactness is checked separately since it requires filesystem access.
+	return StoredState{
+		Legacy:      meta.OutputVersion < outputVersion(meta.Decision),
+		Publication: meta.Decision.Publication,
+		Sequence:    meta.Decision.Sequence,
+	}
+}
+
+// Inspect captures canonical metadata and checks the reading copy's integrity.
+func Inspect(artifact domain.Artifact) StoredState {
+	state := InspectSidecar(artifact)
 	state.Intact, _ = IntactOnDisk(artifact)
 	return state
 }
