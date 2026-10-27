@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/prateek/serial-sync/internal/app"
+	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
+	"github.com/prateek/serial-sync/internal/store"
 	"github.com/prateek/serial-sync/internal/store/sqlite"
 )
 
@@ -624,5 +626,104 @@ func TestComparisonPlansEachConfigAgainstItsOwnSources(t *testing.T) {
 	}
 	if comparison.Candidate == nil || len(comparison.Candidate.Actions) != 0 || len(comparison.Candidate.Notices) == 0 {
 		t.Fatalf("disabled candidate source should retain files with a notice: %+v", comparison.Candidate)
+	}
+}
+
+type authoringReadCatalog struct{ store.CatalogReader }
+
+func TestAuthoringInterfaceUsesBothCorporaAndOnlyCatalogReads(t *testing.T) {
+	root, fixture, path, base := setupReplayFixture(t)
+	candidate := filepath.Join(root, "candidate.toml")
+	held := strings.Replace(base, "enabled=true", "ignore_labels=[\"Harbor\"]\nenabled=true", 1)
+	held = strings.Replace(held, "match_type=\"title_regex\"\nmatch_value=\"^Harbor\"", "match_type=\"fallback\"\nhold_candidates=true", 1)
+	writeReplayFile(t, candidate, strings.Replace(held, `authors=["Fictional Author"]`, `authors=["Changed Author"]`, 1))
+	cfg, _, err := config.Load(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := sqlite.OpenReadOnly(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	// This adapter deliberately exposes no repository mutation methods.
+	authoring := app.NewAuthoring(cfg, authoringReadCatalog{repo}, nil)
+	before := treeHashes(t, root)
+	configBefore, _ := json.Marshal(cfg)
+	var previews []app.RulesPreviewResult
+	for _, options := range []app.RulesPreviewOptions{
+		{Stored: true, CompareConfig: path, ShowPosts: true, CreatorFilters: []string{"fictional-author"}},
+		{WorkspacePath: filepath.Join(fixture, "dump"), CompareConfig: path, ShowPosts: true, CreatorFilters: []string{"fictional-author"}},
+	} {
+		got, err := authoring.Preview(context.Background(), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TotalPosts != 4 || got.Materializable != 2 {
+			t.Fatalf("wrong corpus outcome: %+v", got)
+		}
+		if got.Comparison == nil || got.Comparison.AppliedLibrary.Status != "evaluated" || len(got.Comparison.AppliedLibrary.Candidate.Actions) != 2 {
+			t.Fatalf("missing actual rebuild outcome: %+v", got.Comparison)
+		}
+		heldPost := false
+		for _, post := range got.Creators[0].Preview.Posts {
+			if post.ProviderReleaseID == "3" {
+				heldPost = len(post.Explanation.HeldReasons) > 0 && !post.Materializable
+			}
+		}
+		if !heldPost {
+			t.Fatal("candidate series was not held")
+		}
+		previews = append(previews, got)
+	}
+	if !reflect.DeepEqual(previews[0].Comparison, previews[1].Comparison) {
+		t.Fatalf("corpus adapters disagree about holds/library: %+v vs %+v", previews[0].Comparison, previews[1].Comparison)
+	}
+	for i := range previews[0].Creators[0].Preview.Posts {
+		a, b := previews[0].Creators[0].Preview.Posts[i], previews[1].Creators[0].Preview.Posts[i]
+		if !reflect.DeepEqual(a.Decision, b.Decision) || !reflect.DeepEqual(a.Explanation, b.Explanation) || a.Eligibility != b.Eligibility || !reflect.DeepEqual(a.Sequence, b.Sequence) || a.Filename != b.Filename {
+			t.Fatalf("corpus adapters disagree about post %s: %+v vs %+v", a.ProviderReleaseID, a, b)
+		}
+	}
+	configAfter, _ := json.Marshal(cfg)
+	if string(configBefore) != string(configAfter) {
+		t.Fatal("evaluation mutated caller config")
+	}
+	if !reflect.DeepEqual(before, treeHashes(t, root)) {
+		t.Fatal("authoring wrote state")
+	}
+
+	manifestPath := filepath.Join(fixture, "dump", "manifest.json")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeReplayFile(t, manifestPath, strings.ReplaceAll(string(manifest), "fictional-author", "unused"))
+	scoped, err := authoring.Preview(context.Background(), app.RulesPreviewOptions{WorkspacePath: filepath.Join(fixture, "dump"), CompareConfig: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(scoped.Comparison.AppliedLibrary.Scope, []string{"unused"}) || len(scoped.Comparison.AppliedLibrary.Candidate.Actions) != 0 {
+		t.Fatalf("workspace source scope did not constrain library planning: %+v", scoped.Comparison.AppliedLibrary)
+	}
+	writeReplayFile(t, manifestPath, string(manifest))
+	workspaceOnly := app.NewAuthoring(cfg, nil, nil)
+	got, err := workspaceOnly.Preview(context.Background(), app.RulesPreviewOptions{WorkspacePath: filepath.Join(fixture, "dump"), CompareConfig: path})
+	if err != nil || got.Comparison.AppliedLibrary.Status != "unavailable" {
+		t.Fatalf("missing catalog: %+v %v", got.Comparison, err)
+	}
+	if _, err := workspaceOnly.Preview(context.Background(), app.RulesPreviewOptions{Stored: true}); err == nil || !strings.Contains(err.Error(), "existing read-only catalog") {
+		t.Fatalf("stored preview accepted absent catalog: %v", err)
+	}
+	if _, err := workspaceOnly.Preview(context.Background(), app.RulesPreviewOptions{WorkspacePath: filepath.Join(root, "absent")}); err == nil {
+		t.Fatal("missing workspace accepted")
+	}
+	writeReplayFile(t, filepath.Join(fixture, "dump", "posts.ndjson"), "invalid capture")
+	damaged := treeHashes(t, root)
+	if _, err := workspaceOnly.Preview(context.Background(), app.RulesPreviewOptions{WorkspacePath: filepath.Join(fixture, "dump")}); err == nil {
+		t.Fatal("damaged corpus accepted")
+	}
+	if !reflect.DeepEqual(damaged, treeHashes(t, root)) {
+		t.Fatal("failed authoring wrote state")
 	}
 }

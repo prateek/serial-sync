@@ -20,6 +20,7 @@ import (
 	"github.com/prateek/serial-sync/internal/provider"
 	"github.com/prateek/serial-sync/internal/provider/patreon"
 	runtimedaemon "github.com/prateek/serial-sync/internal/runtime/daemon"
+	"github.com/prateek/serial-sync/internal/store"
 	"github.com/prateek/serial-sync/internal/store/sqlite"
 )
 
@@ -233,7 +234,7 @@ func (cmd *SetupDumpCmd) Run(cli *CLI) error {
 }
 
 func (cmd *SetupPreviewCmd) Run(cli *CLI) error {
-	cfg, roots, err := loadConfig(cli.ConfigPath)
+	cfg, _, err := loadConfig(cli.ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -245,11 +246,12 @@ func (cmd *SetupPreviewCmd) Run(cli *CLI) error {
 		}
 		defer repo.Close()
 	}
-	service := app.New(cfg, roots, cli.ConfigPath, nil, provider.NewRegistry(patreon.New()))
+	var catalog store.CatalogReader
 	if repo != nil {
-		service.Repo = repo
+		catalog = repo
 	}
-	result, err := service.PreviewRules(context.Background(), app.RulesPreviewOptions{
+	authoring := app.NewAuthoring(cfg, catalog, provider.NewRegistry(patreon.New()))
+	result, err := authoring.Preview(context.Background(), app.RulesPreviewOptions{
 		Stored:         cmd.Stored,
 		CompareConfig:  cmd.Compare,
 		Suggest:        cmd.Suggest,
@@ -257,7 +259,7 @@ func (cmd *SetupPreviewCmd) Run(cli *CLI) error {
 		SeriesFile:     cmd.SeriesFile,
 		CreatorFilters: trimStrings(cmd.Creators),
 		ShowPosts:      cmd.ShowPosts || cmd.Format == "json",
-	}, "setup preview")
+	})
 	if err != nil {
 		return err
 	}

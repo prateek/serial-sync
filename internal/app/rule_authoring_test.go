@@ -579,3 +579,61 @@ func TestCanceledSyncRetainsFetchedDiscoveryEvidence(t *testing.T) {
 		t.Fatalf("canceled sync lost fetched evidence: %+v %+v", result, candidates)
 	}
 }
+
+func TestGeneratedDumpDraftUsesGroupedSelectorsAndExplicitPreview(t *testing.T) {
+	upstream := newStubRuleAuthoringProvider()
+	for i := 0; i < 2; i++ {
+		upstream.docs["alpha"][i].Normalized.TextPlain = strings.Repeat("Fictional story text. ", 100)
+		upstream.docs["alpha"][i].Normalized.TextHTML = "<p>" + upstream.docs["alpha"][i].Normalized.TextPlain + "</p>"
+	}
+	service := newRuleAuthoringService(t, upstream)
+	root := filepath.Join(t.TempDir(), "workspace with spaces")
+	dump, err := service.DumpSources(context.Background(), "patreon-default", app.SourceDumpOptions{Path: root, CreatorFilters: []string{"alpha"}}, "dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scaffold := string(mustReadFile(t, dump.SeriesFile))
+	if strings.Contains(scaffold, "match_type") || !strings.Contains(scaffold, "title_patterns") {
+		t.Fatal("dump scaffold must teach current grouped selectors")
+	}
+	command := "serial-sync setup preview --workspace '" + root + "' --series-file series.toml --show-posts"
+	readme := string(mustReadFile(t, filepath.Join(root, "README.md")))
+	if !strings.Contains(readme, command) {
+		t.Fatalf("workspace README omits exact draft preview command: %s", readme)
+	}
+	var draft []string
+	for _, line := range strings.Split(scaffold, "\n") {
+		if strings.HasPrefix(line, "# [[series]]") || strings.HasPrefix(line, "# id =") || strings.HasPrefix(line, "# title =") || strings.HasPrefix(line, "# authors =") || strings.HasPrefix(line, "#   ") {
+			draft = append(draft, strings.TrimPrefix(line, "# "))
+		}
+	}
+	body := strings.Join(draft, "\n")
+	body = strings.ReplaceAll(body, "creator-id", "alpha")
+	body = strings.ReplaceAll(body, "Main Series", "Alpha Saga")
+	if err := os.WriteFile(dump.SeriesFile, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := app.NewAuthoring(service.Config, nil, nil).Preview(context.Background(), app.RulesPreviewOptions{WorkspacePath: root, SeriesFile: "series.toml", ShowPosts: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.TotalPosts != 3 || preview.Materializable != 2 {
+		t.Fatalf("documented draft preview: %+v", preview)
+	}
+	for _, post := range preview.Creators[0].Preview.Posts {
+		if post.Materializable && (len(post.Explanation.Attempts) == 0 || len(post.Explanation.Attempts[0].Selectors) == 0) {
+			t.Fatalf("grouped selection missing: %+v", post)
+		}
+	}
+	service.Config.Defaults = config.RuleDefaults{Format: "epub", ContentStrategy: "attachment_preferred"}
+	inherited, err := app.NewAuthoring(service.Config, nil, nil).Preview(context.Background(), app.RulesPreviewOptions{WorkspacePath: root, SeriesFile: "series.toml", ShowPosts: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, post := range inherited.Creators[0].Preview.Posts {
+		if post.Materializable && (post.Decision.OutputFormat != domain.OutputFormatEPUB || post.Decision.ContentStrategy != domain.ContentStrategyAttachmentPreferred) {
+			t.Fatalf("generated draft overrode inherited defaults: %+v", post.Decision)
+		}
+	}
+
+}

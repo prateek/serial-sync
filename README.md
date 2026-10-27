@@ -118,7 +118,9 @@ migration from the stored catalog before rebuilding a series. Rebuild also check
 chapter reading-copy editions, so presentation changes can update a volume even
 when upstream text is unchanged. Unknown member bytes are reported as a
 conditional rebuild: the volume may change after regeneration, while identical
-editions keep the current output. The updated recipe refreshes older volumes on
+editions keep the current output. A definite replacement or retirement produces an unconditional reading-position
+notice; item-level conditional flags remain intact.
+The updated recipe refreshes older volumes on
 explicit rebuild; preview and apply one series at a time with `--series <series-id>`:
 
 ```sh
@@ -140,6 +142,7 @@ It checks captured inputs without writing captures or running converters; input
 failures block preview and execution with the same reason. Archive repairs may
 show a potential replacement and reading-position warning: preview does not
 regenerate bytes. A rebuild that reproduces the delivered bytes can skip delivery.
+When disabling volume bundling, rebuild preview lists replacement chapter files and retirement of the last active volume, even when no volumes remain.
 Preview and rebuild both exclude disabled sources and retain their published files.
 If the publisher lives outside `/state`, mount its folder too, read-only for the
 preview. See [the rebuild walkthrough](docs/first-source.md#rebuild-stored-output)

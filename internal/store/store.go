@@ -15,31 +15,39 @@ type SyncSnapshot struct {
 	Artifact   domain.Artifact
 }
 
-type Repository interface {
+// CatalogReader reads captured catalog and library facts without mutation.
+type CatalogReader interface {
 	GetReleaseEnrichment(context.Context, string, string, string) (*domain.ReleaseEnrichment, error)
-	SaveReleaseEnrichment(context.Context, string, string, domain.ReleaseEnrichment) error
 	ListLabelObservations(context.Context) ([]domain.LabelReference, error)
-	ListDiscoveryCandidates(ctx context.Context, sourceID string) ([]domain.DiscoveryCandidate, error)
+	ListDiscoveryCandidates(context.Context, string) ([]domain.DiscoveryCandidate, error)
+	GetSource(context.Context, string) (*domain.Source, error)
+	GetTrack(context.Context, string) (*domain.StoryTrack, error)
+	GetTrackBySourceAndKey(context.Context, string, string) (*domain.StoryTrack, error)
+	GetReleaseBundle(context.Context, string) (*domain.ReleaseBundle, error)
+	ListReleases(context.Context, string) ([]domain.Release, error)
+	ListPublishCandidates(context.Context, string) ([]domain.PublishCandidate, error)
+	ListVolumeEditions(context.Context) ([]domain.VolumeEdition, error)
+	ListPublishRecords(context.Context, string, string) ([]domain.PublishRecordBundle, error)
+	GetPendingPublish(context.Context, string) (*domain.PendingPublish, error)
+}
+
+type Repository interface {
+	CatalogReader
+	SaveReleaseEnrichment(context.Context, string, string, domain.ReleaseEnrichment) error
 	SaveDiscoveryCandidates(ctx context.Context, candidates []domain.DiscoveryCandidate) error
 	DismissDiscoveryCandidate(ctx context.Context, id, reason string) error
 	EnsureSchema(ctx context.Context) error
 	Close() error
 
 	UpsertSource(ctx context.Context, source domain.Source) error
-	GetSource(ctx context.Context, id string) (*domain.Source, error)
 
-	GetTrackBySourceAndKey(ctx context.Context, sourceID, trackKey string) (*domain.StoryTrack, error)
-	GetTrack(ctx context.Context, id string) (*domain.StoryTrack, error)
 	ListTracks(ctx context.Context, sourceID string) ([]domain.StoryTrack, error)
 
 	GetReleaseByProviderID(ctx context.Context, sourceID, providerReleaseID string) (*domain.Release, error)
-	GetReleaseBundle(ctx context.Context, id string) (*domain.ReleaseBundle, error)
-	ListReleases(ctx context.Context, sourceID string) ([]domain.Release, error)
 
 	GetCanonicalArtifactByReleaseID(ctx context.Context, releaseID string) (*domain.Artifact, error)
 	GetArtifact(ctx context.Context, id string) (*domain.Artifact, error)
 	SaveSyncSnapshot(ctx context.Context, snapshot SyncSnapshot) error
-	ListVolumeEditions(ctx context.Context) ([]domain.VolumeEdition, error)
 	ReplaceVolumes(ctx context.Context, seriesID string, volumes []domain.VolumeEdition, deactivatedGroups []string) error
 
 	StartRun(ctx context.Context, run domain.RunRecord) error
@@ -48,12 +56,9 @@ type Repository interface {
 	GetRunBundle(ctx context.Context, runID string) (*domain.RunBundle, error)
 	ListRuns(ctx context.Context, limit int) ([]domain.RunRecord, error)
 
-	ListPublishCandidates(ctx context.Context, sourceID string) ([]domain.PublishCandidate, error)
 	HasSuccessfulPublish(ctx context.Context, artifactID, targetID, publishHash string) (bool, error)
 	UpsertPublishRecord(ctx context.Context, record domain.PublishRecord) error
-	ListPublishRecords(ctx context.Context, sourceID, targetID string) ([]domain.PublishRecordBundle, error)
 	GetPublishRecord(ctx context.Context, id string) (*domain.PublishRecordBundle, error)
-	GetPendingPublish(ctx context.Context, targetID string) (*domain.PendingPublish, error)
 	SavePendingPublish(ctx context.Context, pending domain.PendingPublish) error
 	CompletePendingPublish(ctx context.Context, id string) error
 

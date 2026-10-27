@@ -99,13 +99,13 @@ func TestVolumeAssessmentAvoidsUnneededFilesystemReads(t *testing.T) {
 				_, err := os.ReadFile(assetPath)
 				return &domain.PublicationMetadata{Cover: &domain.MetadataAsset{Path: assetPath, SHA256: "selected-cover"}}, err
 			}
-			service := &Service{Config: cfg}
+			reader := &catalogReader{}
 			var plans []domain.VolumePlan
 			var editions []domain.VolumeEdition
 			done := make(chan error, 1)
 			go func() {
 				var err error
-				plans, editions, err = service.evaluateVolumes(context.Background(), request, false)
+				plans, editions, err = reader.evaluateVolumes(context.Background(), request, nil)
 				done <- err
 			}()
 			select {
@@ -187,7 +187,7 @@ func TestVolumeAssessmentDoesNotHashReadingCopies(t *testing.T) {
 			if scenario == "excluded-source" {
 				request.sourceFilter = "other"
 			}
-			plans, _, err := (&Service{Config: cfg}).evaluateVolumes(context.Background(), request, false)
+			plans, _, err := (&catalogReader{}).evaluateVolumes(context.Background(), request, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

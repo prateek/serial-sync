@@ -10,7 +10,7 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 )
 
-func (s *Service) loadStoredNormalized(ctx context.Context, release domain.Release) (domain.NormalizedRelease, error) {
+func (s *catalogReader) loadStoredNormalized(ctx context.Context, release domain.Release) (domain.NormalizedRelease, error) {
 	var normalized domain.NormalizedRelease
 	data, err := os.ReadFile(release.NormalizedPayloadRef)
 	if err != nil {
@@ -22,7 +22,7 @@ func (s *Service) loadStoredNormalized(ctx context.Context, release domain.Relea
 	if normalized.ProviderReleaseID != release.ProviderReleaseID {
 		return normalized, fmt.Errorf("stored payload identity does not match release %s", release.ProviderReleaseID)
 	}
-	metadata, err := s.Repo.GetReleaseEnrichment(ctx, release.SourceID, release.ProviderReleaseID, enrichmentFingerprint(normalized))
+	metadata, err := s.catalog.GetReleaseEnrichment(ctx, release.SourceID, release.ProviderReleaseID, enrichmentFingerprint(normalized))
 	if err != nil {
 		return normalized, err
 	}
@@ -40,7 +40,7 @@ func (s *Service) loadStoredNormalized(ctx context.Context, release domain.Relea
 	if err != nil {
 		return normalized, err
 	}
-	return s.Providers.EnrichCaptured(normalized, raw)
+	return s.enrichCaptured(normalized, raw)
 }
 
 func (s *Service) EnrichStored(ctx context.Context, source string) (int, error) {
@@ -105,4 +105,8 @@ func (s *Service) saveEnrichment(ctx context.Context, source string, release dom
 	}
 	metadata.CaptureFingerprint = enrichmentFingerprint(release)
 	return s.Repo.SaveReleaseEnrichment(ctx, source, release.ProviderReleaseID, metadata)
+}
+
+func (s *Service) loadStoredNormalized(ctx context.Context, release domain.Release) (domain.NormalizedRelease, error) {
+	return s.catalogReader().loadStoredNormalized(ctx, release)
 }

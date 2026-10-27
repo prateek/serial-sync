@@ -197,7 +197,6 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 			// The rest of the run (volumes, delivery) reuses these decisions
 			// instead of re-deciding the same releases from the store.
 			decisions.Observe(sourceCfg.ID, sourceDecisions)
-			rules := s.Config.Compiled()
 			for _, doc := range listResult.Documents {
 				result.Discovered++
 				if !dryRun && doc.Normalized.Enrichment != nil {
@@ -207,7 +206,7 @@ func (s *Service) Sync(ctx context.Context, sourceFilter string, dryRun bool, co
 						result.DiscoveryNotices = append(result.DiscoveryNotices, fmt.Sprintf("%s enrichment persistence failed: %v", sourceCfg.ID, err))
 					}
 				}
-				decision := authoringDecisionFor(sourceCfg.ID, doc.Normalized, sourceDecisions, s.Config, rules)
+				decision := decisionFromHistory(sourceCfg.ID, doc.Normalized, sourceDecisions, s.Config).Decision
 				classificationKind := observe.KindClassifyMatched
 				classificationMessage := "classified release"
 				if !decision.Matched {
@@ -518,7 +517,7 @@ func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter
 	if decisions == nil {
 		decisions = NewRunDecisions(s, s.Config)
 	}
-	if err := s.validatePublishTargets(s.Config, scope, targetFilter); err != nil {
+	if err := validatePublishTargets(s.Config, scope, targetFilter); err != nil {
 		return domain.PublishResult{}, err
 	}
 	recorder, err := observe.Start(ctx, s.Repo, command, scope.SourceID, dryRun, s.observeOptions())
@@ -532,50 +531,8 @@ func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter
 			_ = recorder.Finish(ctx, domain.RunStatusFailed, err.Error())
 		}
 	}()
-	targets := selectPublishers(s.Config.Publishers, targetFilter)
-	if len(targets) == 0 {
-		err = fmt.Errorf("no enabled publishers match %q", targetFilter)
+	if err := s.deliverLibrary(ctx, recorder, scope, targetFilter, dryRun, blockedSeries, decisions, &result); err != nil {
 		return result, err
-	}
-	if !dryRun {
-		if blockedSeries == nil {
-			blockedSeries = map[string]bool{}
-		}
-		var volumeErr error
-		result.Volumes, volumeErr = s.prepareVolumes(ctx, scope.SourceID, scope.SeriesID, scope.Rebuild, blockedSeries, decisions)
-		if volumeErr != nil {
-			result.Failed++
-			result.Items = append(result.Items, domain.PublishItemResult{Action: "failed", Message: volumeErr.Error()})
-		}
-	}
-	candidates, err := s.Repo.ListPublishCandidates(ctx, "")
-	if err != nil {
-		return result, err
-	}
-	selected, recordsByTarget, editions, err := s.deliverySelection(ctx, s.Config, scope, targets, candidates, blockedSeries, nil)
-	if err != nil {
-		return result, err
-	}
-	if err := s.validateLegacyReplacements(ctx, targets, selected, recordsByTarget); err != nil {
-		return result, err
-	}
-	if !scope.Rebuild {
-		if err := s.validateFrozenNames(ctx, targets, selected, recordsByTarget); err != nil {
-			return result, err
-		}
-	}
-	for _, target := range targets {
-		pt, targetErr := publish.TargetFor(target)
-		if targetErr != nil {
-			result.Failed++
-			result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.ID, Action: "blocked", Message: targetErr.Error()})
-			continue
-		}
-		outcome, execErr := s.executeDelivery(ctx, recorder, scope, pt, target, selected, recordsByTarget[target.ID], editions, dryRun)
-		if execErr != nil {
-			return result, execErr
-		}
-		outcome.fold(&result)
 	}
 	summaryVerb := "published"
 	if dryRun {
@@ -595,45 +552,6 @@ func (s *Service) publish(ctx context.Context, scope deliveryScope, targetFilter
 	return result, nil
 }
 
-// deliverySelection turns a target's chapter candidates into the selected
-// delivery set: volume candidates replace their members' chapters, collisions
-// resolve, the scope filter applies, and the library snapshot loads once.
-// Publish and the rebuild preview share this step.
-func (s *Service) deliverySelection(ctx context.Context, cfg *config.Config, scope deliveryScope, targets []config.PublisherConfig, chapters []domain.PublishCandidate, blockedSeries map[string]bool, existing []domain.VolumeEdition) (selected []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle, volumes []domain.VolumeEdition, err error) {
-	if existing == nil {
-		existing, err = s.Repo.ListVolumeEditions(ctx)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	candidates, err := s.volumeCandidates(ctx, chapters, existing)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := resolveCollisionNames(candidates); err != nil {
-		return nil, nil, nil, err
-	}
-	selected = make([]domain.PublishCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		if blockedSeries[candidate.Track.TrackKey] {
-			continue
-		}
-		if !s.sourceInScope(candidate.Source.ID, scope.SourceID, scope.Rebuild, cfg) || scope.SeriesID != "" && candidate.Track.TrackKey != scope.SeriesID {
-			continue
-		}
-		selected = append(selected, candidate)
-	}
-	recordsByTarget = map[string][]domain.PublishRecordBundle{}
-	for _, target := range targets {
-		records, err := s.Repo.ListPublishRecords(ctx, "", target.ID)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		recordsByTarget[target.ID] = records
-	}
-	return selected, recordsByTarget, existing, nil
-}
-
 func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, command string) (result RunOnceResult, err error) {
 	defer func() {
 		if err == nil {
@@ -647,7 +565,7 @@ func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, comma
 			}
 		}
 	}()
-	if err := s.validatePublishTargets(s.Config, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter); err != nil {
+	if err := validatePublishTargets(s.Config, deliveryScope{SourceID: sourceFilter, SeriesID: "", Rebuild: false}, targetFilter); err != nil {
 		return result, err
 	}
 	runDecisions := NewRunDecisions(s, s.Config)
@@ -662,34 +580,6 @@ func (s *Service) RunOnce(ctx context.Context, sourceFilter, targetFilter, comma
 		return result, err
 	}
 	return result, nil
-}
-
-func (s *Service) resolveTrack(ctx context.Context, source domain.Source, decision domain.TrackDecision) (domain.StoryTrack, error) {
-	existing, err := s.Repo.GetTrackBySourceAndKey(ctx, source.ID, decision.TrackKey)
-	if err != nil {
-		return domain.StoryTrack{}, err
-	}
-	canonicalAuthor := firstNonEmpty(decision.CanonicalAuthor, source.CreatorName)
-	seriesMeta := buildSeriesMeta(decision)
-	if existing != nil {
-		existing.TrackName = decision.TrackName
-		existing.CanonicalAuthor = canonicalAuthor
-		existing.SeriesMeta = seriesMeta
-		existing.OutputPolicy = string(decision.OutputFormat)
-		existing.UpdatedAt = time.Now().UTC()
-		return *existing, nil
-	}
-	return domain.StoryTrack{
-		ID:              catalogIdentity("trk", source.ID, decision.TrackKey),
-		SourceID:        source.ID,
-		TrackKey:        decision.TrackKey,
-		TrackName:       decision.TrackName,
-		CanonicalAuthor: canonicalAuthor,
-		SeriesMeta:      seriesMeta,
-		OutputPolicy:    string(decision.OutputFormat),
-		CreatedAt:       time.Now().UTC(),
-		UpdatedAt:       time.Now().UTC(),
-	}, nil
 }
 
 func buildSeriesMeta(decision domain.TrackDecision) string {
@@ -976,7 +866,7 @@ func (s *Service) observeOptions() observe.Options {
 	}
 }
 
-func (s *Service) sourceInScope(sourceID, sourceFilter string, rebuild bool, cfg *config.Config) bool {
+func sourceInScope(sourceID, sourceFilter string, rebuild bool, cfg *config.Config) bool {
 	if sourceFilter != "" && sourceID != sourceFilter {
 		return false
 	}

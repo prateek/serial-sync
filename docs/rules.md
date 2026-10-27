@@ -110,7 +110,8 @@ the same blocked destinations and retirement-ownership conflicts with the same
 messages, and a dry run fails on a cyclic or non-covering replacement set just
 as the rebuild would. Mount destination folders read-only so ownership
 checks can inspect them. Disabled or removed sources and publishers retain delivered
-files. Creator filters limit the planned source scope; a partial mixed-source volume
+files. Disabling bundling previews replacement chapters and retirement of the last
+active volume even when no volumes remain. Creator filters limit the planned source scope; a partial mixed-source volume
 can block replacement. Workspace-only replay reports applied state as unavailable.
 
 Release assessment checks both metadata currentness and archived reading-copy
@@ -424,6 +425,8 @@ Volume reuse follows the member reading-copy editions as well as release content
 and positions. A rebuild preview reports `conditional_rebuild` for planned member changes
 without generating EPUBs. Delivery and retirement actions are explicitly conditional
 until member bytes are regenerated; identical editions keep the volume frozen.
+A definite replacement or retirement produces an unconditional reading-position
+notice; item-level conditional flags remain intact.
 Preview never promises `frozen` for an edition that activation would change.
 The recipe upgrade refreshes older volumes on explicit rebuild; review one series
 at a time with `--series` as described in [volume output](config.md#volume-output).

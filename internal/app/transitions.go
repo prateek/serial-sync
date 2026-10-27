@@ -64,7 +64,7 @@ type deliveryPlan struct {
 // publish executor applies them, so dry runs and real runs share one
 // implementation of the add, replace, repair, unchanged, held and retire
 // decisions.
-func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
+func planDelivery(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
 	plan := deliveryPlan{ID: "delivery_" + uuid.NewString(), Target: target, Candidates: candidates, Maintenance: scope.Rebuild}
 	plan.EventScope = plan.ID
 	plan.Identities = map[string]publish.DeliveryIdentity{}
@@ -202,7 +202,7 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 }
 
 func (s *Service) deliveryPlan(ctx context.Context, scope deliveryScope, pt publish.Target, target config.PublisherConfig, candidates []domain.PublishCandidate, snapshot librarySnapshot) (deliveryPlan, error) {
-	pending, err := s.pendingDelivery(ctx, s.Config, scope, target)
+	pending, err := s.catalogReader().pendingDelivery(ctx, s.Config, scope, target)
 	if err != nil {
 		return deliveryPlan{}, err
 	}
@@ -213,7 +213,7 @@ func (s *Service) deliveryPlan(ctx context.Context, scope deliveryScope, pt publ
 		// plans saved before ordering existed carry no delivery order at all),
 		// so resuming the deserialized plan straight would deliver without the
 		// replacement gate.
-		rebuilt, err := s.planDelivery(ctx, scope, pt, target, pending.Candidates, snapshot)
+		rebuilt, err := planDelivery(ctx, scope, pt, target, pending.Candidates, snapshot)
 		if publish.IsCyclicReplacement(err) {
 			// Older versions saved cyclic plans before rejecting them without delivery.
 			if err := s.Repo.CompletePendingPublish(ctx, pending.ID); err != nil {
@@ -228,7 +228,7 @@ func (s *Service) deliveryPlan(ctx context.Context, scope deliveryScope, pt publ
 			return rebuilt, nil
 		}
 	}
-	plan, err := s.planDelivery(ctx, scope, pt, target, candidates, snapshot)
+	plan, err := planDelivery(ctx, scope, pt, target, candidates, snapshot)
 	if err != nil {
 		return plan, err
 	}
@@ -298,8 +298,8 @@ func (s *Service) applyRetirements(ctx context.Context, pt publish.Target, targe
 	return errors.Join(failures...)
 }
 
-func (s *Service) pendingDelivery(ctx context.Context, cfg *config.Config, scope deliveryScope, target config.PublisherConfig) (*deliveryPlan, error) {
-	pending, err := s.Repo.GetPendingPublish(ctx, target.ID)
+func (s *catalogReader) pendingDelivery(ctx context.Context, cfg *config.Config, scope deliveryScope, target config.PublisherConfig) (*deliveryPlan, error) {
+	pending, err := s.catalog.GetPendingPublish(ctx, target.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func (s *Service) pendingDelivery(ctx context.Context, cfg *config.Config, scope
 			return nil, fmt.Errorf("target %s has a pending delivery with different settings; restore its settings and retry first", target.ID)
 		}
 		for _, candidate := range plan.Candidates {
-			if !s.sourceInScope(candidate.Source.ID, scope.SourceID, scope.Rebuild, cfg) || scope.SeriesID != "" && candidate.Track.TrackKey != scope.SeriesID {
+			if !sourceInScope(candidate.Source.ID, scope.SourceID, scope.Rebuild, cfg) || scope.SeriesID != "" && candidate.Track.TrackKey != scope.SeriesID {
 				return nil, fmt.Errorf("target %s pending delivery requires excluded sources or series; retry its original scope first", target.ID)
 			}
 		}

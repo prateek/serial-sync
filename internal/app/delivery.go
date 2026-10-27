@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/observe"
@@ -64,7 +66,7 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 		var plan deliveryPlan
 		var err error
 		if dryRun {
-			plan, err = s.planDelivery(ctx, scope, pt, target, selected, snapshot)
+			plan, err = planDelivery(ctx, scope, pt, target, selected, snapshot)
 		} else {
 			plan, err = s.deliveryPlan(ctx, scope, pt, target, selected, snapshot)
 		}
@@ -273,4 +275,176 @@ func (s *Service) deliverCandidate(ctx context.Context, runID string, pt publish
 		}
 	}
 	return pt.Deliver(ctx, runID, plan.EventScope, candidate, identity, owned)
+}
+
+func (s *Service) deliverLibrary(ctx context.Context, recorder *observe.Recorder, scope deliveryScope, targetFilter string, dryRun bool, blockedSeries map[string]bool, decisions *RunDecisions, result *domain.PublishResult) error {
+	targets := selectPublishers(s.Config.Publishers, targetFilter)
+	if len(targets) == 0 {
+		return fmt.Errorf("no enabled publishers match %q", targetFilter)
+	}
+	if !dryRun {
+		if blockedSeries == nil {
+			blockedSeries = map[string]bool{}
+		}
+		var volumeErr error
+		result.Volumes, volumeErr = s.prepareVolumes(ctx, scope.SourceID, scope.SeriesID, scope.Rebuild, blockedSeries, decisions)
+		if volumeErr != nil {
+			result.Failed++
+			result.Items = append(result.Items, domain.PublishItemResult{Action: "failed", Message: volumeErr.Error()})
+		}
+	}
+	candidates, err := s.Repo.ListPublishCandidates(ctx, "")
+	if err != nil {
+		return err
+	}
+	existing, err := s.Repo.ListVolumeEditions(ctx)
+	if err != nil {
+		return err
+	}
+	prepared, err := s.catalogReader().prepareDelivery(ctx, s.Config, scope, targets, candidates, blockedSeries, existing, existing)
+	if err != nil {
+		return err
+	}
+	for _, target := range prepared.targets {
+		if target.err != nil {
+			result.Failed++
+			result.Items = append(result.Items, domain.PublishItemResult{TargetID: target.config.ID, Action: "blocked", Message: target.err.Error()})
+			continue
+		}
+		outcome, execErr := s.executeDelivery(ctx, recorder, scope, target.publisher, target.config, prepared.selected, target.snapshot.Records, target.snapshot.Volumes, dryRun)
+		if execErr != nil {
+			return execErr
+		}
+		outcome.fold(result)
+	}
+	return nil
+}
+
+func (s *catalogReader) deliverySelection(ctx context.Context, cfg *config.Config, scope deliveryScope, targets []config.PublisherConfig, chapters []domain.PublishCandidate, blockedSeries map[string]bool, existing []domain.VolumeEdition) (selected []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle, err error) {
+	candidates, err := s.volumeCandidates(ctx, chapters, existing)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := resolveCollisionNames(candidates); err != nil {
+		return nil, nil, err
+	}
+	selected = make([]domain.PublishCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if blockedSeries[candidate.Track.TrackKey] {
+			continue
+		}
+		if !sourceInScope(candidate.Source.ID, scope.SourceID, scope.Rebuild, cfg) || scope.SeriesID != "" && candidate.Track.TrackKey != scope.SeriesID {
+			continue
+		}
+		selected = append(selected, candidate)
+	}
+	recordsByTarget = map[string][]domain.PublishRecordBundle{}
+	for _, target := range targets {
+		records, err := s.catalog.ListPublishRecords(ctx, "", target.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		recordsByTarget[target.ID] = records
+	}
+	if err := validateLegacyReplacements(ctx, targets, selected, recordsByTarget); err != nil {
+		return nil, nil, err
+	}
+	if !scope.Rebuild {
+		if err := s.validateFrozenNames(ctx, cfg, targets, selected, recordsByTarget); err != nil {
+			return nil, nil, err
+		}
+	}
+	return selected, recordsByTarget, nil
+}
+
+func (s *catalogReader) previewDelivery(ctx context.Context, cfg *config.Config, options RebuildOptions, inputs deliveryInputs, result *RebuildResult) error {
+	request := volumeEvaluation{sourceFilter: options.SourceID, seriesFilter: options.SeriesID, rebuild: true, blockedSeries: inputs.blocked, candidates: inputs.chapters, existing: inputs.editions, inputs: inputs.normalized, histories: inputs.histories, series: cfg.Series, config: cfg}
+	plans, volumes, err := s.evaluateVolumes(ctx, request, nil)
+	result.Publish.Volumes = plans
+	if err != nil {
+		result.Blocked = append(result.Blocked, err.Error())
+	}
+	candidates, blocked, existing := request.candidates, request.blockedSeries, request.existing
+	targets := selectPublishers(cfg.Publishers, options.TargetID)
+	scope := deliveryScope{SourceID: options.SourceID, SeriesID: options.SeriesID, Rebuild: true}
+	prepared, err := s.prepareDelivery(ctx, cfg, scope, targets, candidates, blocked, volumes, existing)
+	if err != nil {
+		return err
+	}
+	for _, target := range prepared.targets {
+		if target.err != nil {
+			result.Blocked = append(result.Blocked, target.err.Error())
+			continue
+		}
+		pending, err := s.pendingDelivery(ctx, cfg, scope, target.config)
+		if err != nil {
+			result.Blocked = append(result.Blocked, err.Error())
+			continue
+		}
+		if pending != nil {
+			result.Pending = append(result.Pending, *pending)
+		}
+		plan, planErr := planDelivery(ctx, scope, target.publisher, target.config, prepared.selected, target.snapshot)
+		if planErr != nil {
+			result.Blocked = append(result.Blocked, planErr.Error())
+			continue
+		}
+		result.Publish.Items = append(result.Publish.Items, plan.Items...)
+		result.Blocked = append(result.Blocked, plan.Blocked...)
+
+	}
+	if notice := readingPositionNotice(result.Publish.Items); notice != "" {
+		result.Notices = append(result.Notices, notice)
+	}
+	return nil
+}
+
+type deliveryInputs struct {
+	chapters   []domain.PublishCandidate
+	normalized map[string]domain.NormalizedRelease
+	histories  map[string]map[string]classify.ExplainedDecision
+	blocked    map[string]bool
+	editions   []domain.VolumeEdition
+}
+
+type preparedDelivery struct {
+	selected []domain.PublishCandidate
+	targets  []preparedDeliveryTarget
+}
+
+type preparedDeliveryTarget struct {
+	config    config.PublisherConfig
+	publisher publish.Target
+	snapshot  librarySnapshot
+	err       error
+}
+
+func (s *catalogReader) prepareDelivery(ctx context.Context, cfg *config.Config, scope deliveryScope, targets []config.PublisherConfig, chapters []domain.PublishCandidate, blocked map[string]bool, selectedVolumes, priorVolumes []domain.VolumeEdition) (preparedDelivery, error) {
+	selected, records, err := s.deliverySelection(ctx, cfg, scope, targets, chapters, blocked, selectedVolumes)
+	if err != nil {
+		return preparedDelivery{}, err
+	}
+	prepared := preparedDelivery{selected: selected}
+	for _, target := range targets {
+		publisher, err := publish.TargetFor(target)
+		prepared.targets = append(prepared.targets, preparedDeliveryTarget{config: target, publisher: publisher, snapshot: librarySnapshot{Records: records[target.ID], Volumes: priorVolumes}, err: err})
+	}
+	return prepared, nil
+}
+
+func readingPositionNotice(items []domain.PublishItemResult) string {
+	conditional := false
+	for _, item := range items {
+		if item.Action != "replace" && item.Action != "retire" {
+			continue
+		}
+		if !item.Conditional {
+			return "Replacing delivered books may reset saved reading positions; check a small reader sample before a larger migration."
+		}
+		conditional = true
+	}
+	if conditional {
+		return "Volume delivery is conditional on regenerated member bytes. If replacement occurs, saved reading positions may reset; check a small reader sample before a larger migration."
+	}
+	return ""
 }

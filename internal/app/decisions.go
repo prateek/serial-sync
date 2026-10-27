@@ -64,7 +64,7 @@ func assignSeriesIndexes(cfg *config.Config, releases []domain.NormalizedRelease
 // observed documents into it, backfilling captured attachment hashes for
 // unchanged releases so the deciding inputs carry the same identity.
 func (s *Service) observingReleases(ctx context.Context, source string, documents []provider.ReleaseDocument) ([]domain.NormalizedRelease, map[string]bool, error) {
-	releases, err := s.storedReleases(ctx, source)
+	releases, err := s.catalogReader().storedReleases(ctx, source)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,18 +134,9 @@ func (s *Service) decideCandidates(ctx context.Context, source string, documents
 	return candidates, false, nil
 }
 
-func (s *Service) authoringDecisions(ctx context.Context, cfg *config.Config, source string, documents []provider.ReleaseDocument) (map[string]classify.ExplainedDecision, error) {
-	return s.decideSource(ctx, source, documents, time.Time{}, cfg)
-}
-
-// RunDecisions is the run-scoped answer to "what does this release mean".
-// One value is created per run (sync, run-once, rebuild and replay): each
-// source's history is decided at most once and shared by the sync loop, the
-// volume planner and the delivery preview, so a release cannot be decided
-// twice in a run and disagree with itself. Stored history is read only when
-// a source's decisions are first needed.
+// RunDecisions memoizes hold-aware, sequenced decisions for one run.
 type RunDecisions struct {
-	svc     *Service
+	reader  *catalogReader
 	cfg     *config.Config
 	sources map[string]map[string]classify.ExplainedDecision
 	loaded  map[string]bool
@@ -153,7 +144,11 @@ type RunDecisions struct {
 }
 
 func NewRunDecisions(svc *Service, cfg *config.Config) *RunDecisions {
-	return &RunDecisions{svc: svc, cfg: cfg, sources: map[string]map[string]classify.ExplainedDecision{}, loaded: map[string]bool{}, errs: map[string]error{}}
+	return newReadDecisions(svc.catalogReader(), cfg)
+}
+
+func newReadDecisions(reader *catalogReader, cfg *config.Config) *RunDecisions {
+	return &RunDecisions{reader: reader, cfg: cfg, sources: map[string]map[string]classify.ExplainedDecision{}, loaded: map[string]bool{}, errs: map[string]error{}}
 }
 
 // Observe records decisions a run already computed for a source (the sync
@@ -167,7 +162,7 @@ func (r *RunDecisions) Observe(sourceID string, decisions map[string]classify.Ex
 // stored releases on first use and memoising the result.
 func (r *RunDecisions) History(ctx context.Context, sourceID string) (map[string]classify.ExplainedDecision, error) {
 	if !r.loaded[sourceID] {
-		r.sources[sourceID], r.errs[sourceID] = r.svc.authoringDecisions(ctx, r.cfg, sourceID, nil)
+		r.sources[sourceID], r.errs[sourceID] = r.reader.readDecisions(ctx, r.cfg, sourceID)
 		r.loaded[sourceID] = true
 	}
 	return r.sources[sourceID], r.errs[sourceID]
@@ -181,13 +176,7 @@ func (r *RunDecisions) Decision(ctx context.Context, sourceID string, release do
 	if err != nil {
 		return classify.ExplainedDecision{}, err
 	}
-	if explained, ok := history[release.ProviderReleaseID]; ok {
-		return explained, nil
-	}
-	rules := r.cfg.Compiled()
-	explained := classify.Explain(sourceID, release, rules.ForSource(sourceID))
-	explained.Decision = sequence.Apply(r.cfg, sourceID, release, explained.Decision)
-	return explained, nil
+	return decisionFromHistory(sourceID, release, history, r.cfg), nil
 }
 
 // Histories snapshots the decided sources so the pure volume planner receives
@@ -202,3 +191,21 @@ func (r *RunDecisions) Histories() map[string]map[string]classify.ExplainedDecis
 
 // isDecided reports whether the run already holds decisions for a source.
 func (r *RunDecisions) isDecided(sourceID string) bool { return r.loaded[sourceID] }
+
+func (s *catalogReader) readDecisions(ctx context.Context, cfg *config.Config, source string) (map[string]classify.ExplainedDecision, error) {
+	releases, err := s.storedReleases(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	decisions, _ := decideReleases(source, releases, map[string]bool{}, cfg, nil, time.Time{})
+	return decisions, nil
+}
+
+func decisionFromHistory(source string, release domain.NormalizedRelease, history map[string]classify.ExplainedDecision, cfg *config.Config) classify.ExplainedDecision {
+	if explained, ok := history[release.ProviderReleaseID]; ok {
+		return explained
+	}
+	explained := classify.Explain(source, release, cfg.Compiled().ForSource(source))
+	explained.Decision = sequence.Apply(cfg, source, release, explained.Decision)
+	return explained
+}

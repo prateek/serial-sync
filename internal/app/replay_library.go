@@ -24,9 +24,9 @@ type AppliedLibraryPlan struct {
 	Pending []deliveryPlan             `json:"pending_deliveries,omitempty"`
 }
 
-func (s *Service) compareAppliedLibrary(ctx context.Context, before, after *config.Config, corpus []replaySource) AppliedLibraryComparison {
+func (s *Authoring) compareAppliedLibrary(ctx context.Context, before, after *config.Config, corpus []replaySource) AppliedLibraryComparison {
 	result := AppliedLibraryComparison{Status: "unavailable", Notice: "Workspace replay has no applied catalog; use --stored --compare to plan library changes."}
-	if s.Repo == nil {
+	if s.catalog == nil {
 		return result
 	}
 	result.Status = "evaluated"
@@ -42,22 +42,14 @@ func (s *Service) compareAppliedLibrary(ctx context.Context, before, after *conf
 	return result
 }
 
-func (s *Service) appliedLibraryPlan(ctx context.Context, cfg *config.Config, scope []string) *AppliedLibraryPlan {
+func (s *Authoring) appliedLibraryPlan(ctx context.Context, cfg *config.Config, scope []string) *AppliedLibraryPlan {
 	result := &AppliedLibraryPlan{Actions: []domain.PublishItemResult{}}
-	scoped := *cfg
-	scoped.Sources = append([]config.SourceConfig(nil), cfg.Sources...)
-	included := map[string]bool{}
-	for _, source := range scope {
-		included[source] = true
-	}
-	for i := range scoped.Sources {
-		scoped.Sources[i].Enabled = scoped.Sources[i].Enabled && included[scoped.Sources[i].ID]
-	}
+	scoped := scopedAuthoringConfig(cfg, authoringScope{includedSources: scope, restrictSources: true})
 	if len(selectSources(scoped.Sources, "")) == 0 || len(selectPublishers(scoped.Publishers, "")) == 0 {
 		result.Notices = []string{"No enabled sources or destinations in this scope; existing delivered files are retained."}
 		return result
 	}
-	plan, err := s.rebuildWith(ctx, RebuildOptions{DryRun: true}, "setup preview compare", &scoped)
+	plan, err := s.planRebuild(ctx, RebuildOptions{DryRun: true}, scoped)
 	result.Blocked, result.Notices, result.Pending = plan.Blocked, plan.Notices, plan.Pending
 	if err != nil && len(result.Blocked) == 0 {
 		result.Blocked = []string{err.Error()}

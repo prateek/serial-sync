@@ -2015,3 +2015,59 @@ func TestLegacyContentSelectionDoesNotInventLibraryReplacements(t *testing.T) {
 		}
 	}
 }
+
+func TestUnbundlingLastVolumePreviewMatchesExecution(t *testing.T) {
+	s, _ := newReaderService(t)
+	s.Config.Series[0].Output = config.SeriesOutputConfig{Format: "epub", Bundling: "volume", ChaptersPerVolume: 2}
+	ctx := context.Background()
+	if _, err := s.RunOnce(ctx, "", "", "run"); err != nil {
+		t.Fatal(err)
+	}
+	editions, err := s.Repo.ListVolumeEditions(ctx)
+	if err != nil || len(editions) != 1 {
+		t.Fatalf("initial volume: %+v %v", editions, err)
+	}
+	old := editions[0]
+	s.Config.Series[0].Output.Bundling = "none"
+	plan, err := s.Rebuild(ctx, app.RebuildOptions{DryRun: true}, "preview unbundle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var singles []string
+	retired := false
+	for _, item := range plan.Publish.Items {
+		if item.Action == "retire" && item.ArtifactID == old.Artifact.ID {
+			retired = true
+		}
+		if item.Action == "add" || item.Action == "replace" || item.Action == "repair" {
+			singles = append(singles, item.TargetRef)
+		}
+	}
+	if !retired || len(singles) != 2 {
+		t.Fatalf("unbundle preview must deliver two singles and retire last volume: %+v", plan.Publish.Items)
+	}
+	result, err := s.Rebuild(ctx, app.RebuildOptions{}, "unbundle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered := map[string]bool{}
+	for _, item := range result.Publish.Items {
+		if item.Action == "published" {
+			delivered[item.TargetRef] = true
+		}
+	}
+	for _, ref := range singles {
+		if !delivered[ref] {
+			t.Fatalf("previewed single not delivered: %s %+v", ref, result.Publish.Items)
+		}
+	}
+	records, err := s.Repo.ListPublishRecords(ctx, "", "library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Artifact.ID == old.Artifact.ID && record.Record.Status != domain.PublishStatusSuperseded {
+			t.Fatalf("old volume not retired: %+v", record.Record)
+		}
+	}
+}

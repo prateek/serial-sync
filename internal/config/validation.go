@@ -45,6 +45,11 @@ func LoadSeriesWithDefaults(path string, sources []SourceConfig, defaults RuleDe
 	if err != nil {
 		return nil, err
 	}
+	return ParseSeriesWithDefaults(path, data, sources, defaults)
+}
+
+// ParseSeriesWithDefaults validates captured TOML bytes relative to path.
+func ParseSeriesWithDefaults(path string, data []byte, sources []SourceConfig, defaults RuleDefaults) ([]SeriesConfig, error) {
 	var document struct {
 		Series []SeriesConfig `toml:"series"`
 	}
@@ -67,6 +72,11 @@ func LoadSources(path string) ([]SourceConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseSources(path, data)
+}
+
+// ParseSources validates captured source TOML bytes with path diagnostics.
+func ParseSources(path string, data []byte) ([]SourceConfig, error) {
 	var document struct {
 		Sources []SourceConfig `toml:"sources"`
 	}

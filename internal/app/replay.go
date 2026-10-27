@@ -87,78 +87,105 @@ type ReplayComparison struct {
 	RequiresRebuild bool                                `json:"requires_rebuild"`
 }
 
-func (s *Service) previewCorpus(ctx context.Context, options RulesPreviewOptions, other *config.Config) ([]replaySource, *config.Config, string, error) {
+type capturedCorpus struct {
+	sources                 []replaySource
+	config                  *config.Config
+	root                    string
+	seriesHash, sourcesHash string
+}
+
+type previewCorpus interface {
+	load(context.Context, RulesPreviewOptions, *config.Config) (capturedCorpus, error)
+}
+
+type storedCorpus struct{ *Authoring }
+type workspaceCorpus struct{ *Authoring }
+
+func (s *Authoring) previewCorpus(ctx context.Context, options RulesPreviewOptions, other *config.Config) (capturedCorpus, error) {
+	var corpus previewCorpus = workspaceCorpus{s}
 	if options.Stored {
-		if options.WorkspacePath != "" || options.SeriesFile != "" {
-			return nil, nil, "", fmt.Errorf("--stored cannot be combined with --workspace or --series-file")
-		}
-		if s.Repo == nil {
-			return nil, nil, "", fmt.Errorf("stored preview requires an existing read-only catalog")
-		}
-		sourceIDs := map[string]bool{}
-		for _, cfg := range []*config.Config{s.Config, other} {
-			if cfg != nil {
-				for _, source := range cfg.Sources {
-					sourceIDs[source.ID] = true
-				}
-			}
-		}
-		ids := make([]string, 0, len(sourceIDs))
-		for id := range sourceIDs {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		var corpus []replaySource
-		for _, id := range ids {
-			creator := SourceDumpCreator{SourceID: id}
-			source, err := s.Repo.GetSource(ctx, id)
-			if err != nil {
-				return nil, nil, "", err
-			}
-			if source != nil {
-				creator.CreatorName = source.CreatorName
-			}
-			if !matchesDumpCreatorFilters(creator, options.CreatorFilters) {
-				continue
-			}
-			releases, err := s.storedReleases(ctx, id)
-			if err != nil {
-				return nil, nil, "", err
-			}
-			item := replaySource{Creator: creator, Releases: releases}
-			corpus = append(corpus, item)
-		}
-		return corpus, s.Config, "", nil
+		corpus = storedCorpus{s}
 	}
+	return corpus.load(ctx, options, other)
+}
+
+func (s storedCorpus) load(ctx context.Context, options RulesPreviewOptions, other *config.Config) (capturedCorpus, error) {
+	if options.WorkspacePath != "" || options.SeriesFile != "" {
+		return capturedCorpus{}, fmt.Errorf("--stored cannot be combined with --workspace or --series-file")
+	}
+	if s.catalog == nil {
+		return capturedCorpus{}, fmt.Errorf("stored preview requires an existing read-only catalog")
+	}
+	sourceIDs := map[string]bool{}
+	for _, cfg := range []*config.Config{s.config, other} {
+		if cfg != nil {
+			for _, source := range cfg.Sources {
+				sourceIDs[source.ID] = true
+			}
+		}
+	}
+	ids := make([]string, 0, len(sourceIDs))
+	for id := range sourceIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var corpus []replaySource
+	for _, id := range ids {
+		creator := SourceDumpCreator{SourceID: id}
+		source, err := s.catalog.GetSource(ctx, id)
+		if err != nil {
+			return capturedCorpus{}, err
+		}
+		if source != nil {
+			creator.CreatorName = source.CreatorName
+		}
+		if !matchesDumpCreatorFilters(creator, options.CreatorFilters) {
+			continue
+		}
+		releases, err := s.storedReleases(ctx, id)
+		if err != nil {
+			return capturedCorpus{}, err
+		}
+		item := replaySource{Creator: creator, Releases: releases}
+		corpus = append(corpus, item)
+	}
+	return capturedCorpus{sources: corpus, config: s.config}, nil
+}
+
+func (s workspaceCorpus) load(ctx context.Context, options RulesPreviewOptions, other *config.Config) (capturedCorpus, error) {
 	root, err := resolveWorkspacePath(options.WorkspacePath)
 	if err != nil {
-		return nil, nil, "", err
+		return capturedCorpus{}, err
 	}
 	manifest, err := loadDumpManifest(filepath.Join(root, "manifest.json"))
 	if err != nil {
-		return nil, nil, "", err
+		return capturedCorpus{}, err
 	}
-	sources, err := config.LoadSources(manifest.SourcesFile)
+	sourcesData, err := os.ReadFile(manifest.SourcesFile)
 	if err != nil {
-		return nil, nil, "", err
+		return capturedCorpus{}, err
 	}
-	cfg := s.Config
+	sources, err := config.ParseSources(manifest.SourcesFile, sourcesData)
+	if err != nil {
+		return capturedCorpus{}, err
+	}
+	cfg := s.config
+	var seriesHash, sourcesHash string
 	if options.SeriesFile != "" {
 		path := options.SeriesFile
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(root, path)
 		}
-		series, err := config.LoadSeriesWithDefaults(path, sources, s.Config.Defaults)
+		seriesData, err := os.ReadFile(path)
 		if err != nil {
-			return nil, nil, "", err
+			return capturedCorpus{}, err
 		}
-		copy := *cfg
-		copy.Sources = sources
-		copy.Series = series
-		copy.Rules = nil
-		copy.Review = nil
-		copy.Overrides = nil
-		cfg = &copy
+		series, err := config.ParseSeriesWithDefaults(path, seriesData, sources, s.config.Defaults)
+		if err != nil {
+			return capturedCorpus{}, err
+		}
+		cfg = scopedAuthoringConfig(cfg, authoringScope{replaceSeries: true, sources: sources, series: series})
+		seriesHash, sourcesHash = hashBytes(seriesData), hashBytes(sourcesData)
 	}
 	var corpus []replaySource
 	for _, creator := range manifest.Creators {
@@ -167,7 +194,7 @@ func (s *Service) previewCorpus(ctx context.Context, options RulesPreviewOptions
 		}
 		releases, err := loadWorkspacePosts(root, manifest.originalRoot, creator.PostsFile)
 		if err != nil {
-			return nil, nil, "", err
+			return capturedCorpus{}, err
 		}
 		if creator.RawPostsDir != "" {
 			for i := range releases {
@@ -179,17 +206,17 @@ func (s *Service) previewCorpus(ctx context.Context, options RulesPreviewOptions
 					continue
 				}
 				if err != nil {
-					return nil, nil, "", err
+					return capturedCorpus{}, err
 				}
-				releases[i], err = s.Providers.EnrichCaptured(releases[i], raw)
+				releases[i], err = s.enrichCaptured(releases[i], raw)
 				if err != nil {
-					return nil, nil, "", err
+					return capturedCorpus{}, err
 				}
 			}
 		}
 		corpus = append(corpus, replaySource{Creator: creator, Releases: releases})
 	}
-	return corpus, cfg, root, nil
+	return capturedCorpus{sources: corpus, config: cfg, root: root, seriesHash: seriesHash, sourcesHash: sourcesHash}, nil
 }
 
 func replayStates(cfg *config.Config, source string, release domain.NormalizedRelease, explained classify.ExplainedDecision) (ClassificationState, OutputPolicyState) {
@@ -231,7 +258,7 @@ func replayStates(cfg *config.Config, source string, release domain.NormalizedRe
 	return classification, policy
 }
 
-func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (RulesPreviewResult, error) {
+func (s *Authoring) replay(ctx context.Context, options RulesPreviewOptions) (RulesPreviewResult, error) {
 	result := RulesPreviewResult{}
 	var other *config.Config
 	if options.CompareConfig != "" {
@@ -245,33 +272,15 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 		}
 		result.Comparison = &ReplayComparison{Classification: []ReplayChange[ClassificationState]{}, OutputPolicy: []ReplayChange[OutputPolicyState]{}}
 	}
-	corpus, cfg, root, err := s.previewCorpus(ctx, options, other)
+	capture, err := s.previewCorpus(ctx, options, other)
 	if err != nil {
 		return result, err
 	}
+	corpus, cfg, root := capture.sources, capture.config, capture.root
 	if len(corpus) == 0 {
 		return result, fmt.Errorf("no captured sources match the provided filters")
 	}
-	if options.SeriesFile != "" {
-		seriesPath := options.SeriesFile
-		if !filepath.IsAbs(seriesPath) {
-			seriesPath = filepath.Join(root, seriesPath)
-		}
-		data, err := os.ReadFile(seriesPath)
-		if err != nil {
-			return result, err
-		}
-		result.SeriesFileHash = hashBytes(data)
-		manifest, err := loadDumpManifest(filepath.Join(root, "manifest.json"))
-		if err != nil {
-			return result, err
-		}
-		sourcesData, err := os.ReadFile(manifest.SourcesFile)
-		if err != nil {
-			return result, err
-		}
-		result.SourcesFileHash = hashBytes(sourcesData)
-	}
+	result.SeriesFileHash, result.SourcesFileHash = capture.seriesHash, capture.sourcesHash
 	result.WorkspacePath = root
 	result.SeriesFile = options.SeriesFile
 	result.Binding = ReplayBinding{ConfigHash: cfg.Fingerprint(), NormalizerVersion: domain.NormalizerVersion, SoftwareVersion: softwareVersion()}
@@ -284,8 +293,8 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 		result.Binding.CompareConfigHash = other.Fingerprint()
 	}
 	var labelHistory []domain.LabelReference
-	if s.Repo != nil {
-		labelHistory, err = s.Repo.ListLabelObservations(ctx)
+	if s.catalog != nil {
+		labelHistory, err = s.catalog.ListLabelObservations(ctx)
 		if err != nil {
 			return result, err
 		}
@@ -294,7 +303,7 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 	inputs := map[string]domain.NormalizedRelease{}
 	// The dump corpus is this run's deciding evidence; later phases (volume
 	// planning) read decisions from the same value instead of re-deciding.
-	decisions := NewRunDecisions(s, cfg)
+	decisions := newReadDecisions(s.catalogReader, cfg)
 	for _, item := range corpus {
 		source := item.Creator.SourceID
 		decisions.Observe(source, map[string]classify.ExplainedDecision{})
@@ -306,8 +315,8 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 			return a.PublishedAt.Before(b.PublishedAt)
 		})
 		var previous []domain.DiscoveryCandidate
-		if s.Repo != nil {
-			previous, err = s.Repo.ListDiscoveryCandidates(ctx, source)
+		if s.catalog != nil {
+			previous, err = s.catalog.ListDiscoveryCandidates(ctx, source)
 			if err != nil {
 				return result, err
 			}
@@ -389,7 +398,7 @@ func (s *Service) replay(ctx context.Context, options RulesPreviewOptions) (Rule
 			result.Comparison.RequiresRebuild = true
 		}
 	}
-	result.Volumes, _, err = s.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs, histories: decisions.Histories(), series: cfg.Series, config: cfg}, false)
+	result.Volumes, _, err = s.evaluateVolumes(ctx, volumeEvaluation{candidates: candidates, inputs: inputs, histories: decisions.Histories(), series: cfg.Series, config: cfg}, nil)
 	return result, err
 }
 
@@ -428,8 +437,8 @@ func policyChanges(before, after OutputPolicyState) string {
 	return strings.Join(changes, "; ")
 }
 
-func (s *Service) storedReleases(ctx context.Context, source string) ([]domain.NormalizedRelease, error) {
-	stored, err := s.Repo.ListReleases(ctx, source)
+func (s *catalogReader) storedReleases(ctx context.Context, source string) ([]domain.NormalizedRelease, error) {
+	stored, err := s.catalog.ListReleases(ctx, source)
 	if err != nil {
 		return nil, err
 	}

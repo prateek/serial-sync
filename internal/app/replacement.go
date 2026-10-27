@@ -42,7 +42,7 @@ func resolveCollisionNames(candidates []domain.PublishCandidate) error {
 	return nil
 }
 
-func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope, targetFilter string) error {
+func validatePublishTargets(cfg *config.Config, scope deliveryScope, targetFilter string) error {
 	targets := selectPublishers(cfg.Publishers, targetFilter)
 	if len(targets) == 0 {
 		return fmt.Errorf("no enabled publishers match %q", targetFilter)
@@ -60,7 +60,7 @@ func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope
 				continue
 			}
 			for _, input := range series.AuthoringInputs() {
-				if s.sourceInScope(firstNonEmpty(input.Source, series.Source), scope.SourceID, scope.Rebuild, cfg) {
+				if sourceInScope(firstNonEmpty(input.Source, series.Source), scope.SourceID, scope.Rebuild, cfg) {
 					if pt.Capabilities().HandsOff {
 						return fmt.Errorf("%s publisher %q cannot deliver volume output", pt.Kind(), target.ID)
 					}
@@ -72,7 +72,7 @@ func (s *Service) validatePublishTargets(cfg *config.Config, scope deliveryScope
 	return nil
 }
 
-func (s *Service) validateLegacyReplacements(ctx context.Context, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
+func validateLegacyReplacements(ctx context.Context, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
 	for _, target := range targets {
 		pt, targetErr := publish.TargetFor(target)
 		if targetErr != nil || pt.Capabilities().Retires || pt.Capabilities().HandsOff {
@@ -94,13 +94,13 @@ func (s *Service) validateLegacyReplacements(ctx context.Context, targets []conf
 	return nil
 }
 
-func (s *Service) validateFrozenNames(ctx context.Context, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
+func (s *catalogReader) validateFrozenNames(ctx context.Context, cfg *config.Config, targets []config.PublisherConfig, candidates []domain.PublishCandidate, recordsByTarget map[string][]domain.PublishRecordBundle) error {
 	for _, target := range targets {
 		if pt, err := publish.TargetFor(target); err == nil && pt.Capabilities().HandsOff {
 			// A hand-off target never renames a delivered file.
 			continue
 		}
-		pending, pendingErr := s.pendingDelivery(ctx, s.Config, deliveryScope{}, target)
+		pending, pendingErr := s.pendingDelivery(ctx, cfg, deliveryScope{}, target)
 		for _, candidate := range candidates {
 			if candidate.Volume == nil && !artifact.IsLegacy(candidate.Artifact) {
 				continue

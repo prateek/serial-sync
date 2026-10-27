@@ -314,7 +314,7 @@ func (s *Service) dumpCreator(ctx context.Context, auth config.AuthProfile, clie
 }
 
 func (s *Service) PreviewRules(ctx context.Context, options RulesPreviewOptions, command string) (RulesPreviewResult, error) {
-	return s.replay(ctx, options)
+	return NewAuthoring(s.Config, s.Repo, s.Providers).Preview(ctx, options)
 }
 
 func FormatSourceDumpResult(result SourceDumpResult) string {
@@ -610,6 +610,7 @@ func writeTOMLFile(path string, value any) error {
 }
 
 func workspaceReadme(path string) string {
+	workspaceArg := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
 	return strings.TrimSpace(fmt.Sprintf(`
 # serial-sync series workspace
 
@@ -620,11 +621,11 @@ This directory is a local series-authoring workspace and full Patreon dump.
 - Raw Patreon post payloads live in captures/<generation>/creators/<source-id>/posts/
 - Downloaded source attachments live in captures/<generation>/creators/<source-id>/attachments/
 - Preview those series definitions offline with:
-  serial-sync setup preview --workspace %s --show-posts
+  serial-sync setup preview --workspace %s --series-file series.toml --show-posts
 - Creator directories are fixture-compatible captures for later offline replay/materialization work.
 - Read manifest.json for the current capture paths. Refreshes preserve authored files.
 - Merge the resulting sources from the reported sources file and series from series.toml into your main config when you are happy with the results.
-`, filepath.Base(filepath.Join(path, "series.toml")), path)) + "\n"
+`, filepath.Base(filepath.Join(path, "series.toml")), workspaceArg)) + "\n"
 }
 
 func min(a, b int) int {
@@ -634,25 +635,17 @@ func min(a, b int) int {
 	return b
 }
 
-const defaultSeriesScaffold = `# Add [[series]] entries here, then run:
-# serial-sync setup preview --workspace <workspace> --series-file ./series.toml --show-posts
+const defaultSeriesScaffold = `# Uncomment and customize this example using a source ID from sources.toml.
+# Preview the draft with:
+# serial-sync setup preview --workspace <workspace> --series-file series.toml --show-posts
+# Grouped inputs inherit defaults and require 1,500 body characters unless overridden.
 #
 # [[series]]
 # id = "main-series"
 # title = "Main Series"
 # authors = ["Author Name"]
 #
-#   [series.output]
-#   format = "epub"
-#   preface_mode = "prepend_post"
-#
 #   [[series.inputs]]
 #   source = "creator-id"
-#   priority = 10
-#   match_type = "title_regex"
-#   match_value = "^Main Series"
-#   release_role = "chapter"
-#   content_strategy = "attachment_preferred"
-#   attachment_glob = ["*.epub", "*.pdf"]
-#   attachment_priority = ["epub", "pdf"]
+#   title_patterns = ["^Main Series"]
 `

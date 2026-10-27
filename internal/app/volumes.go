@@ -15,7 +15,6 @@ import (
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
 	"github.com/prateek/serial-sync/internal/domain"
-	"github.com/prateek/serial-sync/internal/sequence"
 )
 
 type volumeGroup struct {
@@ -50,7 +49,7 @@ func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter
 	}
 	inputs := map[string]domain.NormalizedRelease{}
 	for _, candidate := range candidates {
-		if !s.sourceInScope(candidate.Source.ID, sourceFilter, rebuild, s.Config) {
+		if !sourceInScope(candidate.Source.ID, sourceFilter, rebuild, s.Config) {
 			continue
 		}
 		normalized, err := s.loadStoredNormalized(ctx, candidate.Release)
@@ -59,7 +58,7 @@ func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter
 		}
 		// Histories only matter for sources feeding a volume-bundled series,
 		// and a run that just decided the sources already observes its
-		// decisions in the value; authoringDecisions is not re-run.
+		// decisions in the value; history is not re-read.
 		if decisions.isDecided(candidate.Source.ID) || !volumeSources[candidate.Source.ID] {
 			continue
 		}
@@ -67,7 +66,7 @@ func (s *Service) prepareVolumes(ctx context.Context, sourceFilter, seriesFilter
 			return nil, err
 		}
 	}
-	plans, _, err := s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: sourceFilter, seriesFilter: seriesFilter, rebuild: rebuild, blockedSeries: blockedSeries, candidates: candidates, existing: existing, inputs: inputs, histories: decisions.Histories(), series: s.Config.Series}, true)
+	plans, _, err := s.catalogReader().evaluateVolumes(ctx, volumeEvaluation{sourceFilter: sourceFilter, seriesFilter: seriesFilter, rebuild: rebuild, blockedSeries: blockedSeries, candidates: candidates, existing: existing, inputs: inputs, histories: decisions.Histories(), series: s.Config.Series, config: s.Config}, s.activateVolumes)
 	return plans, err
 }
 
@@ -117,7 +116,6 @@ func captureVolumeFacts(series config.SeriesConfig, output config.SeriesOutputCo
 	if !volumeSeriesInScope(series.ID, facts) || output.Bundling != "volume" {
 		return facts
 	}
-	rules := request.config.Compiled()
 	for _, candidate := range request.candidates {
 		if candidate.Track.TrackKey != series.ID || candidate.Assignment.ReleaseRole != domain.ReleaseRoleChapter {
 			continue
@@ -128,7 +126,7 @@ func captureVolumeFacts(series config.SeriesConfig, output config.SeriesOutputCo
 			if !present {
 				continue
 			}
-			decision := authoringDecisionFor(candidate.Source.ID, normalized, request.histories[candidate.Source.ID], request.config, rules)
+			decision := decisionFromHistory(candidate.Source.ID, normalized, request.histories[candidate.Source.ID], request.config).Decision
 			if decision.Sequence == nil {
 				continue
 			}
@@ -544,70 +542,7 @@ func volumeAssemblyRecipe(series config.SeriesConfig, metadata *domain.Publicati
 	return recipe
 }
 
-// authoringDecisionFor is the planner's decision lookup: the histories cover
-// every in-scope chapter, and this per-release fallback only guards against a
-// release that arrived between analysis and use.
-func authoringDecisionFor(source string, release domain.NormalizedRelease, history map[string]classify.ExplainedDecision, cfg *config.Config, rules config.RuleSet) domain.TrackDecision {
-	if explained, ok := history[release.ProviderReleaseID]; ok {
-		return explained.Decision
-	}
-	explained := classify.Explain(source, release, rules.ForSource(source))
-	return sequence.Apply(cfg, source, release, explained.Decision)
-}
-
-// evaluateVolumes drives the pure planner with the reads activation needs and
-// applies the materialized result to the store.
-func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation, materialize bool) (plans []domain.VolumePlan, editions []domain.VolumeEdition, err error) {
-	if request.config == nil {
-		request.config = s.Config
-	}
-	if request.publication == nil {
-		cfg := request.config
-		request.publication = func(sourceID string, release domain.NormalizedRelease, decision domain.TrackDecision) (*domain.PublicationMetadata, error) {
-			return publicationMetadataFor(cfg, sourceID, release, decision)
-		}
-	}
-	cfg := request.config
-	candidates := request.candidates
-	scope := map[string]bool{}
-	for _, candidate := range candidates {
-		scope[candidate.Source.ID] = s.sourceInScope(candidate.Source.ID, request.sourceFilter, request.rebuild, cfg)
-	}
-	for _, volume := range request.existing {
-		if volume.Active && !scope[volume.SourceID] {
-			scope[volume.SourceID] = s.sourceInScope(volume.SourceID, request.sourceFilter, request.rebuild, cfg)
-		}
-	}
-	request.scope = scope
-	sourcesByRelease := map[string]string{}
-	archiveValid := map[string]bool{}
-	for _, candidate := range request.candidates {
-		sourcesByRelease[candidate.Release.ID] = candidate.Source.ID
-	}
-	for _, volume := range request.existing {
-		if !volume.Active {
-			continue
-		}
-		for _, member := range volume.Members {
-			if sourcesByRelease[member.ReleaseID] != "" {
-				continue
-			}
-			bundle, readErr := s.Repo.GetReleaseBundle(ctx, member.ReleaseID)
-			if readErr != nil {
-				return plans, nil, readErr
-			}
-			if bundle != nil {
-				sourcesByRelease[member.ReleaseID] = bundle.Source.ID
-			}
-		}
-		if volume.Artifact.StorageRef == "" {
-			continue
-		}
-		intact, checkErr := artifact.IntactOnDisk(volume.Artifact)
-		archiveValid[volume.Artifact.ID] = checkErr == nil && intact
-	}
-	request.sourcesByRelease = sourcesByRelease
-	request.archiveValid = archiveValid
+func (s *catalogReader) evaluateVolumes(ctx context.Context, request volumeEvaluation, activate func(context.Context, string, volumePlanResult) volumeActivation) (plans []domain.VolumePlan, editions []domain.VolumeEdition, err error) {
 	active := map[string]domain.VolumeEdition{}
 	for _, volume := range request.existing {
 		if volume.Active {
@@ -624,6 +559,56 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation,
 		}
 		sort.Slice(editions, func(i, j int) bool { return editions[i].ID < editions[j].ID })
 	}()
+	if request.publication == nil {
+		cfg := request.config
+		request.publication = func(sourceID string, release domain.NormalizedRelease, decision domain.TrackDecision) (*domain.PublicationMetadata, error) {
+			return publicationMetadataFor(cfg, sourceID, release, decision)
+		}
+	}
+	cfg := request.config
+	candidates := request.candidates
+	if request.blockedSeries == nil {
+		request.blockedSeries = map[string]bool{}
+	}
+	scope := map[string]bool{}
+	for _, candidate := range candidates {
+		scope[candidate.Source.ID] = sourceInScope(candidate.Source.ID, request.sourceFilter, request.rebuild, cfg)
+	}
+	for _, volume := range request.existing {
+		if volume.Active && !scope[volume.SourceID] {
+			scope[volume.SourceID] = sourceInScope(volume.SourceID, request.sourceFilter, request.rebuild, cfg)
+		}
+	}
+	request.scope = scope
+	sourcesByRelease := map[string]string{}
+	archiveValid := map[string]bool{}
+	for _, candidate := range request.candidates {
+		sourcesByRelease[candidate.Release.ID] = candidate.Source.ID
+	}
+	for _, volume := range request.existing {
+		if !volume.Active {
+			continue
+		}
+		for _, member := range volume.Members {
+			if sourcesByRelease[member.ReleaseID] != "" {
+				continue
+			}
+			bundle, readErr := s.catalog.GetReleaseBundle(ctx, member.ReleaseID)
+			if readErr != nil {
+				return plans, nil, readErr
+			}
+			if bundle != nil {
+				sourcesByRelease[member.ReleaseID] = bundle.Source.ID
+			}
+		}
+		if volume.Artifact.StorageRef == "" {
+			continue
+		}
+		intact, checkErr := artifact.IntactOnDisk(volume.Artifact)
+		archiveValid[volume.Artifact.ID] = checkErr == nil && intact
+	}
+	request.sourcesByRelease = sourcesByRelease
+	request.archiveValid = archiveValid
 	var failures []error
 	for _, series := range request.series {
 		if request.blockedSeries[series.ID] {
@@ -635,7 +620,7 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation,
 		if planErr != nil {
 			return plans, nil, planErr
 		}
-		plannedPlans, plannedEditions, plannedBuilds, plannedRemoved, plannedFailures, blockSeries := planned.Plans, planned.Editions, planned.Builds, planned.Removed, planned.Failures, planned.BlockSeries
+		plannedPlans, plannedEditions, plannedRemoved, plannedFailures, blockSeries := planned.Plans, planned.Editions, planned.Removed, planned.Failures, planned.BlockSeries
 		plans = append(plans, plannedPlans...)
 		if blockSeries || len(plannedFailures) > 0 {
 			request.blockedSeries[series.ID] = true
@@ -650,18 +635,13 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation,
 			failures = append(failures, plannedFailures...)
 			continue
 		}
-		if materialize && (len(plannedEditions) > 0 || len(plannedRemoved) > 0) {
-			var built []domain.VolumeEdition
-			for _, build := range plannedBuilds {
-				edition := build.edition
-				edition.Artifact, err = s.Files.BuildVolume(ctx, edition, build.title, build.chapters)
-				if err != nil {
-					failures = append(failures, err)
-					break
-				}
-				built = append(built, edition)
+		if activate != nil && (len(plannedEditions) > 0 || len(plannedRemoved) > 0) {
+			activation := activate(ctx, series.ID, planned)
+			if activation.storeError != nil {
+				return plans, nil, activation.storeError
 			}
-			if len(built) != len(plannedEditions) {
+			if activation.buildError != nil {
+				failures = append(failures, activation.buildError)
 				request.blockedSeries[series.ID] = true
 				for i := range plans {
 					if plans[i].SeriesID == series.ID {
@@ -673,10 +653,7 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation,
 				}
 				continue
 			}
-			if err := s.Repo.ReplaceVolumes(ctx, series.ID, built, plannedRemoved); err != nil {
-				return plans, nil, err
-			}
-			plannedEditions = built
+			plannedEditions = activation.editions
 		}
 		for _, groupID := range plannedRemoved {
 			delete(projected, series.ID+"/"+groupID)
@@ -688,7 +665,7 @@ func (s *Service) evaluateVolumes(ctx context.Context, request volumeEvaluation,
 	return plans, nil, errors.Join(failures...)
 }
 
-func (s *Service) volumeCandidates(ctx context.Context, chapters []domain.PublishCandidate, volumes []domain.VolumeEdition) ([]domain.PublishCandidate, error) {
+func (s *catalogReader) volumeCandidates(ctx context.Context, chapters []domain.PublishCandidate, volumes []domain.VolumeEdition) ([]domain.PublishCandidate, error) {
 	covered := map[string]bool{}
 	var result []domain.PublishCandidate
 	for _, volume := range volumes {
@@ -709,13 +686,13 @@ func (s *Service) volumeCandidates(ctx context.Context, chapters []domain.Publis
 		}
 		var err error
 		if source == nil {
-			source, err = s.Repo.GetSource(ctx, volume.SourceID)
+			source, err = s.catalog.GetSource(ctx, volume.SourceID)
 			if err != nil {
 				return nil, err
 			}
 		}
 		if track == nil {
-			track, err = s.Repo.GetTrack(ctx, volume.TrackID)
+			track, err = s.catalog.GetTrack(ctx, volume.TrackID)
 			if err != nil {
 				return nil, err
 			}
@@ -734,4 +711,27 @@ func (s *Service) volumeCandidates(ctx context.Context, chapters []domain.Publis
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) activateVolumes(ctx context.Context, seriesID string, planned volumePlanResult) volumeActivation {
+	built := make([]domain.VolumeEdition, 0, len(planned.Builds))
+	for _, build := range planned.Builds {
+		edition := build.edition
+		var err error
+		edition.Artifact, err = s.Files.BuildVolume(ctx, edition, build.title, build.chapters)
+		if err != nil {
+			return volumeActivation{buildError: err}
+		}
+		built = append(built, edition)
+	}
+	if err := s.Repo.ReplaceVolumes(ctx, seriesID, built, planned.Removed); err != nil {
+		return volumeActivation{storeError: err}
+	}
+	return volumeActivation{editions: built}
+}
+
+type volumeActivation struct {
+	editions   []domain.VolumeEdition
+	buildError error
+	storeError error
 }

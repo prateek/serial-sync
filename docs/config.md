@@ -272,13 +272,15 @@ inputs, chapter reading-copy editions, mappings or volume size require
 presentation changes count even when release content is unchanged. When a member needs rebuilding and its new bytes are unknown, dry-run reports
 `conditional_rebuild`: the volume may rebuild or remain frozen after regeneration.
 Affected delivery and retirement actions carry `"conditional": true` in JSON and
-read "conditional replace" or "conditional retire" in text, with a conditional
-reading-position notice. Activation retains the volume when the actual edition is
+read "conditional replace" or "conditional retire" in text. The reading-position
+notice is conditional only when every replacement or retirement is conditional; a
+definite action takes priority. Activation retains the volume when the actual edition is
 unchanged. A preview marked `frozen` has no such unknown member bytes.
 Older volume recipes are refreshed on explicit rebuild; preview a series-scoped
 `run --rebuild --series <series-id> --dry-run` before applying the same scope.
 Disabling bundling also
-requires rebuild to replace existing volumes with singles. Missing inputs block
+requires rebuild to replace existing volumes with singles. Preview includes the
+replacement chapters and retirement of the last volume when no volumes remain. Missing inputs block
 the affected transition. Delivery and retirement are tracked separately per target,
 and user-modified or unrelated destination files are preserved with a conflict.
 Rebuild and its dry-run select enabled sources only. A replacement requiring a

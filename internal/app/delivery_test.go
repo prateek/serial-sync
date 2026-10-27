@@ -179,7 +179,6 @@ func TestExecuteDeliveryOutcomes(t *testing.T) {
 func TestCaptureDeliveryDeduplicationRespectsOwnership(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{{"same release and track", "unchanged"}, {"different release", "replace"}, {"different track", "replace"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, _ := deliveryFixture(t)
 			old := deliveryCandidate("alpha", strings.Repeat("a", 64))
 			old.Artifact.TrackID = old.Track.ID
 			next := old
@@ -198,7 +197,7 @@ func TestCaptureDeliveryDeduplicationRespectsOwnership(t *testing.T) {
 				t.Fatal(err)
 			}
 			records := []domain.PublishRecordBundle{{Record: domain.PublishRecord{ID: "receipt", ArtifactID: old.Artifact.ID, TargetID: "hook", TargetKind: "exec", TargetRef: identity.Ref, Filename: old.Artifact.Filename, PublishHash: identity.PublishHash, Status: domain.PublishStatusPublished}, Artifact: old.Artifact, Release: old.Release, Track: old.Track, Source: old.Source}}
-			plan, err := svc.planDelivery(context.Background(), deliveryScope{}, target, config.PublisherConfig{ID: "hook", Kind: "exec"}, []domain.PublishCandidate{next}, librarySnapshot{Records: records})
+			plan, err := planDelivery(context.Background(), deliveryScope{}, target, config.PublisherConfig{ID: "hook", Kind: "exec"}, []domain.PublishCandidate{next}, librarySnapshot{Records: records})
 			if err != nil {
 				t.Fatal(err)
 			}

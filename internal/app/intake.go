@@ -106,7 +106,11 @@ func (ri *releaseIntake) plan(ctx context.Context, sourceCfg config.SourceConfig
 }
 
 func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceCfg config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision, stored *StoredArtifactRef, rebuild bool) (intakeAssessment, error) {
-	s := ri.s
+	s := ri.s.catalogReader()
+	return s.assess(ctx, cfg, sourceCfg, doc, decision, stored, rebuild)
+}
+
+func (s *catalogReader) assess(ctx context.Context, cfg *config.Config, sourceCfg config.SourceConfig, doc provider.ReleaseDocument, decision domain.TrackDecision, stored *StoredArtifactRef, rebuild bool) (intakeAssessment, error) {
 	source := domain.Source{
 		ID:            sourceCfg.ID,
 		Provider:      sourceCfg.Provider,
@@ -137,7 +141,7 @@ func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceC
 		decision.SelectedContent = &selected
 	}
 
-	contentHash := ri.computeContentHash(doc.Normalized)
+	contentHash := computeContentHash(doc.Normalized)
 
 	release := domain.Release{
 		ID:                releaseID,
@@ -381,7 +385,7 @@ func (ri *releaseIntake) apply(ctx context.Context, recorder *observe.Recorder, 
 	return itemPlan, true, materialized, nil
 }
 
-func (ri *releaseIntake) computeContentHash(normalized domain.NormalizedRelease) string {
+func computeContentHash(normalized domain.NormalizedRelease) string {
 	hashable := hashableNormalizedRelease(normalized)
 	contentHashJSON, _ := json.Marshal(hashable)
 	sum := sha256.Sum256(contentHashJSON)

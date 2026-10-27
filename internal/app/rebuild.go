@@ -10,7 +10,6 @@ import (
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/observe"
 	"github.com/prateek/serial-sync/internal/provider"
-	"github.com/prateek/serial-sync/internal/publish"
 )
 
 type RebuildOptions struct {
@@ -31,32 +30,16 @@ type RebuildResult struct {
 }
 
 func (s *Service) Rebuild(ctx context.Context, options RebuildOptions, command string) (result RebuildResult, err error) {
-	return s.rebuildWith(ctx, options, command, s.Config)
-}
-
-// rebuildWith is the rebuild engine with the config explicit; Rebuild runs it
-// against the service config and workspace replay against a dump-scoped one.
-func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, command string, cfg *config.Config) (result RebuildResult, err error) {
+	cfg := s.Config
 	result.Scope = options
 	scope := deliveryScope{SourceID: options.SourceID, SeriesID: options.SeriesID, Rebuild: true}
-	if err := s.validatePublishTargets(cfg, scope, options.TargetID); err != nil {
+	if err := s.catalogReader().validateRebuild(cfg, options); err != nil {
 		return result, err
 	}
-	sources := selectSources(cfg.Sources, options.SourceID)
-	if len(sources) == 0 {
-		return result, fmt.Errorf("no enabled sources match %q", options.SourceID)
-	}
-	if len(selectPublishers(cfg.Publishers, options.TargetID)) == 0 {
-		return result, fmt.Errorf("no enabled publishers match %q", options.TargetID)
-	}
-	if options.SeriesID != "" {
-		if !cfg.Compiled().SeriesExists(options.SeriesID) {
-			return result, fmt.Errorf("unknown series %q", options.SeriesID)
-		}
-	}
 	if options.DryRun {
-		return s.previewRebuild(ctx, options, cfg)
+		return s.catalogReader().previewRebuild(ctx, options, cfg)
 	}
+	sources := selectSources(cfg.Sources, options.SourceID)
 	recorder, err := observe.Start(ctx, s.Repo, command, options.SourceID, false, s.observeOptions())
 	if err != nil {
 		return result, err
@@ -72,7 +55,6 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 			err = finishErr
 		}
 	}()
-	rules := cfg.Compiled()
 	decisions := NewRunDecisions(s, cfg)
 	for _, source := range sources {
 		_, historyErr := decisions.History(ctx, source.ID)
@@ -107,7 +89,7 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 				result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
 				continue
 			}
-			decision := authoringDecisionFor(source.ID, normalized, decisions.Histories()[source.ID], cfg, rules)
+			decision := decisionFromHistory(source.ID, normalized, decisions.Histories()[source.ID], cfg).Decision
 			if options.SeriesID != "" && decision.SeriesID != options.SeriesID && oldSeries != options.SeriesID {
 				continue
 			}
@@ -146,9 +128,9 @@ func (s *Service) rebuildWith(ctx context.Context, options RebuildOptions, comma
 	return result, nil
 }
 
-func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cfg *config.Config) (RebuildResult, error) {
+func (s *catalogReader) previewRebuild(ctx context.Context, options RebuildOptions, cfg *config.Config) (RebuildResult, error) {
 	result := RebuildResult{Scope: options, Publish: domain.PublishResult{DryRun: true}}
-	candidates, err := s.Repo.ListPublishCandidates(ctx, "")
+	candidates, err := s.catalog.ListPublishCandidates(ctx, "")
 	if err != nil {
 		return result, err
 	}
@@ -157,7 +139,7 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 		seen[candidate.Release.ID] = true
 	}
 	for _, source := range selectSources(cfg.Sources, options.SourceID) {
-		releases, err := s.Repo.ListReleases(ctx, source.ID)
+		releases, err := s.catalog.ListReleases(ctx, source.ID)
 		if err != nil {
 			return result, err
 		}
@@ -165,7 +147,7 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 			if seen[release.ID] {
 				continue
 			}
-			bundle, err := s.Repo.GetReleaseBundle(ctx, release.ID)
+			bundle, err := s.catalog.GetReleaseBundle(ctx, release.ID)
 			if err != nil {
 				return result, err
 			}
@@ -174,29 +156,28 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 			}
 		}
 	}
-	existing, err := s.Repo.ListVolumeEditions(ctx)
+	existing, err := s.catalog.ListVolumeEditions(ctx)
 	if err != nil {
 		return result, err
 	}
 	inputs := map[string]domain.NormalizedRelease{}
 	blocked := map[string]bool{}
-	decisions := NewRunDecisions(s, cfg)
+	decisions := newReadDecisions(s, cfg)
 	historyErrors := map[string]error{}
 	for _, candidate := range candidates {
 		if _, ok := historyErrors[candidate.Source.ID]; !ok {
 			_, historyErrors[candidate.Source.ID] = decisions.History(ctx, candidate.Source.ID)
 		}
 	}
-	rules := cfg.Compiled()
 	for i := range candidates {
 		candidate := &candidates[i]
-		if !s.sourceInScope(candidate.Source.ID, options.SourceID, true, cfg) {
+		if !sourceInScope(candidate.Source.ID, options.SourceID, true, cfg) {
 			continue
 		}
 		release := candidate.Release
 		normalized, loadErr := s.loadStoredNormalized(ctx, release)
 
-		decision := authoringDecisionFor(candidate.Source.ID, normalized, decisions.Histories()[candidate.Source.ID], cfg, rules)
+		decision := decisionFromHistory(candidate.Source.ID, normalized, decisions.Histories()[candidate.Source.ID], cfg).Decision
 		if loadErr == nil {
 			loadErr = historyErrors[candidate.Source.ID]
 		}
@@ -214,7 +195,7 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 			if candidate.Artifact.ID != "" {
 				stored.Artifact = &candidate.Artifact
 			}
-			assessment, loadErr = s.newReleaseIntake().assess(ctx, cfg, source, provider.ReleaseDocument{Normalized: normalized, RawJSON: raw}, decision, stored, true)
+			assessment, loadErr = s.assess(ctx, cfg, source, provider.ReleaseDocument{Normalized: normalized, RawJSON: raw}, decision, stored, true)
 		}
 		if loadErr != nil {
 			result.Blocked = append(result.Blocked, fmt.Sprintf("%s: %v", release.ProviderReleaseID, loadErr))
@@ -249,54 +230,39 @@ func (s *Service) previewRebuild(ctx context.Context, options RebuildOptions, cf
 		}
 	}
 	candidates = materializable
-	var volumes []domain.VolumeEdition
-	result.Publish.Volumes, volumes, err = s.evaluateVolumes(ctx, volumeEvaluation{sourceFilter: options.SourceID, seriesFilter: options.SeriesID, rebuild: true, blockedSeries: blocked, candidates: candidates, existing: existing, inputs: inputs, histories: decisions.Histories(), series: cfg.Series, config: cfg}, false)
-	if err != nil {
-		result.Blocked = append(result.Blocked, err.Error())
-	}
-	targets := selectPublishers(cfg.Publishers, options.TargetID)
-	scope := deliveryScope{SourceID: options.SourceID, SeriesID: options.SeriesID, Rebuild: true}
-	selected, recordsByTarget, _, err := s.deliverySelection(ctx, cfg, scope, targets, candidates, blocked, volumes)
-	if err != nil {
+	inputsForDelivery := deliveryInputs{chapters: candidates, normalized: inputs, histories: decisions.Histories(), blocked: blocked, editions: existing}
+	if err := s.previewDelivery(ctx, cfg, options, inputsForDelivery, &result); err != nil {
 		return result, err
-	}
-	if err := s.validateLegacyReplacements(ctx, targets, selected, recordsByTarget); err != nil {
-		return result, err
-	}
-	for _, target := range targets {
-		pt, targetErr := publish.TargetFor(target)
-		if targetErr != nil {
-			result.Blocked = append(result.Blocked, targetErr.Error())
-			continue
-		}
-		pending, err := s.pendingDelivery(ctx, cfg, scope, target)
-		if err != nil {
-			result.Blocked = append(result.Blocked, err.Error())
-			continue
-		}
-		if pending != nil {
-			result.Pending = append(result.Pending, *pending)
-		}
-		plan, planErr := s.planDelivery(ctx, scope, pt, target, selected, librarySnapshot{Records: recordsByTarget[target.ID], Volumes: existing})
-		if planErr != nil {
-			result.Blocked = append(result.Blocked, planErr.Error())
-			continue
-		}
-		result.Publish.Items = append(result.Publish.Items, plan.Items...)
-		result.Blocked = append(result.Blocked, plan.Blocked...)
-		for _, item := range plan.Items {
-			if item.Action == "replace" || item.Action == "retire" {
-				notice := "Replacing delivered books may reset saved reading positions; check a small reader sample before a larger migration."
-				if item.Conditional {
-					notice = "Volume delivery is conditional on regenerated member bytes. If replacement occurs, saved reading positions may reset; check a small reader sample before a larger migration."
-				}
-				result.Notices = append(result.Notices, notice)
-				break
-			}
-		}
 	}
 	if len(result.Blocked) > 0 {
 		return result, fmt.Errorf("rebuild incomplete: %s", strings.Join(result.Blocked, "; "))
 	}
 	return result, nil
+}
+
+func (s *catalogReader) validateRebuild(cfg *config.Config, options RebuildOptions) error {
+	scope := deliveryScope{SourceID: options.SourceID, SeriesID: options.SeriesID, Rebuild: true}
+	if err := validatePublishTargets(cfg, scope, options.TargetID); err != nil {
+		return err
+	}
+	sources := selectSources(cfg.Sources, options.SourceID)
+	if len(sources) == 0 {
+		return fmt.Errorf("no enabled sources match %q", options.SourceID)
+	}
+	if len(selectPublishers(cfg.Publishers, options.TargetID)) == 0 {
+		return fmt.Errorf("no enabled publishers match %q", options.TargetID)
+	}
+	if options.SeriesID != "" {
+		if !cfg.Compiled().SeriesExists(options.SeriesID) {
+			return fmt.Errorf("unknown series %q", options.SeriesID)
+		}
+	}
+	return nil
+}
+
+func (s *catalogReader) planRebuild(ctx context.Context, options RebuildOptions, cfg *config.Config) (RebuildResult, error) {
+	if err := s.validateRebuild(cfg, options); err != nil {
+		return RebuildResult{Scope: options}, err
+	}
+	return s.previewRebuild(ctx, options, cfg)
 }
