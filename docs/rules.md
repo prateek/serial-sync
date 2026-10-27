@@ -54,6 +54,10 @@ switches the manifest only when complete; failures preserve the prior capture.
 directory is refused. `--force` remains accepted for compatibility and has the
 same safe refresh behavior.
 
+Refreshed attachments follow [Patreon attachment freshness](config.md#patreon-attachment-freshness):
+post revisions and media identity control reuse, with byte integrity checked before
+export into the new generation. Signed URL rotation alone keeps a verified capture.
+
 Workspace references, including attachment paths, are relative. You can move the
 whole workspace or mount it at a different container path. Preview also relocates
 older absolute-path manifests, using the opened workspace rather than the old

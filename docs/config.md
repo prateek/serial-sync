@@ -50,7 +50,28 @@ Release roles are `chapter`, `extra`, `release_attachment`, `announcement`,
 chapter slot and therefore remains a single. Each legacy input or rule must set
 `release_role` and `content_strategy`; see [content strategies](rules.md#content-strategies).
 
-Live auth example:
+## Patreon attachment freshness
+
+Live `run` and `setup dump` reuse an attachment only when its capture manifest
+matches the source, post, publication/edit timestamps, media identity, filename
+and MIME type, and its saved size and SHA-256 match the local bytes. A post edit
+or replacement media identity fetches a new capture even when the filename stays
+the same. Earlier captures retain their own paths and bytes.
+
+Signed URL rotation alone does not trigger a download. Freshly fetched Patreon
+posts carry media IDs that identify each resource; older normalized inputs fall
+back to the URL without its query, fragment or user information. This policy cannot detect
+silent upstream byte changes that leave the post revision and resource identity
+unchanged. Legacy filename-only download caches have no verifiable provenance
+and are fetched once into the new cache. Explicit local/offline captures remain
+usable without a live session.
+
+Dump refresh exports verified bytes into each new generation before the workspace
+manifest switches. Corrupt cache entries are fetched again; interrupted, partial
+or empty downloads cannot become reusable captures. Existing published reading
+copies still follow correction and explicit rebuild policies.
+
+## Live auth example
 
 ```toml
 [runtime]

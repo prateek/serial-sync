@@ -686,7 +686,10 @@ func (c *Client) HydrateDumpReleases(ctx context.Context, auth config.AuthProfil
 				continue
 			}
 			targetPath := fixtureAttachmentPath(fixtureDir, docs[docIndex].Normalized.ProviderReleaseID, attachment.FileName)
-			authState, err = c.downloadLiveAttachmentToPath(ctx, session, source, &docs[docIndex].Normalized, attachmentIndex, targetPath)
+			authState, err = c.downloadLiveAttachment(ctx, session, auth, source, &docs[docIndex].Normalized, attachmentIndex)
+			if err == nil {
+				err = exportAttachmentCapture(ctx, &docs[docIndex].Normalized.Attachments[attachmentIndex], targetPath)
+			}
 			if err != nil {
 				return docs, authState, err
 			}
@@ -727,7 +730,7 @@ func (c *Client) prepareLiveRelease(ctx context.Context, auth config.AuthProfile
 	if index < 0 {
 		return doc, domain.AuthStateAuthenticated, nil
 	}
-	if doc.Normalized.Attachments[index].LocalPath != "" ||
+	if (doc.Normalized.Attachments[index].LocalPath != "" && !isManagedAttachmentPath(auth, doc.Normalized.Attachments[index].LocalPath)) ||
 		strings.TrimSpace(doc.Normalized.Attachments[index].DownloadURL) == "" ||
 		strings.TrimSpace(doc.Normalized.Attachments[index].FileName) == "" {
 		return doc, domain.AuthStateAuthenticated, nil
@@ -755,58 +758,6 @@ func (c *Client) newLiveDownloadSession(auth config.AuthProfile, source config.S
 		client:   profile.client,
 		budget:   profile.budget,
 	}, domain.AuthStateAuthenticated, nil
-}
-
-func (c *Client) downloadLiveAttachment(ctx context.Context, session *liveSession, auth config.AuthProfile, source config.SourceConfig, release *domain.NormalizedRelease, index int) (domain.AuthState, error) {
-	if index < 0 || index >= len(release.Attachments) {
-		return domain.AuthStateAuthenticated, nil
-	}
-	attachment := &release.Attachments[index]
-	if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
-		return domain.AuthStateAuthenticated, nil
-	}
-	targetPath := filepath.Join(sessionCacheRoot(auth.SessionPath), "attachments", source.ID, release.ProviderReleaseID, sanitizeAttachmentFileName(attachment.FileName))
-	return c.downloadLiveAttachmentToPath(ctx, session, source, release, index, targetPath)
-}
-
-func (c *Client) downloadLiveAttachmentToPath(ctx context.Context, session *liveSession, source config.SourceConfig, release *domain.NormalizedRelease, index int, targetPath string) (domain.AuthState, error) {
-	if index < 0 || index >= len(release.Attachments) {
-		return domain.AuthStateAuthenticated, nil
-	}
-	attachment := &release.Attachments[index]
-	if attachment.LocalPath != "" || strings.TrimSpace(attachment.DownloadURL) == "" || strings.TrimSpace(attachment.FileName) == "" {
-		return domain.AuthStateAuthenticated, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return domain.AuthStateReauthRequired, err
-	}
-	if _, err := os.Stat(targetPath); err == nil {
-		attachment.LocalPath = targetPath
-		reportPatreonProgress(ctx, "info", "Patreon attachment cache hit", "release", release.ProviderReleaseID, map[string]any{
-			"source_id":           source.ID,
-			"provider_release_id": release.ProviderReleaseID,
-			"file_name":           attachment.FileName,
-			"cached_path":         targetPath,
-		})
-		return domain.AuthStateAuthenticated, nil
-	}
-	startedAt := time.Now()
-	body, authState, err := c.get(ctx, session, attachment.DownloadURL, source.URL, "*/*")
-	if err != nil {
-		return authState, fmt.Errorf("download Patreon attachment %q (%s): %s: %w", attachment.FileName, attachment.DownloadURL, authState, err)
-	}
-	if err := os.WriteFile(targetPath, body, 0o644); err != nil {
-		return domain.AuthStateReauthRequired, err
-	}
-	attachment.LocalPath = targetPath
-	reportPatreonProgress(ctx, "info", "downloaded Patreon attachment", "release", release.ProviderReleaseID, map[string]any{
-		"source_id":           source.ID,
-		"provider_release_id": release.ProviderReleaseID,
-		"file_name":           attachment.FileName,
-		"bytes":               len(body),
-		"duration_ms":         elapsedMillis(startedAt),
-	})
-	return domain.AuthStateAuthenticated, nil
 }
 
 func (c *Client) get(ctx context.Context, session *liveSession, requestURL, referer, accept string) ([]byte, domain.AuthState, error) {
@@ -898,6 +849,13 @@ func (c *Client) getOnce(ctx context.Context, session *liveSession, requestURL, 
 			"budget":      budget,
 		})
 		return nil, domain.AuthStateReauthRequired, -1, fmt.Errorf("unexpected Patreon response status %d for %s", resp.StatusCode, requestURL)
+	}
+	if resp.StatusCode == http.StatusPartialContent || (resp.ContentLength > 0 && int64(len(body)) != resp.ContentLength) {
+		err := errors.New("incomplete Patreon response body")
+		reportRequestProgress(ctx, requestURL, "error", "incomplete Patreon response body", map[string]any{
+			"request_url": requestURL, "status": resp.StatusCode, "attempt": attempt, "budget": budget, "error": err.Error(),
+		})
+		return nil, domain.AuthStateAuthenticated, -1, err
 	}
 	if changed, snapshot := session.budget.markSuccess(); changed {
 		reportSourceProgress(ctx, session.sourceID, "info", "Patreon request budget increased", map[string]any{

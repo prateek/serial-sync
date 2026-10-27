@@ -1034,8 +1034,7 @@ func hashableNormalizedRelease(release domain.NormalizedRelease) domain.Normaliz
 	cloned.Attachments = make([]domain.Attachment, len(release.Attachments))
 	copy(cloned.Attachments, release.Attachments)
 	for idx := range cloned.Attachments {
-		cloned.Attachments[idx].DownloadURL = ""
-		cloned.Attachments[idx].LocalPath = ""
+		cloned.Attachments[idx] = cloned.Attachments[idx].ContentIdentity()
 	}
 	return cloned
 }

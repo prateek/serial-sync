@@ -76,8 +76,7 @@ func Extract(release domain.NormalizedRelease) Features {
 	copy.EditedAt = time.Time{}
 	copy.Attachments = append([]domain.Attachment(nil), release.Attachments...)
 	for i := range copy.Attachments {
-		copy.Attachments[i].LocalPath = ""
-		copy.Attachments[i].DownloadURL = ""
+		copy.Attachments[i] = copy.Attachments[i].ContentIdentity()
 	}
 	data, _ := json.Marshal(copy)
 	features.ContentHash = digest(data)

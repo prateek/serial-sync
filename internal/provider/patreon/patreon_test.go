@@ -53,6 +53,9 @@ func TestParsePostUsesSanitizedFixtureAttachmentPath(t *testing.T) {
 	if got, want := len(norm.Attachments), 1; got != want {
 		t.Fatalf("len(norm.Attachments) = %d, want %d", got, want)
 	}
+	if got := norm.Attachments[0].ProviderMediaID; got != "m1" {
+		t.Fatalf("attachment media identity = %q, want m1", got)
+	}
 	if got, want := norm.Attachments[0].LocalPath, localPath; got != want {
 		t.Fatalf("attachment LocalPath = %q, want %q", got, want)
 	}

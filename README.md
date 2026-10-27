@@ -39,6 +39,10 @@ That dump workspace keeps both the fast authoring view (`posts.ndjson`) and the
 full capture (`captures/<generation>/creators/<source-id>/posts/*.json` plus `attachments/`) so later
 offline replay/materialization work can reuse the same dump without re-fetching Patreon.
 
+Patreon attachment reuse verifies captured bytes and follows the post revision and
+media identity. See [attachment freshness](docs/config.md#patreon-attachment-freshness)
+for correction handling and signed URL reuse.
+
 Repeat `setup dump` to refresh a recognized workspace. A failed refresh retains
 the previous capture and your authored files. `setup check` and `setup preview`
 are offline and read-only; they work without writable state or a database.

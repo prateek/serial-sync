@@ -179,11 +179,17 @@ type EventRecord struct {
 }
 
 type Attachment struct {
-	SHA256      string `json:"sha256,omitempty"`
-	FileName    string `json:"file_name"`
-	MIMEType    string `json:"mime_type"`
-	DownloadURL string `json:"download_url"`
-	LocalPath   string `json:"local_path"`
+	ProviderMediaID string `json:"provider_media_id,omitempty"`
+	SHA256          string `json:"sha256,omitempty"`
+	FileName        string `json:"file_name"`
+	MIMEType        string `json:"mime_type"`
+	DownloadURL     string `json:"download_url"`
+	LocalPath       string `json:"local_path"`
+}
+
+// ContentIdentity returns the attachment fields used to compare content.
+func (attachment Attachment) ContentIdentity() Attachment {
+	return Attachment{SHA256: attachment.SHA256, FileName: attachment.FileName, MIMEType: attachment.MIMEType}
 }
 
 type NormalizedRelease struct {

@@ -276,10 +276,11 @@ func parsePost(raw []byte, fixtureDir string) (domain.NormalizedRelease, error) 
 				continue
 			}
 			attachments = append(attachments, domain.Attachment{
-				FileName:    attrs.FileName,
-				MIMEType:    attrs.MIMEType,
-				DownloadURL: attrs.DownloadURL,
-				LocalPath:   fixtureAttachmentLocalPath(fixtureDir, envelope.Data.ID, attrs.FileName),
+				ProviderMediaID: mediaRef.ID,
+				FileName:        attrs.FileName,
+				MIMEType:        attrs.MIMEType,
+				DownloadURL:     attrs.DownloadURL,
+				LocalPath:       fixtureAttachmentLocalPath(fixtureDir, envelope.Data.ID, attrs.FileName),
 			})
 		}
 	}

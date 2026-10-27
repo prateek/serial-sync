@@ -24,6 +24,20 @@ func TestIdentityEnrichmentDoesNotChangeContentHash(t *testing.T) {
 	}
 }
 
+func TestAttachmentMediaIdentityDoesNotChangeContentHash(t *testing.T) {
+	release := domain.NormalizedRelease{Provider: "patreon", ProviderReleaseID: "1", Attachments: []domain.Attachment{{FileName: "chapter.epub", SHA256: "content-digest"}}}
+	intake := &releaseIntake{}
+	before := intake.computeContentHash(release)
+	release.Attachments[0].ProviderMediaID = "media-1"
+	if after := intake.computeContentHash(release); after != before {
+		t.Fatal("attachment provenance changed content hash")
+	}
+	release.Attachments[0].SHA256 = "corrected-content-digest"
+	if after := intake.computeContentHash(release); after == before {
+		t.Fatal("changed attachment bytes did not change content hash")
+	}
+}
+
 func TestOfflineEnrichmentUsesLatestObservationForTheSameCapture(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

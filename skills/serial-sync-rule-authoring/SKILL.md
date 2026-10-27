@@ -42,6 +42,10 @@ authored files and keeps the old capture until the new one is complete.
 `setup check` and workspace preview are read-only and reject unknown keys,
 invalid enums, regexes, globs, and source/book references.
 
+For attachment corrections, follow the [freshness policy](../../docs/config.md#patreon-attachment-freshness).
+A refreshed dump reuses verified bytes for the same post revision and media identity;
+rotating signed URLs alone do not require a download. Offline preview uses the captured bytes.
+
 The dump is the canonical local capture. It includes normalized posts for fast authoring, raw Patreon post JSON, and downloaded attachments in the same workspace.
 
 Preview series definitions offline:
