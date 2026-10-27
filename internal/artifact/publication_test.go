@@ -102,7 +102,7 @@ func TestMetadataCaptureKeepsSelectedImageAfterCuratedFileChanges(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Materialize(context.Background(), domain.Source{ID: "source"}, domain.StoryTrack{TrackKey: "track"}, domain.Release{ProviderReleaseID: "post"}, domain.ArtifactPlan{Filename: "test.txt", SelectedContent: []byte("test"), SHA256: "test", MetadataAssets: captures}); err != nil {
+	if _, err := m.Materialize(context.Background(), domain.Source{ID: "source"}, domain.StoryTrack{TrackKey: "track"}, domain.Release{ProviderReleaseID: "post"}, domain.ArtifactPlan{Filename: "test.txt", SelectedContent: []byte("test"), SHA256: digest([]byte("test")), MetadataAssets: captures}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(asset.Path, []byte("changed"), 0600); err != nil {

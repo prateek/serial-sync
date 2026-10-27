@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/prateek/serial-sync/internal/app"
 	"github.com/prateek/serial-sync/internal/config"
@@ -222,9 +224,7 @@ func TestPublicationFormatUpgradeRequiresExplicitRebuild(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(candidate.Artifact.MetadataRef, data, 0600); err != nil {
-					t.Fatal(err)
-				}
+				installSidecarFixture(t, s, candidate, data)
 			}
 			for _, file := range findFiles(t, s.Config.Publishers[0].Path, ".epub") {
 				before[file] = mustReadFile(t, file)
@@ -267,5 +267,62 @@ func TestPublicationFormatUpgradeRequiresExplicitRebuild(t *testing.T) {
 				t.Fatalf("repeat rebuild republished: %+v %v", result, err)
 			}
 		})
+	}
+}
+
+func TestPreserveMetadataRebuildRetainsCaptureWithoutRedelivery(t *testing.T) {
+	ctx := context.Background()
+	s, upstream := newReaderService(t)
+	upstream.docs["alpha"] = upstream.docs["alpha"][:1]
+	s.Config.Series[0].Authors = []string{"Original author"}
+	if _, err := s.RunOnce(ctx, "", "", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := s.Repo.ListPublishCandidates(ctx, "alpha")
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("candidates: %+v %v", candidates, err)
+	}
+	first := candidates[0].Artifact
+	records, err := s.Repo.ListPublishRecords(ctx, "alpha", "library")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("deliveries: %+v %v", records, err)
+	}
+	path := records[0].Record.TargetRef
+	stamp := time.Unix(123456789, 0)
+	if err := os.Chtimes(path, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	before := intakeTreeSnapshot(t, s.Config.Publishers[0].Path)
+	s.Config.Series[0].Authors = []string{"Later author"}
+	s.Providers = provider.NewRegistry()
+	result, err := s.Rebuild(ctx, app.RebuildOptions{}, "metadata rebuild")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Publish.Published != 0 || result.Publish.Skipped != 1 || !reflect.DeepEqual(before, intakeTreeSnapshot(t, s.Config.Publishers[0].Path)) {
+		t.Fatalf("metadata-only capture changed delivery: %+v", result.Publish)
+	}
+	second, err := s.Repo.GetCanonicalArtifactByReleaseID(ctx, first.ReleaseID)
+	if err != nil || second == nil || second.ID == first.ID || second.SHA256 != first.SHA256 || second.StorageRef != first.StorageRef {
+		t.Fatalf("metadata capture identity/blob reuse: %+v %v", second, err)
+	}
+	for _, want := range []struct{ id, description string }{{first.ID, "Original author"}, {second.ID, "Later author"}} {
+		retained, err := s.Repo.GetArtifact(ctx, want.id)
+		if err != nil || retained == nil {
+			t.Fatalf("retained capture: %+v %v", retained, err)
+		}
+		var meta struct {
+			Track domain.StoryTrack `json:"track"`
+		}
+		if err := json.Unmarshal(mustReadFile(t, retained.MetadataRef), &meta); err != nil || meta.Track.CanonicalAuthor != want.description {
+			t.Fatalf("retained author changed: %+v %v", meta, err)
+		}
+	}
+	if result, err := s.Rebuild(ctx, app.RebuildOptions{}, "unchanged retry"); err != nil || result.Publish.Published != 0 || !reflect.DeepEqual(before, intakeTreeSnapshot(t, s.Config.Publishers[0].Path)) {
+		t.Fatalf("repeat rebuild changed delivery: %+v %v", result, err)
+	}
+	records, err = s.Repo.ListPublishRecords(ctx, "alpha", "library")
+	if err != nil || len(records) != 1 || records[0].Artifact.ID != first.ID || records[0].Record.Status != domain.PublishStatusPublished {
+		t.Fatalf("original delivery receipt lost: %+v %v", records, err)
 	}
 }

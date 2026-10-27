@@ -78,8 +78,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   state TEXT NOT NULL,
   metadata_ref TEXT NOT NULL,
   normalized_ref TEXT NOT NULL,
-  raw_ref TEXT NOT NULL,
-  UNIQUE(release_id, sha256, artifact_kind, filename, track_id)
+  raw_ref TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS publish_records (

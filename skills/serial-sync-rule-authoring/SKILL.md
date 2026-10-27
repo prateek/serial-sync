@@ -268,3 +268,10 @@ When embedded titles or creators conflict with reviewed source posts, select ser
 A metadata refresh must not silently replace an existing reading copy. Inspect offline preview, then an explicit rebuild preview for already published files. Review multi-chapter attachment navigation, absence of generated chapter back matter, and at most one final author page in assembled volumes. Older chapter About pages require an explicit rebuild even without config edits; library reconciliation and redownloading offline reader copies are separate checks. Pending deliveries must keep their saved bytes. For BookOrbit, use a `drop` publisher into a watched library folder; it hands each release off once and holds later revisions, so a rebuild does not replace BookOrbit books.
 
 Keep user reading interest outside series classification and EPUB metadata. Readers silence a series by unfollowing it in BookOrbit; fetching and publishing continue. BookOrbit owns reading status and locators. Snapshot existing state and exact chapter coverage before bulk read-through changes, and leave future arrivals unread. See the [BookOrbit library guide](../../integrations/bookorbit/README.md).
+
+Treat capture IDs and archive paths as catalog references. Verify retained
+metadata against its capture, even when two captures share reading bytes. A
+metadata-only rebuild can retain a new capture while skipping identical delivery.
+Missing or corrupt capture sidecars block normal sync; inspect retained release
+inputs before proposing an explicit rebuild. See the [capture compatibility
+notes](../../docs/config.md#portable-publication-metadata).

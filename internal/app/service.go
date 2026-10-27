@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/prateek/serial-sync/internal/artifact"
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/config"
@@ -681,7 +680,7 @@ func (s *Service) resolveTrack(ctx context.Context, source domain.Source, decisi
 		return *existing, nil
 	}
 	return domain.StoryTrack{
-		ID:              "trk_" + uuid.NewString(),
+		ID:              catalogIdentity("trk", source.ID, decision.TrackKey),
 		SourceID:        source.ID,
 		TrackKey:        decision.TrackKey,
 		TrackName:       decision.TrackName,

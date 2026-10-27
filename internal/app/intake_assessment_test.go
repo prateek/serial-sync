@@ -25,12 +25,12 @@ func TestRebuildPreviewAssessesDamagedArchivedCopies(t *testing.T) {
 			if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 				t.Fatal(err)
 			}
-			files := findFiles(t, s.Config.Runtime.ArtifactRoot, ".html")
+			files := canonicalReadingPaths(t, s)
 			if len(files) != 1 {
 				t.Fatalf("archived copies: %v", files)
 			}
 			original := mustReadFile(t, files[0])
-			published := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", filepath.Base(files[0]))
+			published := filepath.Join(s.Config.Publishers[0].Path, "alpha", "alpha-saga", canonicalReadingFilename(t, s))
 			originalPublished := mustReadFile(t, published)
 			oldTime := time.Unix(1_600_000_000, 0)
 			if err := os.Chtimes(published, oldTime, oldTime); err != nil {

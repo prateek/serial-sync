@@ -175,11 +175,26 @@ INSERT INTO artifacts (
   sqlc.arg(storage_ref), sqlc.arg(built_at), sqlc.arg(state), sqlc.arg(metadata_ref),
   sqlc.arg(normalized_ref), sqlc.arg(raw_ref)
 )
-ON CONFLICT(release_id, sha256, artifact_kind, filename, track_id) DO UPDATE SET
+ON CONFLICT(id) DO UPDATE SET
+  is_canonical = excluded.is_canonical,
+  state = excluded.state;
+
+-- name: UpsertVolumeArtifact :exec
+INSERT INTO artifacts (
+  id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type,
+  sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref
+) VALUES (
+  sqlc.arg(id), sqlc.arg(release_id), sqlc.arg(track_id), sqlc.arg(artifact_kind),
+  sqlc.arg(is_canonical), sqlc.arg(filename), sqlc.arg(mime_type), sqlc.arg(sha256),
+  sqlc.arg(storage_ref), sqlc.arg(built_at), sqlc.arg(state), sqlc.arg(metadata_ref),
+  sqlc.arg(normalized_ref), sqlc.arg(raw_ref)
+)
+ON CONFLICT(id) DO UPDATE SET
   track_id = excluded.track_id,
   is_canonical = excluded.is_canonical,
   filename = excluded.filename,
   mime_type = excluded.mime_type,
+  sha256 = excluded.sha256,
   storage_ref = excluded.storage_ref,
   built_at = excluded.built_at,
   state = excluded.state,

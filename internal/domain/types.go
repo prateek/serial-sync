@@ -124,6 +124,7 @@ type ReleaseAssignment struct {
 	Confidence  float64     `json:"confidence"`
 }
 
+// Artifact identifies a retained capture; SHA256 identifies only its reading bytes.
 type Artifact struct {
 	ID            string        `json:"id"`
 	ReleaseID     string        `json:"release_id"`

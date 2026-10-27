@@ -175,3 +175,36 @@ func TestExecuteDeliveryOutcomes(t *testing.T) {
 		})
 	}
 }
+
+func TestCaptureDeliveryDeduplicationRespectsOwnership(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{{"same release and track", "unchanged"}, {"different release", "replace"}, {"different track", "replace"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := deliveryFixture(t)
+			old := deliveryCandidate("alpha", strings.Repeat("a", 64))
+			old.Artifact.TrackID = old.Track.ID
+			next := old
+			next.Artifact.ID = "art_new_capture"
+			if tc.name == "different release" {
+				next.Release.ID = "other_release"
+				next.Artifact.ReleaseID = next.Release.ID
+			}
+			if tc.name == "different track" {
+				next.Track.ID = "other_track"
+				next.Artifact.TrackID = next.Track.ID
+			}
+			target := &publish.ExecTarget{ID: "hook", Command: []string{"/unused/review-hook"}}
+			identity, err := target.Identity(old, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			records := []domain.PublishRecordBundle{{Record: domain.PublishRecord{ID: "receipt", ArtifactID: old.Artifact.ID, TargetID: "hook", TargetKind: "exec", TargetRef: identity.Ref, Filename: old.Artifact.Filename, PublishHash: identity.PublishHash, Status: domain.PublishStatusPublished}, Artifact: old.Artifact, Release: old.Release, Track: old.Track, Source: old.Source}}
+			plan, err := svc.planDelivery(context.Background(), deliveryScope{}, target, config.PublisherConfig{ID: "hook", Kind: "exec"}, []domain.PublishCandidate{next}, librarySnapshot{Records: records})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Items) != 1 || plan.Items[0].Action != tc.want {
+				t.Fatalf("delivery action for %s = %+v, want %s", tc.name, plan.Items, tc.want)
+			}
+		})
+	}
+}

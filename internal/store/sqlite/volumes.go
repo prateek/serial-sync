@@ -54,7 +54,7 @@ func (s *Store) ReplaceVolumes(ctx context.Context, seriesID string, volumes []d
 	}
 	for _, volume := range volumes {
 		art := volume.Artifact
-		if err := q.UpsertArtifact(ctx, sqldb.UpsertArtifactParams{ID: art.ID, ReleaseID: "", TrackID: art.TrackID, ArtifactKind: art.ArtifactKind, IsCanonical: 1, Filename: art.Filename, MimeType: art.MIMEType, Sha256: art.SHA256, StorageRef: art.StorageRef, BuiltAt: formatTime(art.BuiltAt), State: string(art.State), MetadataRef: art.MetadataRef, NormalizedRef: "", RawRef: ""}); err != nil {
+		if err := q.UpsertVolumeArtifact(ctx, sqldb.UpsertVolumeArtifactParams{ID: art.ID, ReleaseID: "", TrackID: art.TrackID, ArtifactKind: art.ArtifactKind, IsCanonical: 1, Filename: art.Filename, MimeType: art.MIMEType, Sha256: art.SHA256, StorageRef: art.StorageRef, BuiltAt: formatTime(art.BuiltAt), State: string(art.State), MetadataRef: art.MetadataRef, NormalizedRef: "", RawRef: ""}); err != nil {
 			return err
 		}
 		if err := q.DeactivateVolumeGroup(ctx, sqldb.DeactivateVolumeGroupParams{SeriesID: volume.SeriesID, GroupID: volume.GroupID}); err != nil {

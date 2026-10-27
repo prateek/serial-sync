@@ -32,6 +32,7 @@ type intakePlan struct {
 	Release               domain.Release
 	ArtifactPlan          domain.ArtifactPlan
 	StoredArtifact        *domain.Artifact
+	StoredCurrent         bool
 	StoredState           artifact.StoredState
 	ContentHash           string
 	NormalizedJSON        []byte
@@ -117,7 +118,7 @@ func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceC
 		Enabled:       sourceCfg.Enabled,
 	}
 
-	releaseID := "rel_" + uuid.NewString()
+	releaseID := catalogIdentity("rel", sourceCfg.ID, doc.Normalized.ProviderReleaseID)
 	if stored != nil && stored.Release != nil {
 		releaseID = stored.Release.ID
 	}
@@ -151,6 +152,10 @@ func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceC
 		ContentHash:       contentHash,
 		DiscoveredAt:      time.Now().UTC(),
 		Status:            "discovered",
+	}
+
+	if stored != nil && stored.Release != nil {
+		release.DiscoveredAt = stored.Release.DiscoveredAt
 	}
 
 	normalizedJSON, err := json.Marshal(doc.Normalized)
@@ -201,7 +206,7 @@ func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceC
 			return intakeAssessment{}, err
 		}
 		if storedArtifact != nil && stored != nil && stored.Release != nil && stored.Release.ContentHash == contentHash {
-			current = artifact.IsCurrent(*storedArtifact, release, track, decision)
+			current = storedState.IsCurrent(release, track, decision)
 			if current && storedState.Intact {
 				// Current and intact on disk: never re-plan. Re-planning
 				// a PDF would re-run the conversion for bytes that already match.
@@ -262,6 +267,7 @@ func (ri *releaseIntake) assess(ctx context.Context, cfg *config.Config, sourceC
 			Release:               release,
 			ArtifactPlan:          artifactPlan,
 			StoredArtifact:        storedArtifact,
+			StoredCurrent:         current,
 			StoredState:           storedState,
 			ContentHash:           contentHash,
 			NormalizedJSON:        normalizedJSON,
@@ -337,7 +343,16 @@ func (ri *releaseIntake) apply(ctx context.Context, recorder *observe.Recorder, 
 	materialized := false
 	if plan.NeedsMaterialize {
 		var err error
-		art, err = s.Files.Materialize(ctx, source, plan.Track, plan.Release, plan.ArtifactPlan)
+		canRestore := plan.StoredCurrent && plan.StoredArtifact != nil &&
+			plan.StoredArtifact.SHA256 == plan.ArtifactPlan.SHA256 &&
+			plan.StoredArtifact.Filename == plan.ArtifactPlan.Filename &&
+			plan.StoredArtifact.MIMEType == plan.ArtifactPlan.MIMEType &&
+			plan.StoredArtifact.ArtifactKind == plan.ArtifactPlan.ArtifactKind
+		if canRestore {
+			art, err = s.Files.Restore(ctx, *plan.StoredArtifact, plan.ArtifactPlan)
+		} else {
+			art, err = s.Files.Materialize(ctx, source, plan.Track, plan.Release, plan.ArtifactPlan)
+		}
 		if err != nil {
 			return domain.SyncItemPlan{}, false, false, err
 		}
@@ -406,4 +421,9 @@ func (s *Service) loadStoredForIntake(ctx context.Context, sourceID, providerRel
 		Track:      track,
 		Assignment: assignment,
 	}, nil
+}
+
+func catalogIdentity(kind, sourceID, key string) string {
+	data, _ := json.Marshal([]string{"serial-sync", kind, sourceID, key})
+	return kind + "_" + uuid.NewSHA1(uuid.NameSpaceURL, data).String()
 }

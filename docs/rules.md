@@ -69,6 +69,12 @@ posts. The `extra` role publishes fiction as singles without filling chapter slo
 
 For agent-driven authoring, the repo also ships a local skill at `skills/serial-sync-rule-authoring/SKILL.md`.
 
+Captured metadata and provenance remain attached to the reading-copy capture that
+recorded them. Explicit rebuilds can select new metadata while reusing identical
+reading bytes and leaving the delivered file untouched. Missing or corrupt
+capture sidecars block normal sync; inspect the blocker before rebuilding from
+retained inputs. See [capture compatibility](config.md#portable-publication-metadata).
+
 ## Replay and compare the main config
 
 Preview reads the global `--config` file by default, just like `run`. Use

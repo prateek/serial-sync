@@ -155,6 +155,11 @@ and unknown collections for review. See the
 Book `collection` and `tag` selectors assign both series and book; expected chapter
 ranges still control volume completion. Decimal, suffixed, negative, and part
 numbering stays intact and remains single until explicitly assigned a chapter slot.
+Reading-copy captures retain their metadata and provenance separately from shared
+reading bytes. A metadata-only rebuild keeps older captures readable and skips
+delivery when the destination already contains identical bytes. See the
+[capture compatibility notes](docs/config.md#portable-publication-metadata).
+
 `setup preview --stored --compare <baseline>` also shows library changes through
 the rebuild planner, with destination ownership checks and blocked inputs.
 

@@ -527,3 +527,29 @@ Review selected metadata with offline `setup preview --show-posts --format json`
 Older EPUB editions with per-chapter About pages, series-repeating chapter titles, EPUB 2 packages or no body-matter landmark require the same explicit rebuild, even without a config edit. With the normal mounts, preview one series using `docker compose run --rm serial-sync run --rebuild --dry-run --series <series-id>`, then remove `--dry-run` to apply it. The upgrade retains filenames and original chapter resources. Rescan/reconcile the library through its configured publisher after replacement, and redownload existing offline copies in Readest. A local rebuild does not update a phone download or prove that a reader retained saved progress; verify those separately before expanding the rebuild.
 
 A `drop` target never replaces a handed-off book, so a rebuild's new editions are held rather than delivered. The [BookOrbit library guide](../integrations/bookorbit/README.md) covers that setup.
+
+Reading-copy captures have immutable identities covering their metadata and
+provenance. Captures with identical reading bytes share a content blob; their
+metadata, normalized input, raw input, and selected artwork remain bound to each
+capture. Archive paths are internal references, so use the catalog to locate
+reading copies. Existing archives and delivery receipts remain readable without
+rewriting their files. New captures do not overwrite old sidecars.
+
+Normal sync blocks a capture with missing or corrupt sidecars. An explicit
+rebuild can create a replacement from retained release inputs; it cannot recover
+lost original metadata choices from reading bytes alone.
+
+An interrupted capture whose catalog save failed is reused on retry when the
+upstream payload and selection are unchanged, including on first intake. New release/track IDs derive from their catalog keys; existing
+IDs are retained. Capture metadata excludes operational discovery, sync, and
+track-update fields while retaining upstream dates and selected inputs.
+`run --rebuild` is the operator path for replacing damaged sidecars from retained
+release inputs. Intact destinations with the same filename and bytes skip
+delivery for the same release and track even when capture metadata changes.
+Rebuild preview conservatively proposes replacement when output bytes have not
+yet been generated; execution can subsequently skip identical delivery.
+
+The catalog migration removes the earlier content-based artifact uniqueness
+constraint. Older binaries cannot write this migrated catalog. Retain a consistent
+backup of the catalog and archive before upgrading; rolling back requires
+restoring that backup together with the earlier binary.

@@ -112,9 +112,11 @@ func (s *Service) planDelivery(ctx context.Context, scope deliveryScope, pt publ
 			if pt.MatchesDestination(record, candidate) {
 				action = "replace"
 			}
-			if !candidate.Planned && candidate.Artifact.ID == record.Artifact.ID && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == identity.PublishHash {
+			sameOwner := candidate.Artifact.ReleaseID == record.Artifact.ReleaseID && candidate.Artifact.TrackID == record.Artifact.TrackID
+			if !candidate.Planned && sameOwner && pt.MatchesDestination(record, candidate) && candidate.Artifact.SHA256 == record.Artifact.SHA256 && candidate.Artifact.SHA256 != "" && record.Record.PublishHash == identity.PublishHash {
 				if identity.Intact {
 					action = "unchanged"
+					desired[pt.DesiredKeyForRecord(record)] = true
 				} else {
 					action = "repair"
 				}

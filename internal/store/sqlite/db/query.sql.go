@@ -1315,17 +1315,9 @@ INSERT INTO artifacts (
   ?9, ?10, ?11, ?12,
   ?13, ?14
 )
-ON CONFLICT(release_id, sha256, artifact_kind, filename, track_id) DO UPDATE SET
-  track_id = excluded.track_id,
+ON CONFLICT(id) DO UPDATE SET
   is_canonical = excluded.is_canonical,
-  filename = excluded.filename,
-  mime_type = excluded.mime_type,
-  storage_ref = excluded.storage_ref,
-  built_at = excluded.built_at,
-  state = excluded.state,
-  metadata_ref = excluded.metadata_ref,
-  normalized_ref = excluded.normalized_ref,
-  raw_ref = excluded.raw_ref
+  state = excluded.state
 `
 
 type UpsertArtifactParams struct {
@@ -1661,6 +1653,67 @@ func (q *Queries) UpsertTrack(ctx context.Context, arg UpsertTrackParams) error 
 		arg.OutputPolicy,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+	)
+	return err
+}
+
+const upsertVolumeArtifact = `-- name: UpsertVolumeArtifact :exec
+INSERT INTO artifacts (
+  id, release_id, track_id, artifact_kind, is_canonical, filename, mime_type,
+  sha256, storage_ref, built_at, state, metadata_ref, normalized_ref, raw_ref
+) VALUES (
+  ?1, ?2, ?3, ?4,
+  ?5, ?6, ?7, ?8,
+  ?9, ?10, ?11, ?12,
+  ?13, ?14
+)
+ON CONFLICT(id) DO UPDATE SET
+  track_id = excluded.track_id,
+  is_canonical = excluded.is_canonical,
+  filename = excluded.filename,
+  mime_type = excluded.mime_type,
+  sha256 = excluded.sha256,
+  storage_ref = excluded.storage_ref,
+  built_at = excluded.built_at,
+  state = excluded.state,
+  metadata_ref = excluded.metadata_ref,
+  normalized_ref = excluded.normalized_ref,
+  raw_ref = excluded.raw_ref
+`
+
+type UpsertVolumeArtifactParams struct {
+	ID            string
+	ReleaseID     string
+	TrackID       string
+	ArtifactKind  string
+	IsCanonical   int64
+	Filename      string
+	MimeType      string
+	Sha256        string
+	StorageRef    string
+	BuiltAt       string
+	State         string
+	MetadataRef   string
+	NormalizedRef string
+	RawRef        string
+}
+
+func (q *Queries) UpsertVolumeArtifact(ctx context.Context, arg UpsertVolumeArtifactParams) error {
+	_, err := q.db.ExecContext(ctx, upsertVolumeArtifact,
+		arg.ID,
+		arg.ReleaseID,
+		arg.TrackID,
+		arg.ArtifactKind,
+		arg.IsCanonical,
+		arg.Filename,
+		arg.MimeType,
+		arg.Sha256,
+		arg.StorageRef,
+		arg.BuiltAt,
+		arg.State,
+		arg.MetadataRef,
+		arg.NormalizedRef,
+		arg.RawRef,
 	)
 	return err
 }

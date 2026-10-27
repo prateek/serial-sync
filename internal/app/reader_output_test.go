@@ -683,7 +683,7 @@ func TestOfflineRebuildRepairsMissingArchivedBytes(t *testing.T) {
 	if _, err := s.RunOnce(context.Background(), "", "", "run"); err != nil {
 		t.Fatal(err)
 	}
-	files := findFiles(t, s.Config.Runtime.ArtifactRoot, ".html")
+	files := canonicalReadingPaths(t, s)
 	if len(files) != 1 {
 		t.Fatalf("expected one archived artifact: %v", files)
 	}
@@ -2003,9 +2003,7 @@ func TestLegacyContentSelectionDoesNotInventLibraryReplacements(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(candidate.Artifact.MetadataRef, raw, 0600); err != nil {
-			t.Fatal(err)
-		}
+		installSidecarFixture(t, s, candidate, raw)
 	}
 	plan, err := s.Rebuild(context.Background(), app.RebuildOptions{DryRun: true}, "preview")
 	if err != nil {

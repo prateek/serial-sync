@@ -78,7 +78,7 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	}
 	_, err := s.db.ExecContext(ctx, schemaSQL)
 	if err == nil {
-		err = s.migrateArtifactEditions(ctx)
+		err = s.migrateArtifactCaptures(ctx)
 		s.hasVolumeSchema = true
 		s.hasDiscoverySchema = true
 		s.hasEnrichmentSchema = true
@@ -86,13 +86,13 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	return err
 }
 
-func (s *Store) migrateArtifactEditions(ctx context.Context) error {
+func (s *Store) migrateArtifactCaptures(ctx context.Context) error {
 	var definition string
 	if err := s.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'`).Scan(&definition); err != nil {
 		return err
 	}
 	compact := strings.Join(strings.Fields(definition), "")
-	if !strings.Contains(compact, "UNIQUE(release_id,sha256,artifact_kind)") {
+	if !strings.Contains(compact, "UNIQUE(release_id,sha256,artifact_kind") {
 		return nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -344,6 +344,9 @@ func (s *Store) SaveSyncSnapshot(ctx context.Context, snapshot store.SyncSnapsho
 		return err
 	}
 	track := trackFromRow(trackRow)
+	if snapshot.Artifact.ID != "" && snapshot.Artifact.TrackID != "" && snapshot.Artifact.TrackID != track.ID {
+		return fmt.Errorf("artifact track %s does not match stored track %s", snapshot.Artifact.TrackID, track.ID)
+	}
 	snapshot.Assignment.TrackID = track.ID
 	snapshot.Artifact.TrackID = track.ID
 	if err := qtx.UpsertRelease(ctx, sqldb.UpsertReleaseParams{

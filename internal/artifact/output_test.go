@@ -244,7 +244,7 @@ func TestMaterializePreservesEPUBWhenEPUBCheckFlagIsFalse(t *testing.T) {
 		ArtifactKind:    "epub",
 		Filename:        "chapter.epub",
 		MIMEType:        "application/epub+zip",
-		SHA256:          "preserve",
+		SHA256:          digest(content),
 		SelectedContent: content,
 	}
 	artifact, err := materializer.Materialize(

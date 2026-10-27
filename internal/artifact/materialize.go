@@ -8,12 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/prateek/serial-sync/internal/classify"
 	"github.com/prateek/serial-sync/internal/domain"
 	"github.com/prateek/serial-sync/internal/filehash"
@@ -32,17 +29,16 @@ func readCanonicalSidecar(artifact domain.Artifact) (*canonicalSidecar, bool) {
 		return nil, false
 	}
 	var meta canonicalSidecar
-	data, err := os.ReadFile(artifact.MetadataRef)
+	data, err := readCaptureMetadata(artifact)
 	if err != nil || json.Unmarshal(data, &meta) != nil || meta.OutputVersion < 1 {
 		return nil, false
 	}
 	return &meta, true
 }
 
-// StoredState aggregates the sidecar-derived facts about a stored artifact in
-// one read. Current is not part of it: currency depends on the planned
-// release, track and decision and stays on IsCurrent.
+// StoredState holds the verified capture facts for one planning assessment.
 type StoredState struct {
+	sidecar     *canonicalSidecar
 	Intact      bool
 	Legacy      bool
 	Blocked     bool
@@ -58,6 +54,7 @@ func InspectSidecar(artifact domain.Artifact) StoredState {
 		return StoredState{Legacy: true, Blocked: true, BlockReason: "unreadable sidecar"}
 	}
 	return StoredState{
+		sidecar:     meta,
 		Legacy:      meta.OutputVersion < outputVersion(meta.Decision),
 		Publication: meta.Decision.Publication,
 		Sequence:    meta.Decision.Sequence,
@@ -81,10 +78,21 @@ func IsLegacy(artifact domain.Artifact) bool {
 // IsCurrent answers whether this stored artifact is current for the planned
 // release, track and decision, matching the sidecar the planner wrote.
 func IsCurrent(artifact domain.Artifact, release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
-	meta, ok := readCanonicalSidecar(artifact)
-	if !ok || meta.OutputVersion != outputVersion(decision) {
+	meta, _ := readCanonicalSidecar(artifact)
+	return currentSidecar(meta, release, track, decision)
+}
+
+// IsCurrent compares the verified capture without reading its files again.
+func (state StoredState) IsCurrent(release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
+	return currentSidecar(state.sidecar, release, track, decision)
+}
+
+func currentSidecar(meta *canonicalSidecar, release domain.Release, track domain.StoryTrack, decision domain.TrackDecision) bool {
+	if meta == nil || meta.OutputVersion != outputVersion(decision) {
 		return false
 	}
+	copy := *meta
+	meta = &copy
 	if meta.Decision.SelectedContent == nil && meta.Normalized != nil {
 		selected := classify.SelectContent(*meta.Normalized, meta.Decision)
 		meta.Decision.SelectedContent = &selected
@@ -104,7 +112,7 @@ func StoredPublication(artifact domain.Artifact) (*domain.PublicationMetadata, e
 	// Legacy sidecars predate output_version and carry no publication; only an
 	// unreadable sidecar is an error.
 	var meta canonicalSidecar
-	data, err := os.ReadFile(artifact.MetadataRef)
+	data, err := readCaptureMetadata(artifact)
 	if err != nil {
 		return nil, err
 	}
@@ -186,14 +194,14 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 	if !classify.CanMaterialize(normalized, decision) {
 		return domain.ArtifactPlan{}, errors.New("release does not produce a materializable canonical artifact")
 	}
-	meta := map[string]any{
-		"output_version": outputVersion(decision),
-		"source":         source,
-		"track":          track,
-		"release":        release,
-		"decision":       decision,
-		"normalized":     normalized,
+	meta, err := captureCatalogMetadata(source, track, release)
+	if err != nil {
+		return domain.ArtifactPlan{}, err
 	}
+	meta["output_version"] = outputVersion(decision)
+	meta["decision"] = decision
+	meta["normalized"] = normalized
+
 	normalizedJSON, err := json.MarshalIndent(normalized, "", "  ")
 	if err != nil {
 		return domain.ArtifactPlan{}, err
@@ -288,63 +296,15 @@ func (m *Materializer) Plan(ctx context.Context, source domain.Source, track dom
 }
 
 func (m *Materializer) Materialize(ctx context.Context, source domain.Source, track domain.StoryTrack, release domain.Release, plan domain.ArtifactPlan) (domain.Artifact, error) {
-	select {
-	case <-ctx.Done():
-		return domain.Artifact{}, ctx.Err()
-	default:
-	}
-	dir := filepath.Join(m.Root, source.ID, track.TrackKey, release.ProviderReleaseID, plan.SHA256)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ctx.Err(); err != nil {
 		return domain.Artifact{}, err
 	}
-	baseName := plan.Filename
-	artifactPath := filepath.Join(dir, baseName)
-	metadataPath := filepath.Join(dir, baseName+".metadata.json")
-	normalizedPath := filepath.Join(dir, baseName+".normalized.json")
-	rawPath := filepath.Join(dir, baseName+".raw.json")
 	if plan.ValidateEPUBCheck {
 		if err := validateEPUBArchive(ctx, plan.SelectedContent); err != nil {
 			return domain.Artifact{}, err
 		}
 	}
-	for path, data := range plan.MetadataAssets {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return domain.Artifact{}, err
-		}
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			return domain.Artifact{}, err
-		}
-	}
-	if err := os.WriteFile(artifactPath, plan.SelectedContent, 0o644); err != nil {
-		return domain.Artifact{}, err
-	}
-	if err := os.WriteFile(metadataPath, plan.MetadataJSON, 0o644); err != nil {
-		return domain.Artifact{}, err
-	}
-	if err := os.WriteFile(normalizedPath, plan.NormalizedJSON, 0o644); err != nil {
-		return domain.Artifact{}, err
-	}
-	if len(plan.RawJSON) > 0 {
-		if err := os.WriteFile(rawPath, plan.RawJSON, 0o644); err != nil {
-			return domain.Artifact{}, err
-		}
-	}
-	return domain.Artifact{
-		ID:            "art_" + uuid.NewString(),
-		ReleaseID:     release.ID,
-		TrackID:       track.ID,
-		ArtifactKind:  plan.ArtifactKind,
-		IsCanonical:   true,
-		Filename:      baseName,
-		MIMEType:      plan.MIMEType,
-		SHA256:        plan.SHA256,
-		StorageRef:    artifactPath,
-		BuiltAt:       time.Now().UTC(),
-		State:         domain.ArtifactStateMaterialized,
-		MetadataRef:   metadataPath,
-		NormalizedRef: normalizedPath,
-		RawRef:        rawPath,
-	}, nil
+	return m.installCapture(source, track, release, plan)
 }
 
 func renderHTML(normalized domain.NormalizedRelease) string {

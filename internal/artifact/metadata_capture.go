@@ -45,3 +45,27 @@ func (m *Materializer) snapshotPublication(metadata *domain.PublicationMetadata)
 	}
 	return &snapshot, captured, nil
 }
+
+func captureCatalogMetadata(source domain.Source, track domain.StoryTrack, release domain.Release) (map[string]any, error) {
+	result := map[string]any{"source": source, "track": track, "release": release}
+	// Catalog bookkeeping varies across retries; upstream dates and capture inputs do not.
+	for name, fields := range map[string][]string{
+		"source":  {"last_synced_at", "sync_cursor"},
+		"track":   {"created_at", "updated_at"},
+		"release": {"discovered_at", "normalized_payload_ref", "raw_payload_ref", "status"},
+	} {
+		data, err := json.Marshal(result[name])
+		if err != nil {
+			return nil, err
+		}
+		var captured map[string]json.RawMessage
+		if err := json.Unmarshal(data, &captured); err != nil {
+			return nil, err
+		}
+		for _, field := range fields {
+			delete(captured, field)
+		}
+		result[name] = captured
+	}
+	return result, nil
+}

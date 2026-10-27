@@ -43,6 +43,20 @@ Each exec invocation receives stable environment variables such as:
 - `SERIAL_SYNC_NORMALIZED_JSON_PATH`
 - `SERIAL_SYNC_RAW_JSON_PATH`
 
+Artifact and sidecar paths are opaque catalog references. Reading bytes may live
+at an extensionless content-addressed blob path shared by several captures.
+Use `SERIAL_SYNC_ARTIFACT_FILENAME` for the delivered name and
+`SERIAL_SYNC_ARTIFACT_MIME` for its format; the stdin equivalents are
+`artifact.filename` and `artifact.mime_type`. When a downstream importer needs an
+extension, copy the bytes into a temporary directory under the supplied filename
+before importing. Do not infer a publication name or format from the storage
+path's basename.
+
+Capture metadata omits catalog bookkeeping: release discovery/status and payload
+references, track timestamps, and source sync state. Use the stdin payload for
+current catalog fields; the JSON sidecars retain capture-bound inputs and
+provenance.
+
 The hook also receives a JSON payload on stdin with the source, track, release, assignment, artifact, target, and run ID.
 
 Use [`examples/hooks/log-publish.sh`](../examples/hooks/log-publish.sh) as the minimal reference script.
