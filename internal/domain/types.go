@@ -380,6 +380,8 @@ type ReleaseBundle struct {
 }
 
 type RunBundle struct {
-	Run    RunRecord     `json:"run"`
-	Events []EventRecord `json:"events"`
+	History         string        `json:"history,omitempty"`
+	MissingPayloads []string      `json:"missing_payloads,omitempty"`
+	Run             RunRecord     `json:"run"`
+	Events          []EventRecord `json:"events"`
 }

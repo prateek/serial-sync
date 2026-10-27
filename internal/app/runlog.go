@@ -20,6 +20,17 @@ func (s *Service) loadRunRecord(ctx context.Context, runID string) (*domain.RunB
 	if err != nil {
 		return nil, record, err
 	}
+	if record.History == "unavailable" {
+		before, err := observe.ExpiredBefore(s.Config.Runtime.LogRoot)
+		if err != nil {
+			return nil, record, err
+		}
+		if bundle.Run.FinishedAt != nil && bundle.Run.FinishedAt.Before(before) {
+			record.History = "expired"
+		}
+	}
+	bundle.History = record.History
+	bundle.MissingPayloads = record.MissingPayloads
 	bundle.Events = nil
 	if record.Events != nil {
 		bundle.Events = make([]domain.EventRecord, 0, len(record.Events))

@@ -610,6 +610,33 @@ func (q *Queries) ListLabelObservations(ctx context.Context) ([]LabelObservation
 	return items, nil
 }
 
+const listPendingPublishes = `-- name: ListPendingPublishes :many
+SELECT id, target_id, payload_ref FROM pending_publishes
+`
+
+func (q *Queries) ListPendingPublishes(ctx context.Context) ([]PendingPublish, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingPublishes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PendingPublish
+	for rows.Next() {
+		var i PendingPublish
+		if err := rows.Scan(&i.ID, &i.TargetID, &i.PayloadRef); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublishCandidates = `-- name: ListPublishCandidates :many
 SELECT
   s.id, s.provider, s.source_url, s.source_type, s.creator_id, s.creator_name, s.auth_profile_id, s.enabled, s.sync_cursor, s.last_synced_at,

@@ -68,7 +68,7 @@ Both reject unknown config keys and invalid rule values before provider work.
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
 - the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb, poppler's `pdftohtml`, EPUBCheck, and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
 - the daemon exposes `/healthz`, `/status`, and `/metrics`
-- every run now writes both human-readable and JSONL logs under `runtime.log_root`, and support bundles include those logs
+- runs write human-readable and JSONL logs under `runtime.log_root`; [opt-in diagnostic retention and recovery](docs/observability.md#diagnostic-retention-and-recovery) bounds history with `debug cleanup`
 - the bundled fixture demo still exists in `examples/config.demo.toml`
 - `filesystem`, `drop`, and `exec` publishing are implemented; a non-dry-run `run` pings a Healthchecks.io check when `SERIAL_SYNC_HEALTHCHECK_URL` is set
 - series output can preserve source attachments or emit EPUBCheck-validated EPUB with portable metadata and artwork, including EPUB 2 attachments; standalone chapters end with their original content, and assembled books/volumes can carry one author page

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/google/uuid"
@@ -38,6 +36,8 @@ type planRetirement struct {
 }
 
 type deliveryPlan struct {
+	Persisted  bool   `json:"-"`
+	PayloadRef string `json:"-"`
 	// Maintenance marks a rebuild-scoped delivery so lifecycle hooks can
 	// distinguish it from steady-state publication.
 	Maintenance bool                      `json:"maintenance,omitempty"`
@@ -222,6 +222,8 @@ func (s *Service) deliveryPlan(ctx context.Context, scope deliveryScope, pt publ
 		} else if err != nil {
 			return rebuilt, err
 		} else {
+			rebuilt.PayloadRef = pending.PayloadRef
+			rebuilt.Persisted = true
 			rebuilt.ID = pending.ID
 			rebuilt.EventScope = pending.EventScope
 			rebuilt.Maintenance = pending.Maintenance
@@ -232,30 +234,22 @@ func (s *Service) deliveryPlan(ctx context.Context, scope deliveryScope, pt publ
 	if err != nil {
 		return plan, err
 	}
-	data, err := json.MarshalIndent(plan, "", "  ")
+	needsRecovery := len(plan.Retirements) > 0 || len(target.LifecycleCommand) > 0
+	for _, item := range plan.Items {
+		if item.Action != "held" && item.Action != "unchanged" {
+			needsRecovery = true
+		}
+	}
+	if !needsRecovery {
+		return plan, nil
+	}
+	plan.Persisted = true
+	path, err := s.deliveryFiles().write(plan)
 	if err != nil {
 		return plan, err
 	}
-	dir := filepath.Join(s.Config.Runtime.ArtifactRoot, "deliveries")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return plan, err
-	}
-	path := filepath.Join(dir, plan.ID+".json")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return plan, err
-	}
-	_, err = file.Write(data)
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return plan, err
-	}
+	plan.PayloadRef = path
+
 	return plan, s.Repo.SavePendingPublish(ctx, domain.PendingPublish{ID: plan.ID, TargetID: target.ID, PayloadRef: path})
 }
 
@@ -304,11 +298,7 @@ func (s *catalogReader) pendingDelivery(ctx context.Context, cfg *config.Config,
 		return nil, err
 	}
 	if pending != nil {
-		var plan deliveryPlan
-		data, err := os.ReadFile(pending.PayloadRef)
-		if err == nil {
-			err = json.Unmarshal(data, &plan)
-		}
+		plan, err := readDeliveryPlan(*pending)
 		if err != nil {
 			return nil, fmt.Errorf("target %s pending delivery %s: %w", target.ID, pending.PayloadRef, err)
 		}

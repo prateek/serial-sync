@@ -2,8 +2,10 @@ package observe
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,15 +34,19 @@ type LogEvent struct {
 
 // RunRecord contains a run's selected events, without reading their payloads.
 type RunRecord struct {
-	RunID       string
-	Command     string
-	SourceScope string
-	DryRun      bool
-	Events      []LogEvent
+	History         string
+	MissingPayloads []string
+	RunID           string
+	Command         string
+	SourceScope     string
+	DryRun          bool
+	Events          []LogEvent
 }
 
 // Forensics contains counts and payload-derived details for a run record.
 type Forensics struct {
+	History            string
+	MissingPayloads    []string
 	KindCounts         map[Kind]int
 	ComponentCounts    map[string]int
 	EntityCounts       map[string]int
@@ -76,6 +82,22 @@ func ReadRun(logRoot, runID string, fallback []domain.EventRecord) (RunRecord, e
 		}
 	}
 	record.Events = events
+	record.History = "retained"
+	if _, err := os.Stat(filepath.Join(logRoot, runID+".jsonl")); os.IsNotExist(err) {
+		record.History = "unavailable"
+		if _, err := os.Stat(filepath.Join(logRoot, runID+".jsonl.gz")); err == nil {
+			record.History = "archived"
+		} else if len(events) > 0 {
+			record.History = "legacy"
+		}
+	}
+	for _, event := range events {
+		if event.PayloadRef != "" {
+			if _, err := os.Stat(event.PayloadRef); err != nil {
+				record.MissingPayloads = append(record.MissingPayloads, event.PayloadRef)
+			}
+		}
+	}
 	return record, nil
 }
 
@@ -83,6 +105,7 @@ func ReadRun(logRoot, runID string, fallback []domain.EventRecord) (RunRecord, e
 // references where available. It does not reopen or reparse the run log.
 func (r RunRecord) Forensics() Forensics {
 	forensics := Forensics{
+		History: r.History, MissingPayloads: r.MissingPayloads,
 		KindCounts: map[Kind]int{}, ComponentCounts: map[string]int{},
 		EntityCounts: map[string]int{}, PhaseTimingsMS: map[string]int64{},
 	}
@@ -133,6 +156,11 @@ func (r RunRecord) Forensics() Forensics {
 
 func readLogEvents(path, runID string) ([]LogEvent, error) {
 	file, err := os.Open(path)
+	archived := false
+	if os.IsNotExist(err) {
+		file, err = os.Open(path + ".gz")
+		archived = true
+	}
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -140,8 +168,17 @@ func readLogEvents(path, runID string) ([]LogEvent, error) {
 		return nil, err
 	}
 	defer file.Close()
+	var input io.Reader = file
+	if archived {
+		reader, err := gzip.NewReader(file)
+		if err != nil {
+			return nil, fmt.Errorf("parse archived run log %s: %w", path+".gz", err)
+		}
+		defer reader.Close()
+		input = reader
+	}
 	var events []LogEvent
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for index := 0; scanner.Scan(); index++ {
 		line := strings.TrimSpace(scanner.Text())

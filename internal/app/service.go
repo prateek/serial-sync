@@ -83,15 +83,19 @@ type RunEventFilter struct {
 }
 
 type RunEventList struct {
-	RunID   string               `json:"run_id"`
-	Filter  RunEventFilter       `json:"filter"`
-	Count   int                  `json:"count"`
-	Events  []domain.EventRecord `json:"events"`
-	LogText string               `json:"log_text,omitempty"`
-	LogJSON string               `json:"log_json,omitempty"`
+	History         string               `json:"history"`
+	MissingPayloads []string             `json:"missing_payloads,omitempty"`
+	RunID           string               `json:"run_id"`
+	Filter          RunEventFilter       `json:"filter"`
+	Count           int                  `json:"count"`
+	Events          []domain.EventRecord `json:"events"`
+	LogText         string               `json:"log_text,omitempty"`
+	LogJSON         string               `json:"log_json,omitempty"`
 }
 
 type RunForensics struct {
+	History             string               `json:"history"`
+	MissingPayloads     []string             `json:"missing_payloads,omitempty"`
 	Run                 domain.RunRecord     `json:"run"`
 	LogText             string               `json:"log_text,omitempty"`
 	LogJSON             string               `json:"log_json,omitempty"`
@@ -644,6 +648,7 @@ func (s *Service) ListRunEvents(ctx context.Context, runID string, filter RunEve
 		events = events[:filter.Limit]
 	}
 	return &RunEventList{
+		History: bundle.History, MissingPayloads: bundle.MissingPayloads,
 		RunID:   runID,
 		Filter:  filter,
 		Count:   len(events),
@@ -664,6 +669,7 @@ func (s *Service) ExplainRun(ctx context.Context, runID string) (*RunForensics, 
 func (s *Service) formatRunForensics(bundle *domain.RunBundle, record observe.Forensics) *RunForensics {
 	runID := bundle.Run.ID
 	result := &RunForensics{
+		History: record.History, MissingPayloads: record.MissingPayloads,
 		Run:                 bundle.Run,
 		LogText:             filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
 		LogJSON:             filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
@@ -743,6 +749,7 @@ func (s *Service) SupportBundle(ctx context.Context, runID string) (string, erro
 	for _, logPath := range []string{
 		filepath.Join(s.Config.Runtime.LogRoot, runID+".log"),
 		filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl"),
+		filepath.Join(s.Config.Runtime.LogRoot, runID+".jsonl.gz"),
 	} {
 		if relPath, err := copySupportFile(logPath, filepath.Join(dir, "logs")); err != nil {
 			return "", err
@@ -1240,6 +1247,7 @@ func FormatRunForensics(result RunForensics) string {
 		fmt.Sprintf("status=%s command=%s dry_run=%t", result.Run.Status, result.Run.Command, result.Run.DryRun),
 		fmt.Sprintf("started_at=%s", result.Run.StartedAt.Format(time.RFC3339)),
 		fmt.Sprintf("summary=%s", result.Run.Summary),
+		fmt.Sprintf("history=%s missing_payloads=%d", result.History, len(result.MissingPayloads)),
 		fmt.Sprintf("logs: %s | %s", result.LogText, result.LogJSON),
 		fmt.Sprintf(
 			"classify matched=%d unmatched=%d | sync changed=%d unchanged=%d | publish planned=%d skipped=%d succeeded=%d failed=%d",

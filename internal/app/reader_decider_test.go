@@ -312,3 +312,7 @@ func TestPublishReusesSyncDecisionsAndSkipsUnbundledSources(t *testing.T) {
 		t.Fatalf("one candidate read per synced source and none at publish time, saw %d", wrapped.candidateListCalls)
 	}
 }
+
+func (r *failRepo) WithDiagnosticSnapshot(ctx context.Context, apply bool, fn func([]domain.RunRecord, []domain.PendingPublish) error) error {
+	return r.inner.WithDiagnosticSnapshot(ctx, apply, fn)
+}

@@ -278,3 +278,15 @@ metadata-only rebuild can retain a new capture while skipping identical delivery
 Missing or corrupt capture sidecars block normal sync; inspect retained release
 inputs before proposing an explicit rebuild. See the [capture compatibility
 notes](../../docs/config.md#portable-publication-metadata).
+
+## Diagnostic history
+
+Repeated informational unchanged/held/skipped events retain JSONL identity but
+omit redundant payload sidecars. `debug run` reports retained, archived, expired
+or unavailable history and missing payloads. Diagnostic retention is opt-in via
+`runtime.diagnostic_retention_days`; `debug cleanup` previews expiry and
+`debug cleanup --apply` deletes eligible diagnostics between runs. It preserves
+pending plans, captures, catalog summaries and reading copies. Expired event
+payloads are not rebuild inputs. See `docs/observability.md` for writer shutdown, optional host locking, abandoned-run reconciliation,
+backup/restore and inode monitoring; do not run retention on live deployment
+state as part of authoring or preview.

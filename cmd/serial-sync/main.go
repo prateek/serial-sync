@@ -44,6 +44,7 @@ type SetupCmd struct {
 }
 
 type DebugCmd struct {
+	Cleanup   DebugCleanupCmd   `cmd:"" help:"Preview diagnostic expiry; stop writers before applying."`
 	Runs      DebugRunsCmd      `cmd:"" help:"List recent runs."`
 	Run       DebugRunCmd       `cmd:"" help:"Summarize one run for operator forensics. Replaces 'runs explain'."`
 	Events    DebugEventsCmd    `cmd:"" help:"List filtered events for a run. Replaces 'runs events'."`
@@ -83,6 +84,23 @@ type SetupPreviewCmd struct {
 	Creators   []string `name:"creator" help:"Limit preview to specific dumped creators. Repeat the flag for multiple authors."`
 	ShowPosts  bool     `name:"show-posts" help:"Include per-post classification output in text mode."`
 	Format     string   `name:"format" default:"text" enum:"text,json" help:"Output format."`
+}
+
+type DebugCleanupCmd struct {
+	Apply bool `name:"apply" help:"Expire selected diagnostics permanently using configured retention."`
+}
+
+func (cmd *DebugCleanupCmd) Run(cli *CLI) error {
+	service, close, err := bootstrapMode(cli.ConfigPath, !cmd.Apply)
+	if err != nil {
+		return err
+	}
+	defer close()
+	result, err := service.CleanupDiagnostics(context.Background(), cmd.Apply)
+	if err != nil {
+		return err
+	}
+	return printJSON(result)
 }
 
 type DebugRunsCmd struct {
@@ -723,6 +741,9 @@ Commands:
 
   debug bundle <run-id>
     Export a support bundle for a run. Replaces 'support bundle'.
+
+  debug cleanup [--apply]
+    Preview configured diagnostic expiry; apply with writers stopped.
 
 Run "serial-sync <command> --help" for more information on a command.
 `)

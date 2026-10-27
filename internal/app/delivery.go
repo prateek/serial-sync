@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -243,8 +244,16 @@ func (s *Service) executeDelivery(ctx context.Context, recorder *observe.Recorde
 		if outcome.Failed > startFailed {
 			break
 		}
-		if err := s.Repo.CompletePendingPublish(ctx, plan.ID); err != nil {
-			return outcome, err
+		if plan.Persisted {
+			if err := s.Repo.CompletePendingPublish(ctx, plan.ID); err != nil {
+				return outcome, err
+			}
+
+			if err := s.deliveryFiles().compact(plan, recorder.RunID()); err != nil {
+				if logErr := recorder.EventDataK(ctx, "warn", observe.KindDeliveryCompactionFailed, "completed delivery compaction incomplete; saved plan or receipt available for cleanup", "delivery", plan.ID, map[string]any{"error": err.Error(), "target_id": target.ID}); logErr != nil {
+					fmt.Fprintf(os.Stderr, "completed delivery %s compaction failed: %v; recording warning failed: %v\n", plan.ID, err, logErr)
+				}
+			}
 		}
 		if sameDelivery(plan.Candidates, selected) {
 			break

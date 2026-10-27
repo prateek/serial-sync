@@ -36,13 +36,14 @@ type Config struct {
 }
 
 type RuntimeConfig struct {
-	LogLevel     string `toml:"log_level"`
-	LogFormat    string `toml:"log_format"`
-	LogRoot      string `toml:"log_root"`
-	StoreDriver  string `toml:"store_driver"`
-	StoreDSN     string `toml:"store_dsn"`
-	ArtifactRoot string `toml:"artifact_root"`
-	SupportRoot  string `toml:"support_root"`
+	DiagnosticRetentionDays int    `toml:"diagnostic_retention_days"`
+	LogLevel                string `toml:"log_level"`
+	LogFormat               string `toml:"log_format"`
+	LogRoot                 string `toml:"log_root"`
+	StoreDriver             string `toml:"store_driver"`
+	StoreDSN                string `toml:"store_dsn"`
+	ArtifactRoot            string `toml:"artifact_root"`
+	SupportRoot             string `toml:"support_root"`
 }
 
 type SchedulerConfig struct {
@@ -334,6 +335,9 @@ func (c *Config) expandPaths(roots Roots) error {
 }
 
 func (c *Config) Validate() error {
+	if c.Runtime.DiagnosticRetentionDays < 0 || c.Runtime.DiagnosticRetentionDays > 36500 {
+		return errors.New("diagnostic_retention_days must be between 0 (disabled) and 36500")
+	}
 	if err := c.validatePublicationMetadata(); err != nil {
 		return err
 	}

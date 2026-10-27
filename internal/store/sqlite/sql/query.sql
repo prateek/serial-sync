@@ -338,3 +338,6 @@ INSERT OR IGNORE INTO label_observations (provider, campaign, resource_type, res
 
 -- name: ListLabelObservations :many
 SELECT * FROM label_observations ORDER BY provider, campaign, resource_type, resource_id, name;
+
+-- name: ListPendingPublishes :many
+SELECT id, target_id, payload_ref FROM pending_publishes;

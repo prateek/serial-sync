@@ -510,3 +510,9 @@ Keep identity/routing rules separate from author profiles and artwork. Configure
 Compare embedded titles and creators with the source posts when curating attachments. For a series whose embedded identity is unreliable, select `metadata.identity_source = "release"` to use the chapter title derived from each post and the canonical author. Books can override the inherited policy with `"embedded"`. Review the affected copies through explicit rebuild preview; a valid EPUB package can still contain the wrong chapter title.
 
 Use captured creator identity or a reviewed public-web identity link. Do not promote a campaign banner, portrait, or loosely matched search image to a book cover. Keep selected asset bytes in the offline workspace and record their source URL. Preview and rebuild use the same metadata resolver as sync. Metadata is excluded from upstream content hashes; editing it changes new publications immediately and existing publications only through explicit rebuild.
+
+Diagnostic expiry does not change classification, held decisions, capture
+selection or rebuild inputs. Repeated informational unchanged/held/skipped
+events keep JSONL identity without redundant sidecars. Use `debug run` to inspect
+history availability; `debug cleanup` previews opt-in diagnostic expiry and
+preserves pending delivery plans. See [retention and recovery](observability.md#diagnostic-retention-and-recovery).

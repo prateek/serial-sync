@@ -32,6 +32,7 @@ type CatalogReader interface {
 }
 
 type Repository interface {
+	WithDiagnosticSnapshot(context.Context, bool, func([]domain.RunRecord, []domain.PendingPublish) error) error
 	CatalogReader
 	SaveReleaseEnrichment(context.Context, string, string, domain.ReleaseEnrichment) error
 	SaveDiscoveryCandidates(ctx context.Context, candidates []domain.DiscoveryCandidate) error

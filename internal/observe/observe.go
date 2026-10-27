@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,15 +59,19 @@ func Start(ctx context.Context, repo store.Repository, command string, sourceSco
 		logRoot:    strings.TrimSpace(opts.LogRoot),
 		payloadDir: filepath.Join(strings.TrimSpace(opts.LogRoot), "event-payloads", run.ID),
 	}
-	if err := recorder.openLogs(); err != nil {
+	if err := repo.StartRun(ctx, run); err != nil {
 		return nil, err
 	}
-	if err := repo.StartRun(ctx, run); err != nil {
-		recorder.closeLogs()
-		return nil, err
+	abort := func(cause error) (*Recorder, error) {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return nil, errors.Join(cause, recorder.closeLogs(), repo.FinishRun(cleanupCtx, run.ID, domain.RunStatusFailed, "run startup failed: "+cause.Error()))
+	}
+	if err := recorder.openLogs(); err != nil {
+		return abort(err)
 	}
 	if err := recorder.EventK(ctx, "info", KindRunStarted, "run started", "", ""); err != nil {
-		return nil, err
+		return abort(err)
 	}
 	return recorder, nil
 }
@@ -102,6 +107,12 @@ func (r *Recorder) event(ctx context.Context, level string, kind Kind, message, 
 }
 
 func (r *Recorder) eventData(ctx context.Context, level, kind, component, message, entityKind, entityID string, payload any) error {
+	if level == "info" {
+		switch Kind(kind) {
+		case KindReleaseUnchanged, KindPublishHeld, KindPublishSkipped:
+			payload = nil
+		}
+	}
 	payloadRef, err := r.writePayload(payload)
 	if err != nil {
 		return err

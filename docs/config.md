@@ -50,6 +50,15 @@ Release roles are `chapter`, `extra`, `release_attachment`, `announcement`,
 chapter slot and therefore remains a single. Each legacy input or rule must set
 `release_role` and `content_strategy`; see [content strategies](rules.md#content-strategies).
 
+## Diagnostic retention
+
+`runtime.diagnostic_retention_days` defaults to `0` (expiry disabled); a positive
+integer up to 36500 selects the diagnostic window. It takes effect only when
+`debug cleanup --apply` runs; preview with `debug cleanup` first. Pending plans,
+captured content, reading copies and catalog summaries are retained. Schedule
+cleanup with writers stopped or under an operator-provided shared host lock
+(serial-sync does not acquire one); see [retention and recovery](observability.md#diagnostic-retention-and-recovery).
+
 ## Patreon attachment freshness
 
 Live `run` and `setup dump` reuse an attachment only when its capture manifest
@@ -555,3 +564,5 @@ The catalog migration removes the earlier content-based artifact uniqueness
 constraint. Older binaries cannot write this migrated catalog. Retain a consistent
 backup of the catalog and archive before upgrading; rolling back requires
 restoring that backup together with the earlier binary.
+
+Remove `diagnostic_retention_days` before rolling back to an older image whose strict loader does not recognize it.
