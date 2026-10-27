@@ -1,0 +1,37 @@
+# Docker-only, synthetic, credential-free first run. See docs/docker-quickstart.md.
+# Mount testdata/fixtures/patreon/onboarding at /fixtures:ro and a disposable
+# directory at /state. Published reading copies appear in /state/published.
+[[auth_profiles]]
+id = "fixture"
+provider = "patreon"
+mode = "fixture"
+
+[[publishers]]
+id = "local-files"
+kind = "filesystem"
+path = "/state/published"
+enabled = true
+
+[[sources]]
+id = "example-author"
+provider = "patreon"
+# The provider requires a Patreon-shaped source URL even in fixture mode.
+# This fictional source is never contacted (use --network none).
+url = "https://www.patreon.com/c/SerialSyncFixtureOnly/posts"
+auth_profile = "fixture"
+fixture_dir = "/fixtures"
+enabled = true
+
+[[series]]
+id = "harbor"
+title = "Harbor"
+source = "example-author"
+authors = ["Example Author"]
+
+[series.output]
+format = "epub"
+
+[[series.inputs]]
+title_patterns = ["^Harbor - Chapter "]
+# This synthetic short chapter deliberately overrides the normal 1500-char guard.
+min_body_chars = 0

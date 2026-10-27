@@ -76,6 +76,32 @@ The daemon exposes:
 - copied event payload files
 - copied text and JSONL logs for that run
 
+## Safe sharing
+
+A bundle is **private evidence until you inspect it**. Config redaction does not
+sanitize all copied logs, raw/normalized payloads or event payloads. A bundle can
+contain paid creator text, signed attachment URLs, account identifiers and other
+private URLs. Share the smallest synthetic reproduction that explains the issue.
+
+1. Reproduce with the [synthetic Docker fixture](docker-quickstart.md), keeping its
+   disposable state separate from your live catalog. For a provider regression,
+   replace content with invented prose and URLs with `example.invalid`, retaining
+   only the response shape needed to reproduce normalization.
+2. Record the checkout commit or image digest/revision, host OS, container
+   architecture, command, expected outcome and observed error. Include only
+   relevant config sections with secret values removed.
+3. If needed, create `serial-sync debug bundle RUN_ID` locally. Inspect its full
+   contents before selecting any excerpt. Never upload a whole live bundle by
+   default. Exclude env files, session/cookie bundles, browser profiles, passwords,
+   TOTP seeds, signed/private URLs, creator content and personal identifiers.
+4. Confirm the synthetic steps work without your account. Public issues and
+   attachments are public; use only the sanitized repro there. See the
+   [security reporting policy](../SECURITY.md) before reporting a vulnerability.
+
+The container form is the same `debug bundle RUN_ID` command with your private
+config and `/state` mounts. Bundles are written under `runtime.support_root`
+(`/state/support` by default). Do not make that folder a public download target.
+
 ## Diagnostic retention and recovery
 
 Retention is opt-in. The default `runtime.diagnostic_retention_days = 0` disables
@@ -184,8 +210,17 @@ Verify SQLite `PRAGMA integrity_check`, inspect `debug runs` and a pending plan'
 payload path, then use `setup preview --stored` offline to check captured content
 before resuming. Never test a restore by overwriting the active deployment.
 Resume with the same target configuration so pending deliveries use their saved
-ID/event scope and reconcile against the current destination. Diagnostic expiry
-cannot recover files from an expired window; it does not affect rebuild inputs.
+ID/event scope and reconcile against the current destination. If a restore mixes
+an older catalog with a newer artifact root, a pending row can instead point to
+an already compacted completed-plan file. Delivery may reject it as a pending
+delivery with "different settings". If cleanup already expired the completed
+file, it can instead report `target ... pending delivery <path>: ... no such file
+or directory`. Stop writers and restore one consistent
+whole-state backup (catalog, full artifact root and matching config/paths);
+do not edit/delete the pending row or plan file to bypass the refusal. See
+[restore troubleshooting](troubleshooting.md#pending-delivery-rejected-after-a-restore).
+
+Diagnostic expiry cannot recover files from an expired window; it does not affect rebuild inputs.
 
 ### Reconciling an abandoned run
 
@@ -200,11 +235,11 @@ state mount and the daemon/timers still stopped, replace the placeholder with
 that exact ID and run this explicit catalog repair. Substitute the actual database
 file path for `/state/state.db` if `runtime.store_dsn` uses another location. For
 a `file:` URI DSN, pass its underlying filesystem path, not the URI or its query
-parameters. The procedure only opens an existing on-disk catalog. Run it with the full
-serial-sync image, which includes Python 3 and SQLite bindings; a browser-free
-steady image may omit Python. Select the full image for this one-off Compose
-service before using the command below. It changes only that row if it is still unfinished
-and `running`, preserves its existing summary, records the operator action, and
+parameters. The procedure only opens an existing on-disk catalog. This Python
+repair requires the full serial-sync image, including Python 3 and SQLite bindings;
+do not use the browser-free steady image for it. Select the full image for this
+one-off Compose service before using the command below. It changes only that row
+if it is still unfinished and `running`, preserves its existing summary, records the operator action, and
 sets a fresh finish time so diagnostics receive a full retention window:
 
 ```sh

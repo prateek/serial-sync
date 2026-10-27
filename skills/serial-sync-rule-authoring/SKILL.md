@@ -9,14 +9,15 @@ Use this workflow when the user wants to figure out which `[[series]]` and `[[se
 
 The canonical loop is:
 
-1. Ensure auth works.
+1. Start from the minimal auth/publisher `setup init` config and ensure auth works.
    If Patreon serves a Cloudflare or similar interactive challenge, complete `setup auth` in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle before trying to dump.
-2. Dump the creators to a local workspace once.
+2. Dump one selected creator with `--creator HANDLE` to a local workspace first.
 3. Inspect the dumped posts locally.
 4. Edit `series.toml` in that workspace.
 5. Run the offline preview.
 6. Iterate until fallback/unmatched looks acceptable.
-7. Merge the resulting `[[sources]]` and `[[series]]` into the real config.
+7. Merge the resulting `[[sources]]` and `[[series]]` into the real config, run
+   read-only `setup check`, then one containerized `run`.
 
 When using the optional browser-free `steady` container, reuse a saved session.
 For missing or expired sessions, follow [the runtime reauthentication handoff](../../docs/browser-runtime.md)
@@ -24,6 +25,9 @@ with the full image and the same config/state mounts, or import an exported
 serial-sync session bundle. Resume dump/preview after authentication.
 
 ## Commands
+
+Use Docker for account flows, with the mounts in the first-source guide. The
+commands below show CLI arguments; native execution is for fixture development.
 
 Bootstrap auth if needed:
 
@@ -36,14 +40,27 @@ Dump creators into a local workspace:
 ```sh
 serial-sync --config ./config.toml setup dump \
   --auth-profile patreon-default \
+  --creator YOUR_CREATOR_HANDLE \
   --path ./serial-sync-rule-workspace
 ```
 
-This defaults to all paid creators. Use `--creator <value>` only when you want to refresh or inspect a narrower subset.
+Omitting `--creator` selects all paid creators; start with one for first success.
+Use the exact Docker mounts in [the first-source guide](../../docs/first-source.md):
+mount a private parent and let dump create its missing workspace child. Do not
+pre-create the dump target. Use a full handle/name unique across memberships;
+creator filters match substrings, so verify `creators=1` before proceeding.
+Sources define fetch access; series and inputs classify releases, and series own
+output. Prefer grouped selectors and inherited defaults for new mappings; keep
+legacy rules unchanged. Grouped inputs default to a 1,500-character visible-body
+guard. Ordinary `run --dry-run` is a live sync with possible cache/diagnostic
+writes; it is not the offline authoring step.
 
 Reuse an existing dump for offline authoring. Refresh only when new upstream
 content is needed; repeat the dump command without `--force`. A refresh preserves
-authored files and keeps the old capture until the new one is complete.
+authored files and keeps the old capture until the new one is complete. New
+scaffolds are commented grouped inputs and inherit output/content defaults; they
+do not install speculative routing. Existing authored `series.toml` and README
+files remain unchanged on refresh. Preview with explicit `--series-file`.
 `setup check` and workspace preview are read-only and reject unknown keys,
 invalid enums, regexes, globs, and source/book references.
 
@@ -291,7 +308,16 @@ omit redundant payload sidecars. `debug run` reports retained, archived, expired
 or unavailable history and missing payloads. Diagnostic retention is opt-in via
 `runtime.diagnostic_retention_days`; `debug cleanup` previews expiry and
 `debug cleanup --apply` deletes eligible diagnostics between runs. It preserves
-pending plans, captures, catalog summaries and reading copies. Expired event
-payloads are not rebuild inputs. See `docs/observability.md` for writer shutdown, optional host locking, abandoned-run reconciliation,
+pending plans, captures, catalog summaries and reading copies. It is unscheduled;
+a positive window alone deletes nothing. Completed recovery-plan JSON files may
+compact into typed receipts and expire after explicit cleanup; durable catalog
+publish records are distinct. Expired event payloads are not rebuild inputs. See `docs/observability.md` for writer shutdown, optional host locking, abandoned-run reconciliation,
 backup/restore and inode monitoring; do not run retention on live deployment
 state as part of authoring or preview.
+
+Use the full image for browser reauthentication and Python-assisted recovery or
+onboarding tests. A steady runtime reuses a saved session and preserves the same
+state/config/output mounts; it cannot perform browser login. Whole-state backups
+must keep the migrated catalog, blobs and capture metadata/inputs consistent.
+Never pair an older catalog with a newer artifact root or edit pending recovery
+files to bypass a restore refusal.

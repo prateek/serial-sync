@@ -4,49 +4,32 @@
 
 ## Quickstart
 
-```sh
-docker build -t serial-sync .
-printf 'PATREON_USERNAME=%s\nPATREON_PASSWORD=%s\n' "you@example.com" "your-password" > patreon.env
-docker run --rm \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync run
-```
+Start with the [credential-free Docker walkthrough](docs/docker-quickstart.md).
+It builds the image, mounts a synthetic fixture and a disposable host directory,
+and produces one EPUB you can open without an account. It includes repeat-run,
+read-only preview and cleanup commands.
 
-If Patreon serves a Cloudflare or other interactive challenge during bootstrap, run
-`setup auth` once in a visible browser session, the bundled noVNC auth container,
-or import a session bundle, then return to the containerized `setup dump` / `run`
-flow.
+Then follow the [first-source walkthrough](docs/first-source.md):
 
-If you want to author series definitions against a local dump instead of repeatedly hitting Patreon:
+1. Initialize a minimal auth/publisher config with `setup init`.
+2. Authenticate and select one creator.
+3. Capture that creator with `setup dump --creator HANDLE`.
+4. Edit grouped series inputs and use offline `setup preview`.
+5. Merge the dump's sources and your series into the runtime config; `setup check`.
+6. Run one containerized sync and inspect the reading copy.
 
-```sh
-docker run --rm \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  -v "$PWD:/work" \
-  serial-sync setup dump --auth-profile patreon-default --path /work/serial-sync-rule-workspace
-
-docker run --rm \
-  -v "$PWD:/work" \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync setup preview --workspace /work/serial-sync-rule-workspace --series-file /work/serial-sync-rule-workspace/series.toml --show-posts
-```
-
-That dump workspace keeps both the fast authoring view (`posts.ndjson`) and the
-full capture (`captures/<generation>/creators/<source-id>/posts/*.json` plus `attachments/`) so later
-offline replay/materialization work can reuse the same dump without re-fetching Patreon.
+Sources define upstream access; series and inputs map releases to stories, with
+output at the series layer. A dump or preview does not install those mappings.
+`setup check` and `setup preview` are offline and read-only. Ordinary
+`run --dry-run` can fetch data and write run diagnostics; it skips publication.
+Keep credentials and captures private, and use the documented loopback-only
+noVNC/SSH tunnel path when bootstrap needs an interactive challenge.
 
 Patreon attachment reuse verifies captured bytes and follows the post revision and
 media identity. See [attachment freshness](docs/config.md#patreon-attachment-freshness)
-for correction handling and signed URL reuse.
-
-Repeat `setup dump` to refresh a recognized workspace. A failed refresh retains
-the previous capture and your authored files. `setup check` and `setup preview`
-are offline and read-only; they work without writable state or a database.
-Both reject unknown config keys and invalid rule values before provider work.
+for correction handling and signed URL reuse. Dump refresh installs a complete
+capture generation atomically and preserves authored files and the prior capture
+on failure. Strict checks and previews need no writable state or provider session.
 
 The optional [steady container runtime](docs/browser-runtime.md) reuses saved
 sessions without installing a browser. The default full image retains automatic
@@ -70,7 +53,8 @@ bootstrap and noVNC reauthentication.
 - `setup dump` now captures normalized posts, raw Patreon post JSON, and downloaded attachments into the same workspace
 - creator-feed and collection Patreon sources are implemented
 - `setup auth`, `run`, `debug`, and `run daemon` are implemented
-- the Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb, poppler's `pdftohtml`, EPUBCheck, and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
+- the default/full Docker image includes Google Chrome on `amd64` or Chromium on `arm64`, plus Xvfb, poppler's `pdftohtml`, EPUBCheck, and an optional noVNC auth wrapper for first-run Patreon bootstrap inside the container
+- the optional steady image reuses saved sessions without a browser; full is required for browser reauthentication and Python-assisted recovery/testing, with the same state/config mounts
 - the daemon exposes `/healthz`, `/status`, and `/metrics`
 - runs write human-readable and JSONL logs under `runtime.log_root`; [opt-in diagnostic retention and recovery](docs/observability.md#diagnostic-retention-and-recovery) bounds history with `debug cleanup`
 - the bundled fixture demo still exists in `examples/config.demo.toml`
@@ -82,10 +66,15 @@ bootstrap and noVNC reauthentication.
 - the [BookOrbit guide](integrations/bookorbit/README.md) drops each new chapter once into a watched library folder; BookOrbit imports, renames, notifies, and handles unfollowed series. The optional [Serial Reader experiment](integrations/bookorbit/reader/README.md) adds Previous/Next series navigation
 - optional volumes follow declared author books, falling back to configurable 50-chapter ranges; gaps keep chapters as singles
 - `run --rebuild` applies output changes offline from captured inputs; completed volumes remain unchanged during ordinary sync
-- static binary release packaging is configured through `.goreleaser.yml`
+- immutable reading-copy captures bind metadata, provenance and retained inputs; identical reading bytes can share a blob. The catalog migration is not writable by older binaries; keep a consistent whole-state backup for rollback
+- diagnostic expiry is disabled by default and unscheduled; explicit cleanup may expire finished diagnostics and completed recovery-plan receipts while protecting pending plans, catalog records and captured content
+- the container is the primary package; see [support, platforms and upgrades](docs/support.md) for version pinning and validation limits. The v0.1.0 release assets package the optional runner, while the same tag also produced a dual-architecture core image; neither naming nor packaging establishes a stable core compatibility promise
 
 ## More
 
+- [Contributing and first tasks](CONTRIBUTING.md)
+- [Provider contribution guide](docs/provider-contributing.md)
+- [Supported platforms and upgrades](docs/support.md)
 - [Developer guide](DEVELOPER.md)
 - [First source walkthrough](docs/first-source.md)
 - [Series authoring guide](docs/rules.md)
@@ -111,9 +100,10 @@ The default user path is:
 1. `setup init`
 2. `setup auth`
 3. `setup dump`
-4. `setup preview`
-5. `run`
-6. `debug run <run-id>` if something looks wrong
+4. Edit series and `setup preview` offline
+5. Merge sources/series into config and `setup check`
+6. `run`
+7. `debug run <run-id>` if something looks wrong
 
 ## Rebuild an existing library
 
@@ -178,4 +168,12 @@ posts or changing published files. Preview can enrich in memory without this ste
 
 ## License
 
-Apache-2.0.
+Core Go code, the optional runner, project-authored docs and synthetic fixtures
+use [Apache-2.0](LICENSE), unless a file carries another notice. The root license
+contains the complete [canonical Apache text](https://www.apache.org/licenses/LICENSE-2.0.txt).
+The optional [Serial Reader experiment](integrations/bookorbit/reader/README.md)
+has its own [AGPLv3 license](integrations/bookorbit/reader/LICENSE),
+[additional terms](integrations/bookorbit/reader/ADDITIONAL_TERMS.md) and
+[notices](integrations/bookorbit/reader/NOTICE); those terms are unchanged.
+Bundled dependencies and upstream reader material retain their own licenses.
+Fetching creator content grants no redistribution rights to that content.

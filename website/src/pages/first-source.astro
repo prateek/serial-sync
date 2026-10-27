@@ -1,0 +1,19 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { Content } from '../../../docs/first-source.md';
+---
+
+<BaseLayout
+  title="First Creator | serial-sync"
+  description="Initialize, authenticate, dump one creator, edit, preview, merge, check and run."
+  currentPath="/getting-started/"
+>
+  <div class="page">
+    <section class="section"><div class="guide"><Content /></div></section>
+  </div>
+</BaseLayout>
+
+<style>
+  .guide :global(pre) { overflow-x: auto; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; white-space: pre-wrap; }
+  .guide :global(h2) { margin-top: 2rem; }
+</style>

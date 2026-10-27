@@ -1,170 +1,135 @@
-# Docker Quickstart
+# Docker quickstart
 
-The Docker image is the default deployment target.
+Start from the repository root with Docker running. The image is the intended
+runtime: it includes the browser for bootstrap, Xvfb, poppler and EPUBCheck.
+The CLI uses `/config/config.toml` and keeps mutable state in `/state`. These
+first-run/auth and Python-assisted test/recovery instructions use the default
+**full image**. The optional browser-free steady image needs an existing usable
+session; reauthenticate with full and keep the same config/state mounts. See the
+[full/steady roles](https://github.com/prateek/serial-sync/blob/main/docs/support.md#full-and-steady-image-roles).
 
-`serial-sync` keeps its config under `/config/config.toml` and all mutable state under `/state`.
+## First reading copy, without an account
 
-## Build
+This uses one synthetic chapter with no credentials, provider traffic or paid
+content. It writes only to the disposable `onboarding-demo` directory on the host.
 
 ```sh
 docker build -t serial-sync .
-```
+mkdir -p onboarding-demo
 
-## Create Config And Credentials
-
-Write a config file on the host, then mount it read-only into `/config/config.toml`.
-
-Put Patreon credentials in an env file:
-
-```sh
-printf 'PATREON_USERNAME=%s\nPATREON_PASSWORD=%s\n' \
-  "you@example.com" \
-  "your-password" > patreon.env
-```
-
-## Bootstrap Auth Explicitly
-
-This is optional because `run` will bootstrap automatically if the session is missing, but it is the clearest first-run command:
-
-```sh
-docker run --rm \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync setup auth
-```
-
-The image includes Chromium, Xvfb, poppler's `pdftohtml`, and EPUBCheck. On Linux containers with no display, `serial-sync` starts a hidden Xvfb-backed headed browser only when bootstrap or reauth is needed.
-
-The browser still runs as the unprivileged `serialsync` user inside the container. By default the bundled image keeps Chromium on `--no-sandbox` because many container runtimes block the namespace sandbox. If your runtime supports Chromium's sandbox cleanly, override `SERIAL_SYNC_CHROME_NO_SANDBOX=false`.
-
-If Patreon presents a Cloudflare or other interactive challenge, you now have
-three bootstrap paths:
-
-- run `setup auth` from a visible host browser session
-- run `setup auth` through the bundled noVNC wrapper in Docker
-- import a session bundle
-
-After auth succeeds once, return to the normal Docker `setup dump`, `run`, and
-`run daemon` flow.
-
-## Headless Server Bootstrap Via noVNC
-
-For a headless Linux box, expose a temporary noVNC session and complete Patreon
-auth remotely:
-
-```sh
-docker compose -f ./examples/docker-compose.yml --profile auth-ui up --build serial-sync-auth
-```
-
-Then open:
-
-```text
-http://<host>:8080/vnc.html?autoconnect=true&resize=scale
-```
-
-This runs Chrome on Xvfb inside the container, exposes it through noVNC, and
-executes:
-
-```sh
-serial-sync setup auth --auth-profile patreon-default --force
-```
-
-Once auth completes and the session is saved under `/state`, stop the auth
-service and run the normal daemon or one-shot sync container.
-
-## Dump Sources For Series Authoring
-
-After auth succeeds, dump the creators you care about into a local workspace. By default this uses paid memberships.
-
-```sh
-docker run --rm \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  -v "$PWD:/work" \
-  serial-sync setup dump --auth-profile patreon-default --path /work/serial-sync-rule-workspace
-
-docker run --rm \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  -v "$PWD/serial-sync-rule-workspace:/work" \
-  serial-sync setup preview --workspace /work --series-file /work/series.toml --show-posts
-```
-
-If you already have a valid Patreon session bundle, you can import it instead:
-
-```sh
-docker run --rm \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  -v "$PWD/patreon-session.json:/tmp/patreon-session.json:ro" \
-  serial-sync setup auth --import-session /tmp/patreon-session.json
-```
-
-## Run One Sync Cycle
-
-```sh
-docker run --rm \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync run
-```
-
-`run` performs sync and then publish. Use `run --dry-run` to fetch and plan without publishing; it can write caches and run diagnostics. Use `setup preview` for offline, read-only classification.
-
-## Schedule It From Cron
-
-Schedule the container itself. Do not rely on `docker exec` into a long-lived container.
-
-```sh
-docker run --rm \
-  --env-file /opt/serial-sync/patreon.env \
-  -v serial-sync-state:/state \
-  -v /opt/serial-sync/config.toml:/config/config.toml:ro \
-  serial-sync run
-```
-
-## Run The Daemon
-
-```sh
-docker run -d \
-  --name serial-sync \
-  --restart unless-stopped \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync run daemon
-```
-
-The daemon is a single-process scheduler. It runs the same `run` pipeline on the configured interval.
-
-If `health_addr` is set in the config, the daemon also exposes:
-
-- `/healthz`
-- `/status`
-- `/metrics`
-
-A Compose example lives in `examples/docker-compose.yml`.
-
-## Other Useful Commands
-
-```sh
-docker run --rm \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
+docker run --rm --network none \
+  -v "$PWD/examples/config.fixture.toml:/config/config.toml:ro" \
+  -v "$PWD/testdata/fixtures/patreon/onboarding:/fixtures:ro" \
+  -v "$PWD/onboarding-demo:/state" \
   serial-sync setup check
 
-docker run --rm \
-  --env-file ./patreon.env \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync run --source plum-parrot
+docker run --rm --network none \
+  -v "$PWD/examples/config.fixture.toml:/config/config.toml:ro" \
+  -v "$PWD/testdata/fixtures/patreon/onboarding:/fixtures:ro" \
+  -v "$PWD/onboarding-demo:/state" \
+  serial-sync run
 
-docker run --rm \
-  -v serial-sync-state:/state \
-  -v "$PWD/config.toml:/config/config.toml:ro" \
-  serial-sync debug run <run-id>
+find onboarding-demo/published -type f -name '*.epub'
 ```
 
-Run logs land under `/state/logs` by default. Support bundles copy those logs automatically.
+Expect `config ok: 1 source(s), 1 series, 1 publisher(s)` and **one EPUB**
+at `onboarding-demo/published/example-author/harbor/harbor-ch0001.epub`.
+Open it in your EPUB reader: it contains the synthetic Harbor chapter by Example
+Author. State, logs and captures are also visible
+under `onboarding-demo`, separate from the published reading copy.
+
+Repeat the same `run` command: the unchanged release is skipped and the published
+file count stays one. To inspect classification offline, with no writable state:
+
+```sh
+docker run --rm --network none --read-only \
+  -v "$PWD/examples/config.fixture.toml:/config/config.toml:ro" \
+  -v "$PWD/testdata/fixtures/patreon/onboarding:/fixtures:ro" \
+  -v "$PWD/onboarding-demo:/state:ro" \
+  serial-sync setup preview --stored --show-posts
+```
+
+After inspecting the output, remove only this disposable fixture directory:
+
+```sh
+docker run --rm --network none --entrypoint /bin/sh \
+  -v "$PWD/onboarding-demo:/demo" serial-sync -c 'find /demo -mindepth 1 -delete'
+rmdir onboarding-demo
+```
+
+The container cleanup handles root-owned files on Linux. It does not touch your
+live named volume. The original multi-series fixture remains available at
+`examples/config.demo.toml` for local development.
+
+## Your first creator
+
+Follow the [first-source walkthrough](https://github.com/prateek/serial-sync/blob/main/docs/first-source.md): initialize a minimal
+config, authenticate, dump one creator, edit grouped series inputs, preview
+offline, merge sources and series, check, then run once. Keep scheduling, custom
+hooks, volumes and reader integrations until after that reading copy works.
+
+## Compose and private remote authentication
+
+Existing Compose operators: read the
+[Compose upgrade note](https://github.com/prateek/serial-sync/blob/main/docs/support.md#upgrading-from-the-earlier-compose-example)
+before adopting this example. Retain your actual old volume (commonly
+`examples_serial-sync-state`), move the config/env files to the root, and restore
+the daemon command/restart policy if you need its existing schedule. **Do not
+switch an existing library to a new empty volume.** The commands below describe
+a new installation; an existing operator substitutes the recorded state volume.
+
+The example resolves `../config.toml` and `../patreon.env` relative to
+`examples/docker-compose.yml`, so create both at the repository root as the
+first-source guide describes. Its normal service runs one cycle:
+
+```sh
+docker compose -f examples/docker-compose.yml run --rm serial-sync
+```
+
+It uses the Compose-managed `serial-sync-state` volume, which is distinct from a
+volume named exactly `serial-sync-state` used by standalone `docker run`.
+Use one command family for live auth, dump and sync; do not accidentally create
+two catalogs. To use the same standalone volume, replace the example's volume
+section with:
+
+```yaml
+volumes:
+  serial-sync-state:
+    external: true
+    name: serial-sync-state
+```
+
+Create it first with `docker volume create serial-sync-state`. Then the noVNC
+service and the standalone walkthrough share the saved session and catalog.
+For interactive bootstrap on a server:
+
+```sh
+docker compose -f examples/docker-compose.yml --profile auth-ui up --build serial-sync-auth
+```
+
+The auth service binds **127.0.0.1:8080** on the Docker host. Its browser session
+has no VNC password; keep this temporary listener private. For a remote Docker
+host, open a tunnel from your own computer (replace `user@server`):
+
+```sh
+ssh -N -L 127.0.0.1:8080:127.0.0.1:8080 user@server
+```
+
+Open `http://127.0.0.1:8080/vnc.html?autoconnect=true&resize=scale` locally.
+Complete the login, then stop the auth service with Ctrl-C (or
+`docker compose -f examples/docker-compose.yml stop serial-sync-auth`) and close
+the tunnel. Do not expose port 8080 through a public bind or proxy.
+Steady-state dumps and runs reuse the saved HTTP session. See
+[Patreon notes](https://github.com/prateek/serial-sync/blob/main/docs/patreon.md) for challenge limitations.
+
+## Optional scheduling
+
+After a successful one-shot run, choose one scheduler. Cron/systemd can invoke
+the same container command under a host lock; alternatively use `run daemon`.
+For Compose, override the normal command to `["run", "daemon"]` and add
+`restart: unless-stopped` before using `up -d serial-sync`. Avoid concurrent runs
+against one state directory. See [config](https://github.com/prateek/serial-sync/blob/main/docs/config.md) for interval and health
+settings, [hooks](https://github.com/prateek/serial-sync/blob/main/docs/hooks.md) for custom targets, and the optional
+[BookOrbit integration](https://github.com/prateek/serial-sync/blob/main/integrations/bookorbit/README.md) for a file handoff.
+The [support and upgrade contract](https://github.com/prateek/serial-sync/blob/main/docs/support.md) describes packaging, backups and
+platform limits.

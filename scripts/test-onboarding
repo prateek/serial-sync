@@ -1,0 +1,115 @@
+#!/bin/sh
+# Exercise first-source authoring without an account or provider HTTP.
+set -eu
+umask 077
+
+repo_root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+cd "$repo_root"
+image=${SERIAL_SYNC_TEST_IMAGE:-serial-sync}
+image_arch=$(docker image inspect --format '{{.Architecture}}' "$image")
+case "$image_arch" in
+  amd64|arm64) ;;
+  *) printf 'Unsupported test image architecture: %s\n' "$image_arch" >&2; exit 1 ;;
+esac
+task_dir=$(mktemp -d "${TMPDIR:-/tmp}/serial-sync-onboarding.XXXXXX")
+
+cleanup() {
+  if [ "${SERIAL_SYNC_ONBOARDING_KEEP:-0}" = 1 ]; then
+    printf 'Retained synthetic onboarding state: %s\n' "$task_dir"
+    return
+  fi
+  docker run --rm --network none --entrypoint /bin/sh \
+    -v "$task_dir:/cleanup" "$image" -c 'find /cleanup -mindepth 1 -delete'
+  rmdir "$task_dir"
+  printf 'Cleaned synthetic onboarding state: %s\n' "$task_dir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+CGO_ENABLED=0 GOOS=linux GOARCH="$image_arch" go test -c \
+  -o "$task_dir/onboarding.test" ./internal/app
+
+mkdir "$task_dir/config" "$task_dir/serial-sync-private" "$task_dir/state"
+docker run --rm --network none --user "$(id -u):$(id -g)" \
+  -v "$task_dir/config:/config" "$image" setup init --path /config/config.toml
+chmod 600 "$task_dir/config/config.toml"
+
+# This test adapter replaces membership discovery only; parsing and capture are real.
+docker run --rm --network none \
+  -e SERIAL_SYNC_ONBOARDING_PRIVATE_ROOT=/private \
+  -e SERIAL_SYNC_ONBOARDING_FIXTURE_DIR=/fixtures \
+  -v "$task_dir/onboarding.test:/tests/onboarding.test:ro" \
+  -v "$task_dir/serial-sync-private:/private" \
+  -v "$repo_root/testdata/fixtures/patreon/onboarding:/fixtures:ro" \
+  --entrypoint /tests/onboarding.test "$image" \
+  -test.run '^TestOnboardingFixtureDump$' -test.v
+
+docker run --rm --network none --entrypoint chown \
+  -v "$task_dir/serial-sync-private:/private" \
+  "$image" -R "$(id -u):$(id -g)" /private/workspace
+workspace="$task_dir/serial-sync-private/workspace"
+awk 'copy || /^\[\[series\]\]/{copy=1; print}' examples/config.fixture.toml > "$workspace/series.toml"
+
+snapshot() {
+  docker run --rm --network none --read-only --entrypoint python3 \
+    -v "$task_dir/serial-sync-private:/private:ro" \
+    -v "$task_dir/config:/config:ro" -v "$task_dir/state:/state:ro" \
+    "$image" -c 'import hashlib,json,pathlib
+roots=[pathlib.Path(p) for p in ("/private","/config","/state")]
+print(json.dumps({str(p):[hashlib.sha256(p.read_bytes()).hexdigest(),p.stat().st_mtime_ns] for root in roots for p in sorted(root.rglob("*")) if p.is_file()},sort_keys=True))'
+}
+
+snapshot > "$task_dir/before-preview.json"
+preview_output=$(docker run --rm --network none --read-only \
+  -v "$task_dir/config/config.toml:/config/config.toml:ro" \
+  -v "$workspace:/workspace:ro" \
+  "$image" setup preview --workspace /workspace --series-file /workspace/series.toml --show-posts)
+printf '%s\n' "$preview_output"
+case "$preview_output" in
+  *'creators=1 posts=1 materializable=1 fallback=0'*) ;;
+  *) printf 'Preview did not observe the authored fixture mapping.\n' >&2; exit 1 ;;
+esac
+snapshot > "$task_dir/after-preview.json"
+cmp "$task_dir/before-preview.json" "$task_dir/after-preview.json"
+
+sources_file=$(docker run --rm --network none --read-only --entrypoint python3 \
+  -v "$workspace:/workspace:ro" "$image" \
+  -c 'import json; print(json.load(open("/workspace/manifest.json"))["sources_file"])')
+{
+  cat "$task_dir/config/config.toml"
+  printf '\n'
+  cat "$workspace/$sources_file" "$workspace/series.toml"
+} > "$task_dir/config/config.merged.toml"
+runtime_config="$task_dir/config/config.merged.toml"
+docker run --rm -i --network none --read-only --entrypoint python3 \
+  -v "$runtime_config:/config/config.toml:ro" "$image" \
+  -c 'import hashlib,pathlib,sys,tomllib
+host=sys.stdin.buffer.read()
+mounted=pathlib.Path("/config/config.toml").read_bytes()
+print("Host config:",hashlib.sha256(host).hexdigest(),"mounted config:",hashlib.sha256(mounted).hexdigest())
+assert host == mounted, "stale config bind; stop before sync"
+config=tomllib.loads(mounted.decode())
+assert len(config["sources"]) == 1 and config["sources"][0]["fixture_dir"] == "/fixtures"
+print("Fixture fetching selected; live authentication, fetching and saved-session reuse are not exercised.")' < "$runtime_config"
+docker run --rm --network none --read-only \
+  -v "$runtime_config:/config/config.toml:ro" "$image" setup check
+
+docker run --rm --network none \
+  -v "$runtime_config:/config/config.toml:ro" \
+  -v "$repo_root/testdata/fixtures/patreon/onboarding:/fixtures:ro" \
+  -v "$task_dir/state:/state" "$image" run
+output="$task_dir/state/published/example-author/harbor/harbor-ch0001.epub"
+test -f "$output"
+test "$(find "$task_dir/state/published" -type f -name '*.epub' | wc -l | tr -d ' ')" = 1
+
+cp "$runtime_config" "$task_dir/config/config.proposed.toml"
+snapshot > "$task_dir/before-compare.json"
+docker run --rm --network none --read-only \
+  -v "$task_dir/state:/state:ro" \
+  -v "$runtime_config:/config/baseline.toml:ro" \
+  -v "$task_dir/config/config.proposed.toml:/config/config.toml:ro" \
+  "$image" setup preview --stored --compare /config/baseline.toml --show-posts
+snapshot > "$task_dir/after-compare.json"
+cmp "$task_dir/before-compare.json" "$task_dir/after-compare.json"
+printf 'Passed: private-parent dump staging, host edit, read-only preview, merge/check, one EPUB and read-only library comparison.\n'

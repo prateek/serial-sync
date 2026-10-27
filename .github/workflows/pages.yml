@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/pages.yml"
       - "website/**"
+      - "docs/docker-quickstart.md"
+      - "docs/first-source.md"
   workflow_dispatch:
 
 permissions:

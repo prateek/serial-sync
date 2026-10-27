@@ -1,0 +1,26 @@
+{
+  "data": {
+    "id": "1",
+    "type": "post",
+    "attributes": {
+      "title": "Harbor - Chapter 1",
+      "post_type": "text_only",
+      "current_user_can_view": true,
+      "url": "https://example.invalid/posts/harbor-1",
+      "content": "<p>This is a synthetic chapter written for the serial-sync onboarding fixture.</p><p>A paper boat reached the harbor. The keeper read its message, lit the beacon, and went home.</p>",
+      "published_at": "2026-01-01T12:00:00Z",
+      "edited_at": "2026-01-01T12:00:00Z"
+    },
+    "relationships": {
+      "campaign": { "data": { "id": "1", "type": "campaign" } },
+      "user": { "data": { "id": "1", "type": "user" } },
+      "collections": { "data": [] },
+      "user_defined_tags": { "data": [] },
+      "attachments_media": { "data": [] }
+    }
+  },
+  "included": [
+    { "id": "1", "type": "campaign", "attributes": { "name": "Example Author", "url": "https://example.invalid/author" } },
+    { "id": "1", "type": "user", "attributes": { "full_name": "Example Author", "vanity": "example-author", "url": "https://example.invalid/author" } }
+  ]
+}

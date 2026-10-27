@@ -15,20 +15,58 @@ This repo is a standalone Go sync utility with a generic core and a Patreon-firs
 
 ## Working Locally
 
+Use the Go version from `go.mod`. For native tests install poppler (`brew install
+poppler` on macOS or `apt-get install poppler-utils` on Debian) and put a JDK 11+
+with `java` and `javac` first on `PATH`. On macOS also install coreutils
+(`brew install coreutils`) for the installer's `sha256sum`, plus `unzip` and `curl`
+if unavailable. On Debian install `unzip` and `curl` alongside the JDK and poppler.
+Then install the pinned EPUBCheck and
+serial-sync's custom long-lived validator into a user-owned location:
+
 ```sh
+BIN_DIR="$HOME/.local/bin" scripts/install-epubcheck "$HOME/.local/share/epubcheck"
+export PATH="$HOME/.local/bin:$PATH"
 go test ./...
 go run ./cmd/serial-sync --config ./examples/config.demo.toml setup check
-go run ./cmd/serial-sync --config ./examples/config.demo.toml run --dry-run
-go run ./cmd/serial-sync --config ./examples/config.demo.toml run
-go run ./cmd/serial-sync --config ./examples/config.demo.toml setup auth
-go run ./cmd/serial-sync --config ./examples/config.demo.toml setup dump --auth-profile patreon-default --path ./serial-sync-rule-workspace
 ```
 
-The `internal/artifact` tests shell out to `epubcheck` and Calibre's `ebook-convert`, so both must be on `PATH`. On macOS, `brew install epubcheck` and install Calibre; on Linux, `scripts/install-epubcheck` installs the same pinned EPUBCheck release the Docker image and CI use.
+The script replaces its install directory; use a dedicated path. A distro
+`epubcheck` command alone is insufficient: artifact tests invoke
+`serial-sync-epubcheck`. PDF conversion uses poppler's `pdftohtml`; Calibre is
+not a build or test prerequisite. CI installs a JDK, poppler and the same helper
+in `golang:1.27-trixie`, then runs `go test -timeout 20m ./...` for the EPUB
+workflows. Each EPUBCheck invocation retains its own timeout.
 
-CI runs the suite in a `golang:1.27-trixie` container so it tests against the Calibre the Docker image ships (Debian trixie's 8.5.0). Ubuntu 24.04's packaged Calibre 7.6.0 crashes on EPUB 3 output, so the PDF conversion test fails there; see [Troubleshooting](docs/troubleshooting.md#pdf-to-epub-conversion-fails-on-ubuntu-2404).
+For a complete isolated output check use the
+[Docker fixture walkthrough](docs/docker-quickstart.md). With the default
+**full image** built,
+`scripts/test-onboarding` also checks private-parent dump staging, host editing,
+read-only workspace preview, explicit config merge/check, one EPUB and read-only
+library comparison. It cross-compiles a Go test fixture adapter to the image's
+architecture and runs every container with `--network none`. Membership discovery
+is substituted; parsing, capture and the preview/check/publish logic execute.
+The dumped source retains `fixture_dir`, so sync reads local fixtures and skips
+authentication. This does not qualify live fetching or saved-session reuse.
+The merged runtime config is a fresh immutable snapshot: the macOS OrbStack
+validation engine returned stale bytes for some previously mounted host paths,
+even after replacement or switching to a directory bind. The script compares the
+host stream with the mounted snapshot before syncing and stops on a mismatch.
+Set `SERIAL_SYNC_TEST_IMAGE` to a specific local test image if needed. The script
+removes its disposable directory, or `SERIAL_SYNC_ONBOARDING_KEEP=1` retains it
+for inspection. No account, credentials or provider HTTP are used. This
+Python-assisted check requires the full image; the browser-free steady runtime is not its test runtime.
 
-CI uses `go test -timeout 20m ./...` because the app's EPUB workflows exceed Go's default ten-minute package timeout on hosted runners. Each EPUBCheck invocation still has its own two-minute timeout.
+To exercise stored
+classification after a native demo run:
+
+```sh
+go run ./cmd/serial-sync --config ./examples/config.demo.toml run
+go run ./cmd/serial-sync --config ./examples/config.demo.toml setup preview --stored --show-posts
+```
+
+The native demo writes `./state` and `./publish`; do not point it at real operator
+state. Local `go run` is for development and fixtures; Docker is the intended user
+runtime. Ordinary `run --dry-run` still writes live diagnostics and may fetch data.
 
 ## Generated Assets
 
@@ -51,7 +89,7 @@ $(go env GOPATH)/bin/cue vet experimental/cue/config.cue examples/config.demo.to
 - `filesystem` and `exec` publishing are implemented.
 - the public CLI is organized around `setup`, `run`, and `debug`.
 - `run`, `setup auth`, and the single-process `run daemon` are implemented.
-- session-bundle import, richer challenge handling, and richer daemon coordination remain future work.
+- session-bundle import is implemented with `setup auth --import-session`; challenges can still require interactive bootstrap. Steady-state sync reuses saved HTTP sessions.
 
 ## Docs
 

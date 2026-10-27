@@ -108,3 +108,68 @@ func TestSeriesIndexOrderMustBeAuthorOrRelease(t *testing.T) {
 		}
 	}
 }
+
+func TestExampleConfigStartsWithoutFetchingOrMapping(t *testing.T) {
+	for _, container := range []string{"true", "false"} {
+		t.Run(container, func(t *testing.T) {
+			t.Setenv(ContainerModeEnv, container)
+			dir := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			path := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(path, []byte(ExampleConfig()), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, roots, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cfg.Sources) != 0 || len(cfg.Series) != 0 || len(cfg.Compiled().Rules()) != 0 {
+				t.Fatalf("starter must wait for dump authoring: sources=%d series=%d rules=%d", len(cfg.Sources), len(cfg.Series), len(cfg.Compiled().Rules()))
+			}
+			if len(cfg.AuthProfiles) != 1 || len(cfg.Publishers) != 1 {
+				t.Fatalf("starter needs one auth profile and publisher: %+v", cfg)
+			}
+			if cfg.AuthProfiles[0].SessionPath != filepath.Join(roots.StateDir, "sessions", "patreon-default.json") || cfg.Publishers[0].Path != filepath.Join(roots.StateDir, "published") {
+				t.Fatalf("starter paths must use runtime roots: %+v", cfg)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "state")); !os.IsNotExist(err) {
+				t.Fatalf("strict loading created state: %v", err)
+			}
+		})
+	}
+}
+
+func TestExampleConfigGroupedMappingUsesCurrentDefaults(t *testing.T) {
+	t.Setenv(ContainerModeEnv, "false")
+	body := ExampleConfig()
+	start := strings.Index(body, "# [[series]]")
+	end := strings.Index(body, "# Grouped inputs inherit")
+	if start < 0 || end <= start {
+		t.Fatal("starter must show a grouped mapping after dumping a source")
+	}
+	mapping := strings.ReplaceAll(body[start:end], "# ", "")
+	body += `
+[[sources]]
+id = "source-id-from-dump"
+provider = "patreon"
+url = "https://example.invalid/posts"
+auth_profile = "patreon-default"
+enabled = true
+` + mapping
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := cfg.Compiled().Rules()
+	if len(rules) != 1 {
+		t.Fatalf("expected one grouped story input, got %d", len(rules))
+	}
+	rule := rules[0]
+	if rule.ContentStrategy != "text_post" || rule.ReleaseRole != "chapter" || rule.OutputFormat != "epub" || rule.MinBodyChars == nil || *rule.MinBodyChars != MinBodyCharsDefault {
+		t.Fatalf("unexpected inherited policy for the starter mapping: %+v", rule)
+	}
+}

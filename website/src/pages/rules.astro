@@ -40,41 +40,35 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     </section>
 
     <section class="section">
-      <h2>Match types that matter</h2>
+      <h2>Grouped selectors for new mappings</h2>
       <div class="grid-2">
         <article class="panel">
-          <h3>`collection`</h3>
+          <h3>`collections`</h3>
           <p>Best when the creator keeps a dedicated Patreon collection per serial.</p>
         </article>
         <article class="panel">
-          <h3>`tag`</h3>
+          <h3>`tags`</h3>
           <p>Best when the tag is stable and clearly series-specific.</p>
         </article>
         <article class="panel">
-          <h3>`title_regex`</h3>
+          <h3>`title_patterns`</h3>
           <p>Best when the release title follows a predictable prefix or chapter pattern.</p>
         </article>
         <article class="panel">
-          <h3>`attachment_filename_regex`</h3>
+          <h3>`attachment_patterns`</h3>
           <p>Best when attachment names are stable and titles are noisy.</p>
         </article>
       </div>
     </section>
 
     <section class="section">
-      <h2>Preferred priority shape</h2>
-      <blockquote>
-        Specific matchers first, broad source defaults next, explicit cleanup fallbacks last.
-      </blockquote>
-      <ul class="note-list">
-        <li><code>10-40</code> for specific series rules.</li>
-        <li><code>100+</code> for broad source defaults.</li>
-        <li><code>1000+</code> for cleanup fallbacks.</li>
-      </ul>
-      <p>
-        Avoid generic tags like `story`, `news`, or other labels that cross series boundaries.
-        Fallback should stay visible, not become the main matcher.
-      </p>
+      <h2>Ordering and defaults</h2>
+      <p>Inputs run in ascending priority; the first matching input wins. Put specific
+        story selectors before deliberate broad catchalls. Source defaults supply shared input
+        policy, while the series owns output settings.</p>
+      <p>Grouped inputs inherit text_post and chapter, with a 1,500-character visible-body guard.
+        Set min_body_chars = 0 deliberately for short fiction or attachment-only inputs.
+        Legacy match_type/match_value rules keep their existing behavior.</p>
     </section>
 
     <section class="section">
@@ -103,31 +97,26 @@ import BaseLayout from '../layouts/BaseLayout.astro';
       <h2>Example shape</h2>
       <div class="command-block">
         <pre><code>[[series]]
-id = "andy-again-3"
-title = "Andy, Again 3"
-authors = ["Plum Parrot"]
+id = "my-story"
+title = "My Story"
+source = "source-id-from-dump"
+authors = ["Creator Name"]
 
-  [series.output]
-  format = "preserve"
-  preface_mode = "prepend_post"
+[series.output]
+format = "epub"
 
-  [[series.inputs]]
-  source = "plum-parrot"
-  priority = 10
-  match_type = "tag"
-  match_value = "AA3"
-  release_role = "chapter"
-  content_strategy = "attachment_preferred"</code></pre>
+[[series.inputs]]
+title_patterns = ["^My Story - Chapter "]</code></pre>
       </div>
     </section>
 
     <section class="section">
       <h2>Offline iteration loop</h2>
       <ol class="steps">
-        <li>Dump the creators you care about into a local workspace.</li>
+        <li>Dump one selected creator with setup dump --creator HANDLE into a local workspace.</li>
         <li>Edit `series.toml` until the intended releases group together.</li>
         <li>Run `setup preview --show-posts` and inspect the fallback bucket.</li>
-        <li>Tighten over-broad matchers before you merge anything into the main config.</li>
+        <li>Merge both sources and series into the main config, then setup check before run.</li>
       </ol>
     </section>
   </div>

@@ -1,6 +1,10 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { withBase } from '../lib/site';
+import quickstart from '../../../docs/docker-quickstart.md?raw';
+
+const fixtureCommands = quickstart.match(/```sh\n([\s\S]*?)```/)?.[1].trim();
+if (!fixtureCommands) throw new Error('Docker quickstart is missing its fixture command block');
 ---
 
 <BaseLayout
@@ -30,13 +34,12 @@ import { withBase } from '../lib/site';
       </div>
       <div class="proof-panel">
         <div class="proof-panel__label">First success loop</div>
-        <pre><code>serial-sync setup auth --source example-creator
-serial-sync setup dump --auth-profile patreon-default --path ./serial-sync-rule-workspace
-serial-sync setup preview --workspace ./serial-sync-rule-workspace --series-file series.toml --show-posts
-serial-sync run --dry-run --source example-creator</code></pre>
+        <pre><code>{fixtureCommands}</code></pre>
         <p>
-          The product is the loop: authenticate once, dump memberships, preview series locally,
-          then run with confidence.
+          First create one synthetic reading copy without an account. Then use the
+          <a href={withBase('/first-source/')}>first-creator guide</a> to initialize,
+          authenticate, dump with --creator YOUR_CREATOR_HANDLE, edit, preview with
+          --series-file, merge/check and run.
         </p>
       </div>
     </section>
@@ -72,7 +75,7 @@ serial-sync run --dry-run --source example-creator</code></pre>
       <div class="grid-2">
         <article class="panel">
           <h3>Getting started</h3>
-          <p>One Docker-first path from config to first dry-run.</p>
+          <p>One credential-free reading copy, then a selected creator and offline authoring.</p>
           <a class="button-secondary" href={withBase('/getting-started/')}>Open the guide</a>
         </article>
         <article class="panel">

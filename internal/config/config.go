@@ -602,43 +602,16 @@ func EnsureDirs(roots Roots, cfg *Config) error {
 }
 
 func ExampleConfig() string {
-	roots, err := DefaultRoots()
-	if err != nil {
-		roots = Roots{
-			ConfigDir:  "${XDG_CONFIG_HOME}/serial-sync",
-			StateDir:   "${XDG_STATE_HOME}/serial-sync",
-			CacheDir:   "${XDG_CACHE_HOME}/serial-sync",
-			RuntimeDir: "${XDG_RUNTIME_DIR}/serial-sync",
-		}
-	}
-	storeDSN := "${XDG_STATE_HOME}/serial-sync/state.db"
-	logRoot := "${XDG_STATE_HOME}/serial-sync/logs"
-	artifactRoot := "${XDG_STATE_HOME}/serial-sync/artifacts"
-	supportRoot := "${XDG_STATE_HOME}/serial-sync/support"
 	sessionPath := "${XDG_STATE_HOME}/serial-sync/sessions/patreon-default.json"
 	publishPath := "${XDG_STATE_HOME}/serial-sync/published"
-	if roots.Containerized {
-		storeDSN = filepath.Join(roots.StateDir, "state.db")
-		logRoot = filepath.Join(roots.StateDir, "logs")
-		artifactRoot = filepath.Join(roots.StateDir, "artifacts")
-		supportRoot = filepath.Join(roots.StateDir, "support")
+	if roots, err := DefaultRoots(); err == nil && roots.Containerized {
 		sessionPath = filepath.Join(roots.StateDir, "sessions", "patreon-default.json")
 		publishPath = filepath.Join(roots.StateDir, "published")
 	}
-	return fmt.Sprintf(`[runtime]
-log_level = "info"
-log_format = "text"
-log_root = %q
-store_driver = "sqlite"
-store_dsn = %q
-artifact_root = %q
-support_root = %q
-
-[scheduler]
-mode = "interval"
-poll_interval = "1h"
-lease_ttl = "30m"
-health_addr = "127.0.0.1:8099"
+	return fmt.Sprintf(`# Start with auth and a publisher; add sources and series after a selected-creator dump.
+# setup auth -> setup dump --creator HANDLE -> edit series.toml -> setup preview
+# Merge the dump's sources and your series here, then setup check -> run.
+# See docs/first-source.md for the complete Docker walkthrough.
 
 [[auth_profiles]]
 id = "patreon-default"
@@ -655,32 +628,19 @@ kind = "filesystem"
 path = %q
 enabled = true
 
-[[sources]]
-id = "example-creator"
-provider = "patreon"
-url = "https://www.patreon.com/c/ExampleCreator/posts"
-auth_profile = "patreon-default"
-enabled = true
-
-[[series]]
-id = "main-series"
-title = "Main Series"
-authors = ["Example Creator"]
-
-  [series.output]
-  format = "epub"
-  preface_mode = "prepend_post"
-
-  [[series.inputs]]
-  source = "example-creator"
-  priority = 10
-  match_type = "fallback"
-  match_value = ""
-  release_role = "chapter"
-  content_strategy = "attachment_preferred"
-  attachment_glob = ["*.epub", "*.pdf"]
-  attachment_priority = ["epub", "pdf"]
-`, logRoot, storeDSN, artifactRoot, supportRoot, sessionPath, publishPath)
+# sources describe upstream access; series and series.inputs select the story.
+# After merging a dumped source, a grouped mapping can be as small as:
+# [[series]]
+# id = "my-story"
+# title = "My Story"
+# source = "source-id-from-dump"
+# [series.output]
+# format = "epub"
+# [[series.inputs]]
+# title_patterns = ["^My Story - Chapter "]
+# Grouped inputs inherit text_post/chapter defaults and a 1500-character guard.
+# Use source defaults for shared input policy; output belongs to the series.
+`, sessionPath, publishPath)
 }
 
 func getenvDefault(key, fallback string) string {

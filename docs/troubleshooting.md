@@ -79,3 +79,17 @@ Each run now writes:
 - `<log_root>/<run-id>.jsonl`
 
 By default, `log_root` is under your state directory. `debug bundle <run-id>` copies those logs alongside the run summary and payload references.
+
+## Pending delivery rejected after a restore
+
+After restoring state, `target ... has a pending delivery with different settings`
+can indicate an inconsistent backup, as well as a real target-config change.
+An older catalog paired with a newer artifact root may still mark a delivery as
+pending even though its recovery file was already compacted into a completed
+receipt. If later cleanup expired that completed file, the same mismatch can
+instead report `target ... pending delivery <path>: ... no such file or directory`. Stop every writer and restore **one consistent whole-state backup**,
+including the catalog, full artifact root, pending plans and matching config and
+container paths. Do not patch JSON, delete the pending row/file or repeatedly
+retry to force past the refusal. Follow the
+[backup/restore procedure](observability.md#diagnostic-retention-and-recovery)
+and reconcile external deliveries before resuming.

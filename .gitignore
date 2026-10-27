@@ -12,3 +12,15 @@ coverage.out
 /serial-sync-rule-workspace/
 /serial-sync-rule-workspace.parts/
 /.codex/site-plan/
+
+# Private operator files (examples/config.*.toml remain tracked).
+*.env
+.env.*
+/config.toml
+/examples/config.toml
+patreon-session*.json
+/onboarding-demo/
+patreon-session*.profile/
+/published-export/
+/config.proposed.toml
+/serial-sync-private/

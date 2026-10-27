@@ -42,7 +42,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         <li>Run `debug run &lt;run-id&gt;` to inspect the plan and materialization details.</li>
         <li>Run `debug events &lt;run-id&gt; --component publish` to see publish decisions.</li>
         <li>Check whether the canonical artifact hash already exists at the target.</li>
-        <li>Inspect the `publish/` directory if you are using the filesystem publisher.</li>
+        <li>Inspect /state/published in the container for the generated starter publisher.</li>
       </ul>
     </section>
 
@@ -57,16 +57,19 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     <section class="section">
       <h2>I want an offline demo</h2>
       <p>
-        Use the fixture demo configuration or the bundled fixtures under `testdata/fixtures`.
+        Use the credential-free Docker walkthrough on the Getting Started page.
         The offline path should be enough to validate structure before any live Patreon fetch.
       </p>
     </section>
 
     <section class="section">
       <h2>What to run when you are stuck</h2>
+      <p>Support bundles can contain paid content, cookies and private URLs. Inspect them locally
+        and share only synthetic reproductions and sanitized excerpts.
+        <a href="https://github.com/prateek/serial-sync/blob/main/docs/observability.md#safe-sharing">Safe-sharing checklist</a>.</p>
       <div class="command-block">
         <pre><code>serial-sync setup check
-serial-sync setup dump --auth-profile patreon-default --path ./serial-sync-rule-workspace
+serial-sync setup dump --auth-profile patreon-default --creator YOUR_CREATOR_HANDLE --path ./serial-sync-rule-workspace
 serial-sync setup preview --workspace ./serial-sync-rule-workspace --series-file series.toml --show-posts
 serial-sync debug runs
 serial-sync debug bundle &lt;run-id&gt;</code></pre>

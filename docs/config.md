@@ -2,6 +2,12 @@
 
 `serial-sync` uses a single declarative TOML file.
 
+`setup init` emits a minimal auth/publisher starter with no active creator or
+mapping. Runtime and scheduler defaults are applied by the loader. Follow the
+[first-source walkthrough](first-source.md) to dump one selected creator, edit
+grouped inputs, preview offline, then merge both sources and series before running.
+Keep source fetch access separate from series classification and output policy.
+
 Core sections:
 
 - `[runtime]`: logs, store, and artifact roots
@@ -25,8 +31,9 @@ The current MVP supports:
 `setup check`, `setup preview`, and `run` use the same strict config loader.
 Unknown keys, invalid enum values, malformed regexes and attachment globs, and
 unknown source/series/book references fail with a file and field diagnostic. Standalone
-series files receive the same validation. Check and all preview modes create no
-state, logs, or database; they need no provider connection. Warnings identify
+series files receive the same validation. `setup check`, `setup preview`, and `run --rebuild --dry-run` create no
+state, logs, or database; they need no provider connection. Ordinary
+`run --dry-run` performs a live sync and may write diagnostics and caches. Warnings identify
 fallbacks above other inputs and identical selectors; the first input still wins.
 
 `setup preview` uses this main config unless `--series-file` is supplied. Compare
@@ -85,6 +92,11 @@ copies still follow correction and explicit rebuild policies.
 Both [container runtimes](browser-runtime.md) use the same auth profile and
 `session_path`. The optional `steady` target needs a saved or imported session;
 use the full image with the same mounts for browser reauthentication.
+
+Expanded legacy-compatible live auth example (for reference, not the generated
+starter). New authoring should start with `setup init` and the grouped mapping in
+the [first-source walkthrough](first-source.md). The explicit runtime/scheduler
+values below match loader defaults; legacy `match_type` inputs keep their behavior:
 
 ```toml
 [runtime]
@@ -547,8 +559,12 @@ Reading-copy captures have immutable identities covering their metadata and
 provenance. Captures with identical reading bytes share a content blob; their
 metadata, normalized input, raw input, and selected artwork remain bound to each
 capture. Archive paths are internal references, so use the catalog to locate
-reading copies. Existing archives and delivery receipts remain readable without
-rewriting their files. New captures do not overwrite old sidecars.
+reading copies. Legacy reading-copy archives remain readable, and a new capture
+does not replace another capture's sidecars. Durable catalog publish records stay
+in SQLite. They are distinct from completed recovery-plan files under
+`artifact_root/deliveries`: completion may compact those JSON files into typed
+receipts, and explicitly applied diagnostic retention may expire them. Pending
+plans stay protected. See [retention and recovery](observability.md#diagnostic-retention-and-recovery).
 
 Normal sync blocks a capture with missing or corrupt sidecars. An explicit
 rebuild can create a replacement from retained release inputs; it cannot recover

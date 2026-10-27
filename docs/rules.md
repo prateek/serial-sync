@@ -30,13 +30,21 @@ the same config and state mounts before retrying a missing or expired session.
 
 ## Recommended Workflow
 
-1. Run `setup dump` for the authors you care about.
+1. Initialize the minimal auth/publisher config with `setup init`, authenticate,
+   and run `setup dump --creator HANDLE` for one creator first.
    If Patreon login is blocked by Cloudflare or another interactive challenge, finish `setup auth` first in a visible browser session, the bundled noVNC Docker auth flow, or import a session bundle.
    That dump is now the canonical offline capture: normalized posts for authoring, raw post JSON, and downloaded attachments live together in the same workspace.
 2. Edit `series.toml` inside the dump workspace.
 3. Run `setup preview --workspace <path> --series-file series.toml --show-posts` against that workspace.
 4. Tighten source-specific matchers until the fallback bucket is acceptable.
-5. Merge the resulting `[[series]]` and `[[sources]]` back into your main config.
+5. Merge the resulting `[[series]]` and `[[sources]]` back into your main config,
+   run read-only `setup check`, then run one containerized sync.
+
+See the [complete Docker walkthrough](first-source.md) for exact mounts. New
+mappings should use grouped selectors and inherited defaults. Legacy
+`match_type`/`match_value` mappings retain their compilation behavior. Ordinary
+`run --dry-run` can fetch and write diagnostics; use `setup preview` for offline
+authoring.
 
 Example:
 
@@ -55,7 +63,9 @@ serial-sync --config ./config.toml setup preview \
 Refresh by repeating the dump command. It writes a new capture generation and
 switches the manifest only when complete; failures preserve the prior capture.
 `series.toml` and other authored files remain unchanged. An unrecognized existing
-directory is refused. `--force` remains accepted for compatibility and has the
+directory is refused, including a pre-created empty directory. Mount a private
+parent and let dump create its child as shown in the first-source guide.
+`--force` remains accepted for compatibility and has the
 same safe refresh behavior.
 
 Refreshed attachments follow [Patreon attachment freshness](config.md#patreon-attachment-freshness):
@@ -519,4 +529,7 @@ Diagnostic expiry does not change classification, held decisions, capture
 selection or rebuild inputs. Repeated informational unchanged/held/skipped
 events keep JSONL identity without redundant sidecars. Use `debug run` to inspect
 history availability; `debug cleanup` previews opt-in diagnostic expiry and
-preserves pending delivery plans. See [retention and recovery](observability.md#diagnostic-retention-and-recovery).
+preserves pending delivery plans. Setting a window alone does not schedule
+cleanup. Completed recovery-plan JSON files can compact into typed receipts and
+expire during explicit cleanup; durable catalog publish records are distinct.
+See [retention and recovery](observability.md#diagnostic-retention-and-recovery).
